@@ -33,9 +33,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const SidebarContent = () => (
     <div className="flex flex-col h-full bg-sidebar text-sidebar-foreground border-r border-sidebar-border">
       <div className="p-6 flex flex-col gap-4">
-        <div className="w-full flex justify-center py-2">
+        <div className="w-full flex flex-col items-center py-2 gap-1">
              {/* Logo is wide, so we display it without a constraining circle */}
              <img src={logo} alt="The Perinatal Psychology Practice" className="w-full max-w-[200px] object-contain" />
+             <span className="text-[10px] uppercase tracking-widest text-sidebar-foreground/60 font-medium">client management portal</span>
         </div>
       </div>
 

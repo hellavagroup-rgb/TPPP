@@ -11,9 +11,9 @@ import {
   Search,
   Menu
 } from "lucide-react";
-import logo from "@assets/generated_images/minimalist_abstract_logo_for_psychology_practice.png";
+import logo from "@assets/xPerinatalPP-logo-large-digital.png.pagespeed.ic.wAjk_RUOnf_1766008188694.png";
 import { useState } from "react";
-import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -32,13 +32,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
   const SidebarContent = () => (
     <div className="flex flex-col h-full bg-sidebar text-sidebar-foreground border-r border-sidebar-border">
-      <div className="p-6 flex items-center gap-3">
-        <div className="h-8 w-8 rounded-full bg-sidebar-primary flex items-center justify-center overflow-hidden">
-             <img src={logo} alt="Logo" className="h-full w-full object-cover" />
-        </div>
-        <div>
-            <h1 className="font-serif font-bold text-lg tracking-tight">MindfulPath</h1>
-            <p className="text-xs text-sidebar-foreground/60">Practice Management</p>
+      <div className="p-6 flex flex-col gap-4">
+        <div className="w-full flex justify-center py-2">
+             {/* Logo is wide, so we display it without a constraining circle */}
+             <img src={logo} alt="The Perinatal Psychology Practice" className="w-full max-w-[200px] object-contain" />
         </div>
       </div>
 
@@ -87,7 +84,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </Avatar>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium truncate">Admin User</p>
-            <p className="text-xs text-sidebar-foreground/60 truncate">admin@mindfulpath.com</p>
+            <p className="text-xs text-sidebar-foreground/60 truncate">admin@perinatalpsych.com</p>
           </div>
           <Button variant="ghost" size="icon" className="h-8 w-8 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent">
             <LogOut className="h-4 w-4" />

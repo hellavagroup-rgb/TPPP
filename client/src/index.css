@@ -59,109 +59,114 @@
 }
 
 /* 
-  Theme: Clinical Warmth
-  Colors: Soft Sage, Warm Clay, Calm Slate
+  Theme: Perinatal Soft
+  Colors: Derived from logo (Teal, Blue, Purple dots + Dark Grey text)
+  Logo Colors approx:
+  - Teal: hsl(172, 50%, 55%)
+  - Blue: hsl(220, 60%, 70%)
+  - Purple: hsl(270, 50%, 70%)
+  - Text: hsl(0, 0%, 25%)
 */
 :root {
-  /* Base - Warm Off-White */
-  --background: 40 20% 98%; 
-  --foreground: 200 15% 20%; 
+  /* Base - Clean White */
+  --background: 0 0% 100%; 
+  --foreground: 0 0% 25%; /* Dark Grey from logo text */
 
-  /* Card - Pure White */
+  /* Card - White with subtle border */
   --card: 0 0% 100%;
-  --card-foreground: 200 15% 20%;
+  --card-foreground: 0 0% 25%;
 
   /* Popover */
   --popover: 0 0% 100%;
-  --popover-foreground: 200 15% 20%;
+  --popover-foreground: 0 0% 25%;
 
-  /* Primary - Deep Sage Green */
-  --primary: 160 35% 35%;
+  /* Primary - The Teal from the logo dots */
+  --primary: 172 45% 45%; 
   --primary-foreground: 0 0% 100%;
 
-  /* Secondary - Soft Sand/Clay */
-  --secondary: 35 30% 90%;
-  --secondary-foreground: 30 40% 30%;
+  /* Secondary - Soft Purple/Lavender from logo dots */
+  --secondary: 270 30% 96%;
+  --secondary-foreground: 270 40% 40%;
 
-  /* Muted - Cool Grey */
-  --muted: 210 20% 94%;
-  --muted-foreground: 210 10% 45%;
+  /* Muted - Cool Light Grey */
+  --muted: 210 20% 96%;
+  --muted-foreground: 210 10% 50%;
 
-  /* Accent - Light Sage */
-  --accent: 160 30% 94%;
-  --accent-foreground: 160 35% 30%;
+  /* Accent - Soft Blue from logo dots */
+  --accent: 220 40% 96%;
+  --accent-foreground: 220 50% 40%;
 
   /* Destructive - Soft Red */
   --destructive: 0 70% 90%;
   --destructive-foreground: 0 70% 35%;
 
-  --border: 210 15% 90%;
-  --input: 210 15% 90%;
-  --ring: 160 35% 35%;
+  --border: 210 10% 90%;
+  --input: 210 10% 90%;
+  --ring: 172 45% 45%;
 
   --radius: 0.75rem;
 
-  /* Chart Colors (Sage, Clay, Slate variants) */
-  --chart-1: 160 40% 45%; /* Sage */
-  --chart-2: 35 50% 60%;  /* Clay */
-  --chart-3: 200 40% 50%; /* Slate */
-  --chart-4: 180 30% 60%; /* Teal */
-  --chart-5: 30 40% 70%;  /* Sand */
+  /* Chart Colors based on logo dots */
+  --chart-1: 172 45% 45%; /* Teal */
+  --chart-2: 220 50% 60%; /* Blue */
+  --chart-3: 270 40% 60%; /* Purple */
+  --chart-4: 30 50% 70%;  /* Soft Sand (complementary) */
+  --chart-5: 0 0% 40%;    /* Grey */
 
-  /* Sidebar */
-  --sidebar: 200 15% 18%; /* Dark Slate */
-  --sidebar-foreground: 210 20% 94%;
-  --sidebar-primary: 160 35% 45%;
+  /* Sidebar - Light to show dark logo */
+  --sidebar: 0 0% 98%; 
+  --sidebar-foreground: 0 0% 30%;
+  --sidebar-primary: 172 45% 45%;
   --sidebar-primary-foreground: 0 0% 100%;
-  --sidebar-accent: 200 15% 25%;
-  --sidebar-accent-foreground: 210 20% 98%;
-  --sidebar-border: 200 15% 25%;
-  --sidebar-ring: 160 35% 45%;
+  --sidebar-accent: 210 10% 92%;
+  --sidebar-accent-foreground: 0 0% 20%;
+  --sidebar-border: 210 10% 90%;
+  --sidebar-ring: 172 45% 45%;
 }
 
 .dark {
-  --background: 200 15% 10%;
-  --foreground: 210 20% 94%;
+  --background: 220 15% 10%;
+  --foreground: 220 10% 90%;
 
-  --card: 200 15% 14%;
-  --card-foreground: 210 20% 94%;
+  --card: 220 15% 14%;
+  --card-foreground: 220 10% 90%;
 
-  --popover: 200 15% 14%;
-  --popover-foreground: 210 20% 94%;
+  --popover: 220 15% 14%;
+  --popover-foreground: 220 10% 90%;
 
-  --primary: 160 35% 45%;
+  --primary: 172 45% 55%;
   --primary-foreground: 0 0% 100%;
 
-  --secondary: 200 15% 20%;
-  --secondary-foreground: 210 20% 94%;
+  --secondary: 270 20% 20%;
+  --secondary-foreground: 220 10% 90%;
 
-  --muted: 200 15% 20%;
-  --muted-foreground: 210 15% 60%;
+  --muted: 220 15% 20%;
+  --muted-foreground: 220 10% 60%;
 
-  --accent: 200 15% 20%;
-  --accent-foreground: 210 20% 94%;
+  --accent: 220 20% 20%;
+  --accent-foreground: 220 10% 90%;
 
   --destructive: 0 62% 30%;
-  --destructive-foreground: 210 20% 94%;
+  --destructive-foreground: 220 10% 90%;
 
-  --border: 200 15% 20%;
-  --input: 200 15% 20%;
-  --ring: 160 35% 45%;
+  --border: 220 15% 20%;
+  --input: 220 15% 20%;
+  --ring: 172 45% 55%;
 
-  --chart-1: 160 40% 50%;
-  --chart-2: 35 50% 60%;
-  --chart-3: 200 40% 50%;
-  --chart-4: 180 30% 60%;
-  --chart-5: 30 40% 70%;
+  --chart-1: 172 45% 55%;
+  --chart-2: 220 50% 65%;
+  --chart-3: 270 40% 65%;
+  --chart-4: 30 40% 60%;
+  --chart-5: 0 0% 60%;
 
-  --sidebar: 200 15% 12%;
-  --sidebar-foreground: 210 20% 94%;
-  --sidebar-primary: 160 35% 45%;
+  --sidebar: 220 15% 12%;
+  --sidebar-foreground: 220 10% 90%;
+  --sidebar-primary: 172 45% 55%;
   --sidebar-primary-foreground: 0 0% 100%;
-  --sidebar-accent: 200 15% 20%;
-  --sidebar-accent-foreground: 210 20% 94%;
-  --sidebar-border: 200 15% 20%;
-  --sidebar-ring: 160 35% 45%;
+  --sidebar-accent: 220 15% 20%;
+  --sidebar-accent-foreground: 220 10% 90%;
+  --sidebar-border: 220 15% 20%;
+  --sidebar-ring: 172 45% 55%;
 }
 
 @layer base {

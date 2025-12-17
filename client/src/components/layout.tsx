@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import logo from "@assets/generated_images/minimalist_abstract_logo_for_psychology_practice.png";
 import { useState } from "react";
-import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -115,11 +115,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       <div className="flex-1 md:pl-64 flex flex-col">
         <header className="h-16 flex items-center justify-between px-6 border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-40">
           <div className="flex items-center gap-4 md:hidden">
-            <SheetTrigger asChild>
-                <Button variant="ghost" size="icon" className="-ml-2" onClick={() => setIsMobileOpen(true)}>
-                    <Menu className="h-5 w-5" />
-                </Button>
-            </SheetTrigger>
+            <Button variant="ghost" size="icon" className="-ml-2" onClick={() => setIsMobileOpen(true)}>
+                <Menu className="h-5 w-5" />
+            </Button>
           </div>
           
           <div className="flex-1"></div>

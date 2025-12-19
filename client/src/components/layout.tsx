@@ -27,6 +27,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     { name: "Clients", href: "/clients", icon: Users },
     { name: "Waitlist", href: "/waitlist", icon: CalendarClock },
     { name: "Tasks", href: "/tasks", icon: ClipboardList },
+    { name: "Availability", href: "/availability", icon: CalendarClock },
     { name: "Settings", href: "/settings", icon: Settings },
   ];
 

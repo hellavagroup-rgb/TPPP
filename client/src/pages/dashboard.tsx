@@ -1,4 +1,4 @@
-import { useData, ClientStatus } from "@/lib/mockData";
+import { useData } from "@/lib/mockData";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -8,12 +8,11 @@ import {
   FileText, 
   Calendar, 
   AlertCircle, 
-  ArrowRight,
-  UserPlus,
-  CheckCircle2
+  CheckCircle2,
+  Clock,
+  ArrowRight
 } from "lucide-react";
 import { Link } from "wouter";
-import { Bar, BarChart, ResponsiveContainer, XAxis, YAxis, Tooltip } from "recharts";
 
 export default function Dashboard() {
   const { clients, tasks, clinicians } = useData();
@@ -53,28 +52,11 @@ export default function Dashboard() {
     }
   ];
 
-  const chartData = [
-    { name: "Mon", clients: 4 },
-    { name: "Tue", clients: 6 },
-    { name: "Wed", clients: 8 },
-    { name: "Thu", clients: 5 },
-    { name: "Fri", clients: 7 },
-    { name: "Sat", clients: 2 },
-    { name: "Sun", clients: 1 },
-  ];
-
-  const recentActivity = [
-    { id: 1, text: "New referral received: Alice Thompson", time: "2 hours ago", type: "new" },
-    { id: 2, text: "Intake forms completed by Maria Garcia", time: "4 hours ago", type: "success" },
-    { id: 3, text: "Dr. Chen assigned to Sam Smith", time: "Yesterday", type: "info" },
-    { id: 4, text: "Waitlist notification sent to Linda Brown", time: "Yesterday", type: "warning" },
-  ];
-
   return (
     <div className="space-y-8">
       <div>
-        <h2 className="text-3xl font-serif font-bold text-foreground">Practice Overview</h2>
-        <p className="text-muted-foreground mt-1">Welcome back, here's what's happening today.</p>
+        <h2 className="text-3xl font-serif font-bold text-foreground">Clinician Allocation Dashboard</h2>
+        <p className="text-muted-foreground mt-1">Manage client intake and clinician availability.</p>
       </div>
 
       {/* Stats Grid */}
@@ -97,131 +79,87 @@ export default function Dashboard() {
         ))}
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
-        {/* Main Chart */}
-        <Card className="col-span-4 border-none shadow-sm">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        {/* Task Tracker (Replaces Intake Activity Graph) */}
+        <Card className="col-span-2 border-none shadow-sm">
           <CardHeader>
-            <CardTitle className="font-serif">Intake Activity</CardTitle>
-            <CardDescription>New client inquiries over the last 7 days</CardDescription>
-          </CardHeader>
-          <CardContent className="pl-2">
-            <div className="h-[300px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData}>
-                  <XAxis 
-                    dataKey="name" 
-                    stroke="#888888" 
-                    fontSize={12} 
-                    tickLine={false} 
-                    axisLine={false} 
-                  />
-                  <YAxis 
-                    stroke="#888888" 
-                    fontSize={12} 
-                    tickLine={false} 
-                    axisLine={false} 
-                    tickFormatter={(value) => `${value}`} 
-                  />
-                  <Tooltip 
-                    cursor={{fill: 'transparent'}}
-                    contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
-                  />
-                  <Bar 
-                    dataKey="clients" 
-                    fill="hsl(var(--primary))" 
-                    radius={[4, 4, 0, 0]} 
-                    barSize={40}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Clinician Capacity */}
-        <Card className="col-span-3 border-none shadow-sm">
-          <CardHeader>
-            <CardTitle className="font-serif">Clinician Capacity</CardTitle>
-            <CardDescription>Current caseload vs maximum</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            {clinicians.map((clinician) => (
-              <div key={clinician.id} className="space-y-2">
-                <div className="flex items-center justify-between text-sm">
-                  <div className="flex items-center gap-2">
-                    <div className="h-6 w-6 rounded-full bg-secondary text-secondary-foreground flex items-center justify-center text-xs font-medium">
-                        {clinician.avatar}
-                    </div>
-                    <span className="font-medium">{clinician.name}</span>
-                  </div>
-                  <span className="text-muted-foreground">{clinician.currentLoad}/{clinician.capacity}</span>
-                </div>
-                <Progress 
-                    value={(clinician.currentLoad / clinician.capacity) * 100} 
-                    className="h-2"
-                    indicatorClassName={
-                        (clinician.currentLoad / clinician.capacity) > 0.9 
-                        ? "bg-destructive" 
-                        : (clinician.currentLoad / clinician.capacity) > 0.7 
-                        ? "bg-amber-500" 
-                        : "bg-primary"
-                    }
-                />
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-2">
-        {/* Recent Activity */}
-        <Card className="border-none shadow-sm">
-          <CardHeader>
-            <CardTitle className="font-serif">Recent Activity</CardTitle>
+            <CardTitle className="font-serif">Task Tracker</CardTitle>
+            <CardDescription>Current operational tasks and next steps</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {recentActivity.map((activity) => (
-                <div key={activity.id} className="flex items-start gap-4 pb-4 border-b border-border last:border-0 last:pb-0">
-                  <div className={`mt-1 p-1.5 rounded-full ${
-                    activity.type === 'new' ? 'bg-blue-100 text-blue-600' :
-                    activity.type === 'success' ? 'bg-green-100 text-green-600' :
-                    activity.type === 'warning' ? 'bg-amber-100 text-amber-600' :
+              {tasks.filter(t => t.status !== "Completed").slice(0, 5).map((task) => (
+                <div key={task.id} className="flex items-start gap-4 p-4 rounded-lg border border-border/50 hover:bg-muted/30 transition-colors">
+                  <div className={`mt-1 p-1.5 rounded-full flex-shrink-0 ${
+                    task.priority === 'High' ? 'bg-destructive/10 text-destructive' :
+                    task.priority === 'Medium' ? 'bg-amber-100 text-amber-600' :
                     'bg-slate-100 text-slate-600'
                   }`}>
-                    {activity.type === 'new' ? <UserPlus className="h-3 w-3" /> :
-                     activity.type === 'success' ? <CheckCircle2 className="h-3 w-3" /> :
-                     activity.type === 'warning' ? <AlertCircle className="h-3 w-3" /> :
-                     <FileText className="h-3 w-3" />}
+                    {task.priority === 'High' ? <AlertCircle className="h-4 w-4" /> :
+                     <Clock className="h-4 w-4" />}
                   </div>
-                  <div className="space-y-1">
-                    <p className="text-sm font-medium leading-none">{activity.text}</p>
-                    <p className="text-xs text-muted-foreground">{activity.time}</p>
+                  <div className="space-y-1 flex-1">
+                    <div className="flex items-center justify-between">
+                      <p className="font-medium text-sm">{task.title}</p>
+                      <Badge variant="outline" className="text-xs">{task.status}</Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground">{task.description}</p>
+                    <div className="flex items-center gap-2 pt-1">
+                        <div className="h-4 w-4 rounded-full bg-secondary flex items-center justify-center text-[8px] font-bold text-secondary-foreground">
+                            {task.assignee.charAt(0)}
+                        </div>
+                        <span className="text-xs text-muted-foreground">Due: {task.dueDate}</span>
+                    </div>
                   </div>
                 </div>
               ))}
+              
+              <Button variant="ghost" className="w-full text-muted-foreground hover:text-primary" asChild>
+                <Link href="/tasks">View All Tasks <ArrowRight className="ml-2 h-4 w-4" /></Link>
+              </Button>
             </div>
           </CardContent>
         </Card>
-        
-        {/* Quick Actions */}
-        <Card className="border-none shadow-sm bg-secondary/30">
+
+        {/* Clinician Availability (Updated Focus) */}
+        <Card className="col-span-1 border-none shadow-sm">
           <CardHeader>
-            <CardTitle className="font-serif">Quick Actions</CardTitle>
+            <CardTitle className="font-serif">Clinician Status</CardTitle>
+            <CardDescription>Allocation capacity & updates</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-3">
-             <Button className="w-full justify-between" variant="outline">
-                <span>Process New Referrals</span>
-                <ArrowRight className="h-4 w-4" />
-             </Button>
-             <Button className="w-full justify-between" variant="outline">
-                <span>Assign Clients</span>
-                <ArrowRight className="h-4 w-4" />
-             </Button>
-             <Button className="w-full justify-between" variant="outline">
-                <span>Send Payment Reminders</span>
-                <ArrowRight className="h-4 w-4" />
-             </Button>
+          <CardContent className="space-y-6">
+            {clinicians.map((clinician) => (
+              <div key={clinician.id} className="space-y-3 pb-3 border-b border-border/40 last:border-0">
+                <div className="flex items-center justify-between text-sm">
+                  <div className="flex items-center gap-3">
+                    <div className="h-8 w-8 rounded-full bg-secondary text-secondary-foreground flex items-center justify-center text-xs font-medium">
+                        {clinician.avatar}
+                    </div>
+                    <div>
+                        <span className="font-medium block">{clinician.name}</span>
+                        <span className="text-[10px] text-muted-foreground">Updated: {clinician.lastUpdatedAvailability}</span>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <span className={`block font-bold ${
+                        clinician.currentLoad >= clinician.capacity ? "text-destructive" : "text-emerald-600"
+                    }`}>
+                        {clinician.capacity - clinician.currentLoad}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground">slots open</span>
+                  </div>
+                </div>
+                {/* Check for stale availability */}
+                {parseInt(clinician.lastUpdatedAvailability?.split(' ')[1] || '0') < 10 && (
+                    <div className="flex items-center gap-2 text-xs text-amber-600 bg-amber-50 p-2 rounded">
+                        <AlertCircle className="h-3 w-3" />
+                        <span>Availability update needed</span>
+                    </div>
+                )}
+              </div>
+            ))}
+            
+            <Button variant="outline" className="w-full">Send Availability Reminders</Button>
           </CardContent>
         </Card>
       </div>

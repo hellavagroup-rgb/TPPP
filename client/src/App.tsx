@@ -8,6 +8,7 @@ import Clients from "@/pages/clients";
 import Tasks from "@/pages/tasks";
 import Waitlist from "@/pages/waitlist";
 import Settings from "@/pages/settings";
+import Availability from "@/pages/availability";
 import Layout from "@/components/layout";
 import { DataProvider } from "@/lib/mockData";
 
@@ -20,6 +21,7 @@ function Router() {
         <Route path="/tasks" component={Tasks} />
         <Route path="/waitlist" component={Waitlist} />
         <Route path="/settings" component={Settings} />
+        <Route path="/availability" component={Availability} />
         <Route component={NotFound} />
       </Switch>
     </Layout>

@@ -1,5 +1,5 @@
 import { useData, Client, ClientStatus } from "@/lib/mockData";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -15,7 +15,6 @@ import {
     Dialog,
     DialogContent,
     DialogDescription,
-    DialogFooter,
     DialogHeader,
     DialogTitle,
     DialogTrigger,
@@ -27,9 +26,9 @@ import {
   UserPlus, 
   Mail, 
   UserCheck,
-  Calendar,
   Clock,
-  Check
+  Shield,
+  CalendarCheck
 } from "lucide-react";
 import { useState } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -43,8 +42,8 @@ export default function Clients() {
   const { toast } = useToast();
 
   const filteredClients = clients.filter(client => {
-    const matchesSearch = client.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          client.email.toLowerCase().includes(searchTerm.toLowerCase());
+    // Search now works on ID instead of Name
+    const matchesSearch = client.displayId.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = filterStatus === "All" || client.status === filterStatus;
     return matchesSearch && matchesStatus;
   });
@@ -61,12 +60,12 @@ export default function Clients() {
     }
   };
 
-  const handleAssign = (clinicianId: string) => {
+  const handleAssign = (clinicianId: string, slotId: string) => {
     if (selectedClient) {
-      assignClinician(selectedClient.id, clinicianId);
+      assignClinician(selectedClient.id, clinicianId, slotId);
       toast({
         title: "Client Assigned",
-        description: `${selectedClient.name} has been assigned to a clinician.`,
+        description: `${selectedClient.displayId} has been allocated a slot.`,
       });
       setSelectedClient(null);
     }
@@ -76,8 +75,8 @@ export default function Clients() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-serif font-bold text-foreground">Client Management</h2>
-          <p className="text-muted-foreground mt-1">Track referrals and manage intake workflow.</p>
+          <h2 className="text-3xl font-serif font-bold text-foreground">Client Allocation</h2>
+          <p className="text-muted-foreground mt-1">Anonymized client management.</p>
         </div>
         <Button className="gap-2">
           <UserPlus className="h-4 w-4" />
@@ -90,8 +89,8 @@ export default function Clients() {
         <div className="relative flex-1 w-full">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input 
-            placeholder="Search by name or email..." 
-            className="pl-9"
+            placeholder="Search by Client ID (W...)" 
+            className="pl-9 font-mono"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
@@ -126,14 +125,13 @@ export default function Clients() {
 
                 <div className="flex-1 min-w-0 grid gap-1">
                   <div className="flex items-center gap-2">
-                    <h3 className="font-semibold text-lg leading-none">{client.name}</h3>
+                    <Shield className="h-4 w-4 text-muted-foreground" />
+                    <h3 className="font-semibold text-lg leading-none font-mono tracking-tight">{client.displayId}</h3>
                     <Badge variant="secondary" className={getStatusColor(client.status)}>
                       {client.status}
                     </Badge>
                   </div>
                   <p className="text-sm text-muted-foreground flex items-center gap-2">
-                    <Mail className="h-3 w-3" /> {client.email}
-                    <span className="text-border">|</span>
                     <Clock className="h-3 w-3" /> Intake: {client.intakeDate}
                   </p>
                 </div>
@@ -152,6 +150,11 @@ export default function Clients() {
                    <div className="flex items-center gap-2 text-sm text-muted-foreground bg-secondary/50 px-3 py-1.5 rounded-full">
                       <UserCheck className="h-4 w-4" />
                       {clinicians.find(c => c.id === client.assignedClinicianId)?.name.split(",")[0]}
+                      {client.assignedSlot && (
+                          <span className="text-xs font-mono border-l border-foreground/10 pl-2 ml-1">
+                              {client.assignedSlot}
+                          </span>
+                      )}
                    </div>
                 )}
 
@@ -167,48 +170,59 @@ export default function Clients() {
                          <Dialog>
                             <DialogTrigger asChild>
                                 <Button size="sm" className="gap-2 bg-primary hover:bg-primary/90" onClick={() => setSelectedClient(client)}>
-                                    <UserCheck className="h-4 w-4" /> Assign
+                                    <UserCheck className="h-4 w-4" /> Allocate
                                 </Button>
                             </DialogTrigger>
-                            <DialogContent className="sm:max-w-[500px]">
+                            <DialogContent className="sm:max-w-[600px] max-h-[80vh] overflow-y-auto">
                                 <DialogHeader>
-                                    <DialogTitle>Assign Clinician</DialogTitle>
+                                    <DialogTitle>Allocate Clinician Slot</DialogTitle>
                                     <DialogDescription>
-                                        Select a clinician for {client.name}. Consider specialty match and current capacity.
+                                        Assign {client.displayId} to an available time slot.
                                     </DialogDescription>
                                 </DialogHeader>
-                                <div className="grid gap-4 py-4">
-                                    <p className="text-sm font-medium">Presenting Issues: <span className="text-muted-foreground font-normal">{client.presentingIssues.join(", ")}</span></p>
+                                <div className="grid gap-6 py-4">
+                                    <div className="p-3 bg-muted/30 rounded border border-border">
+                                        <p className="text-xs text-muted-foreground font-medium mb-1">CLIENT NEEDS</p>
+                                        <div className="flex gap-2">
+                                            {client.presentingIssues.map(i => <Badge key={i} variant="secondary">{i}</Badge>)}
+                                        </div>
+                                        <p className="text-sm mt-2 italic">"{client.notes}"</p>
+                                    </div>
                                     
-                                    <div className="space-y-2">
+                                    <div className="space-y-4">
+                                        <p className="text-sm font-medium text-muted-foreground">AVAILABLE SLOTS</p>
                                         {clinicians.map(clinician => (
-                                            <div 
-                                                key={clinician.id} 
-                                                className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-all ${
-                                                    clinician.currentLoad >= clinician.capacity 
-                                                    ? "opacity-60 bg-muted border-transparent" 
-                                                    : "hover:border-primary hover:bg-primary/5 bg-card border-border"
-                                                }`}
-                                                onClick={() => clinician.currentLoad < clinician.capacity && handleAssign(clinician.id)}
-                                            >
-                                                <div className="flex items-center gap-3">
-                                                    <div className="h-8 w-8 rounded-full bg-secondary flex items-center justify-center text-xs font-bold">
+                                            <div key={clinician.id} className="space-y-2">
+                                                <div className="flex items-center gap-2">
+                                                    <div className="h-6 w-6 rounded-full bg-secondary flex items-center justify-center text-[10px] font-bold">
                                                         {clinician.avatar}
                                                     </div>
-                                                    <div>
-                                                        <p className="font-medium">{clinician.name}</p>
-                                                        <p className="text-xs text-muted-foreground">{clinician.specialties.join(", ")}</p>
-                                                    </div>
+                                                    <p className="font-medium text-sm">{clinician.name}</p>
                                                 </div>
-                                                <div className="text-right">
-                                                    <div className="flex items-center gap-1 justify-end">
-                                                        <span className={`text-sm font-bold ${
-                                                            clinician.currentLoad >= clinician.capacity ? "text-destructive" : "text-emerald-600"
-                                                        }`}>
-                                                            {clinician.currentLoad}/{clinician.capacity}
-                                                        </span>
-                                                    </div>
-                                                    <p className="text-xs text-muted-foreground">{clinician.availability.join(", ")}</p>
+                                                
+                                                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pl-8">
+                                                    {clinician.availability.map(slot => (
+                                                        <Button 
+                                                            key={slot.id}
+                                                            variant={slot.isBooked ? "ghost" : "outline"}
+                                                            disabled={slot.isBooked}
+                                                            className={`justify-start h-auto py-2 px-3 text-xs ${
+                                                                slot.isBooked ? "opacity-50 line-through decoration-destructive" : "hover:border-primary hover:bg-primary/5"
+                                                            }`}
+                                                            onClick={() => handleAssign(clinician.id, slot.id)}
+                                                        >
+                                                            <CalendarCheck className="h-3 w-3 mr-2" />
+                                                            <div className="text-left">
+                                                                <div className="font-medium">{slot.day}</div>
+                                                                <div className="text-[10px] text-muted-foreground">{slot.startTime} - {slot.endTime}</div>
+                                                            </div>
+                                                        </Button>
+                                                    ))}
+                                                    {clinician.availability.length === 0 && (
+                                                        <div className="col-span-3 text-xs text-muted-foreground italic p-2">
+                                                            No availability set.
+                                                        </div>
+                                                    )}
                                                 </div>
                                             </div>
                                         ))}
@@ -225,11 +239,9 @@ export default function Clients() {
                         </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                        <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                        <DropdownMenuItem>View Profile</DropdownMenuItem>
-                        <DropdownMenuItem>Edit Details</DropdownMenuItem>
+                        <DropdownMenuItem>View Details</DropdownMenuItem>
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem className="text-destructive">Archive Client</DropdownMenuItem>
+                        <DropdownMenuItem className="text-destructive">Archive</DropdownMenuItem>
                         </DropdownMenuContent>
                     </DropdownMenu>
                 </div>

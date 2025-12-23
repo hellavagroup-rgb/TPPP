@@ -12,6 +12,7 @@ import Availability from "@/pages/availability";
 import Forms from "@/pages/forms";
 import FormBuilder from "@/pages/form-builder";
 import FormFill from "@/pages/form-fill";
+import Analytics from "@/pages/analytics";
 import Layout from "@/components/layout";
 import { DataProvider } from "@/lib/mockData";
 
@@ -38,6 +39,7 @@ function Router() {
         <Route path="/availability" component={Availability} />
         <Route path="/forms" component={Forms} />
         <Route path="/forms/:id" component={FormBuilder} />
+        <Route path="/analytics" component={Analytics} />
         <Route component={NotFound} />
       </Switch>
     </Layout>

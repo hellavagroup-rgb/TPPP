@@ -116,6 +116,20 @@ export default function Clients() {
               title: "Forms Sent",
               description: `${selectedForms.length} form(s) sent to ${clientToSendForms.email}.`,
           });
+          
+          // Simulate generating a unique link for the prototype
+          const uniqueLink = `${window.location.origin}/fill/${clientToSendForms.id}/${selectedForms[0]}`;
+          console.log("Client Form Link:", uniqueLink);
+          
+          setTimeout(() => {
+             toast({
+                 title: "Client Email Simulation",
+                 description: "Click here to simulate the client view.",
+                 action: <Button size="sm" variant="outline" onClick={() => window.open(uniqueLink, '_blank')}>Open Link</Button>,
+                 duration: 10000
+             });
+          }, 1000);
+
       } else {
            toast({
               title: "Selection Required",

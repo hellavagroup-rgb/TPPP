@@ -1,5 +1,6 @@
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
+import { useData } from "@/lib/mockData";
 import { 
   LayoutDashboard, 
   Users, 
@@ -22,6 +23,9 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 export default function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const [isMobileOpen, setIsMobileOpen] = useState(false);
+  const { notifications } = useData();
+  
+  const unreadNotifications = notifications.filter(n => !n.read).length;
 
   const navigation = [
     { name: "Dashboard", href: "/", icon: LayoutDashboard },
@@ -126,7 +130,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-4">
             <Button variant="ghost" size="icon" className="relative text-muted-foreground hover:text-foreground">
               <Bell className="h-5 w-5" />
-              <span className="absolute top-2 right-2 h-2 w-2 rounded-full bg-destructive ring-2 ring-card" />
+              {unreadNotifications > 0 && (
+                <span className="absolute top-2 right-2 h-2 w-2 rounded-full bg-destructive ring-2 ring-card" />
+              )}
             </Button>
           </div>
         </header>

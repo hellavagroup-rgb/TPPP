@@ -1,4 +1,4 @@
-import { Switch, Route } from "wouter";
+import { Switch, Route, useRoute } from "wouter";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "./lib/queryClient";
 import { Toaster } from "@/components/ui/toaster";
@@ -11,10 +11,22 @@ import Settings from "@/pages/settings";
 import Availability from "@/pages/availability";
 import Forms from "@/pages/forms";
 import FormBuilder from "@/pages/form-builder";
+import FormFill from "@/pages/form-fill";
 import Layout from "@/components/layout";
 import { DataProvider } from "@/lib/mockData";
 
 function Router() {
+  const [location] = useRoute("/fill/:clientId/:formId");
+  
+  // If we are on the fill page, don't use the main admin layout
+  if (location) {
+      return (
+        <Switch>
+            <Route path="/fill/:clientId/:formId" component={FormFill} />
+        </Switch>
+      );
+  }
+
   return (
     <Layout>
       <Switch>

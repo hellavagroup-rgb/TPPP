@@ -55,6 +55,15 @@ export interface Task {
   relatedClientId?: string;
 }
 
+export interface Notification {
+  id: string;
+  type: "Form" | "System" | "Task";
+  message: string;
+  timestamp: string;
+  read: boolean;
+  link?: string;
+}
+
 export interface FormField {
   id: string;
   type: "text" | "textarea" | "date" | "select" | "radio" | "checkbox" | "email" | "tel" | "header" | "info" | "section";
@@ -475,6 +484,9 @@ interface DataContextType {
   addForm: (form: FormTemplate) => void;
   updateForm: (id: string, form: FormTemplate) => void;
   deleteForm: (id: string) => void;
+  notifications: Notification[];
+  addNotification: (notification: Notification) => void;
+  markNotificationRead: (id: string) => void;
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
@@ -484,6 +496,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [clinicians, setClinicians] = useState<Clinician[]>(MOCK_CLINICIANS);
   const [tasks, setTasks] = useState<Task[]>(MOCK_TASKS);
   const [forms, setForms] = useState<FormTemplate[]>(MOCK_FORMS);
+  const [notifications, setNotifications] = useState<Notification[]>([
+      { id: "n1", type: "System", message: "System maintenance scheduled for Sunday", timestamp: format(subDays(new Date(), 1), "yyyy-MM-dd HH:mm"), read: false },
+      { id: "n2", type: "Form", message: "W83920192 completed Intake Form", timestamp: format(subDays(new Date(), 0), "yyyy-MM-dd HH:mm"), read: true }
+  ]);
 
   const addClient = (client: Client) => {
     setClients(prev => [client, ...prev]);
@@ -547,6 +563,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
     setForms(prev => prev.filter(f => f.id !== id));
   };
 
+  const addNotification = (notification: Notification) => {
+      setNotifications(prev => [notification, ...prev]);
+  };
+
+  const markNotificationRead = (id: string) => {
+      setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+  };
+
   return (
     <DataContext.Provider value={{ 
       clients, 
@@ -561,7 +585,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
       updateClinicianAvailability,
       addForm,
       updateForm,
-      deleteForm
+      deleteForm,
+      notifications,
+      addNotification,
+      markNotificationRead
     }}>
       {children}
     </DataContext.Provider>

@@ -2,7 +2,7 @@ import { useData, TimeSlot, SlotType } from "@/lib/mockData";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Filter, ChevronLeft, ChevronRight, Calendar as CalendarIcon, Plus, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -32,6 +32,9 @@ export default function Availability() {
   const [newDate, setNewDate] = useState(format(new Date(), "yyyy-MM-dd"));
   const [newStartTime, setNewStartTime] = useState("09:00");
   const [newEndTime, setNewEndTime] = useState("17:00");
+  
+  // Dialog: Which clinician is being added? (Admin control)
+  const [dialogClinicianId, setDialogClinicianId] = useState<string>("");
 
   const filteredClinicians = selectedClinicianId === "all" 
     ? clinicians 
@@ -41,6 +44,17 @@ export default function Availability() {
   const endOfCurrentWeek = endOfWeek(currentDate, { weekStartsOn: 1 });
   const weekDays = eachDayOfInterval({ start: startOfCurrentWeek, end: endOfCurrentWeek });
   const hours = Array.from({ length: 13 }, (_, i) => i + 7); // 7am to 7pm
+
+  // Update dialog clinician selection when main filter changes
+  useEffect(() => {
+    if (isDialogOpen) {
+        if (selectedClinicianId !== "all") {
+            setDialogClinicianId(selectedClinicianId);
+        } else if (clinicians.length > 0 && !dialogClinicianId) {
+            setDialogClinicianId(clinicians[0].id);
+        }
+    }
+  }, [isDialogOpen, selectedClinicianId, clinicians]);
 
   // Helper to parse "HH:MM" to decimal hours for calculations
   const parseTime = (time: string) => {
@@ -70,9 +84,7 @@ export default function Availability() {
   const handlePrevWeek = () => setCurrentDate(subWeeks(currentDate, 1));
 
   const handleAddAvailability = () => {
-    // Mock adding to the first clinician (Dr. Emily Chen) for this prototype if "all" selected
-    const targetClinicianId = selectedClinicianId === "all" ? "c1" : selectedClinicianId;
-    const clinician = clinicians.find(c => c.id === targetClinicianId);
+    const clinician = clinicians.find(c => c.id === dialogClinicianId);
 
     if (clinician) {
       const newSlot: TimeSlot = {
@@ -85,7 +97,7 @@ export default function Availability() {
         isBooked: false
       };
       
-      updateClinicianAvailability(targetClinicianId, [...clinician.availability, newSlot]);
+      updateClinicianAvailability(dialogClinicianId, [...clinician.availability, newSlot]);
       
       toast({
         title: newSlotType === "Vacation" ? "Vacation Added" : "Availability Added",
@@ -155,6 +167,20 @@ export default function Availability() {
                     </DialogHeader>
                     <div className="grid gap-4 py-4">
                         <div className="grid gap-2">
+                            <Label>Clinician</Label>
+                            <Select value={dialogClinicianId} onValueChange={setDialogClinicianId}>
+                                <SelectTrigger>
+                                    <SelectValue placeholder="Select Clinician" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {clinicians.map(c => (
+                                        <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        <div className="grid gap-2">
                             <Label>Type</Label>
                             <Select value={newSlotType} onValueChange={(v) => setNewSlotType(v as SlotType)}>
                                 <SelectTrigger>
@@ -182,15 +208,9 @@ export default function Availability() {
                                 </div>
                             </div>
                         )}
-                        {selectedClinicianId === "all" && (
-                             <div className="bg-amber-50 text-amber-800 text-xs p-3 rounded flex items-start gap-2">
-                                <AlertCircle className="h-4 w-4 mt-0.5" />
-                                Since "All Clinicians" is selected, this will be added to Dr. Emily Chen (Prototype default). Filter by a specific clinician to add to their schedule.
-                             </div>
-                        )}
                     </div>
                     <DialogFooter>
-                        <Button onClick={handleAddAvailability}>Save to Schedule</Button>
+                        <Button onClick={handleAddAvailability} disabled={!dialogClinicianId}>Save to Schedule</Button>
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
@@ -251,7 +271,7 @@ export default function Availability() {
                                             <div className="overflow-hidden w-full">
                                                 <p className="font-semibold truncate leading-tight">{clinician.name.split(" ")[1] || clinician.name}</p>
                                                 <p className="opacity-80 truncate leading-tight">
-                                                    {slot.type === "Vacation" ? "OUT OF OFFICE" : `${slot.startTime} - ${slot.endTime}`}
+                                                    {slot.type === "Vacation" ? "NOT AVAILABLE" : `${slot.startTime} - ${slot.endTime}`}
                                                 </p>
                                             </div>
                                         </div>

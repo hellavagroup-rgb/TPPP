@@ -55,7 +55,273 @@ export interface Task {
   relatedClientId?: string;
 }
 
+export interface FormField {
+  id: string;
+  type: "text" | "textarea" | "date" | "select" | "radio" | "checkbox" | "email" | "tel" | "header" | "info" | "section";
+  label: string;
+  content?: string; // For info/header types
+  options?: string[]; // For select, radio, checkbox
+  required?: boolean;
+  placeholder?: string;
+  conditional?: {
+    fieldId: string;
+    value: string;
+  };
+}
+
+export interface FormTemplate {
+  id: string;
+  title: string;
+  description: string;
+  fields: FormField[];
+}
+
 // Mock Data
+const MOCK_FORMS: FormTemplate[] = [
+    {
+        id: "f1",
+        title: "Therapy Enquiry Form",
+        description: "Standard intake form for new clients to assess needs and risk.",
+        fields: [
+            {
+                id: "intro",
+                type: "info",
+                label: "Introduction",
+                content: "This form enables us to plan next steps and to ensure that we are the best fit for you. We know that finding therapeutic help is anxiety provoking and we want to make sure that you are able to move forward with confidence.\n\nThis short questionnaire usually takes around 10–15 minutes to complete and helps us understand what’s been going on for you, what kind of support you’re looking for, and how to match you with the most appropriate clinician within our practice."
+            },
+            {
+                id: "sec1",
+                type: "section",
+                label: "Section 1: About You"
+            },
+            {
+                id: "fullName",
+                type: "text",
+                label: "Full Name",
+                required: true
+            },
+            {
+                id: "dob",
+                type: "date",
+                label: "Date of Birth",
+                required: true
+            },
+            {
+                id: "pronouns",
+                type: "text",
+                label: "What are your preferred pronouns"
+            },
+            {
+                id: "phone",
+                type: "tel",
+                label: "Telephone number",
+                required: true
+            },
+            {
+                id: "voicemail",
+                type: "radio",
+                label: "Is it OK to leave a voicemail?",
+                options: ["Yes", "No"],
+                required: true
+            },
+            {
+                id: "email",
+                type: "email",
+                label: "Email address",
+                required: true
+            },
+            {
+                id: "parentingStatus",
+                type: "radio",
+                label: "Are you currently pregnant, postpartum, or parenting young children?",
+                options: ["Pregnant", "Postpartum", "Trying to conceive / fertility journey", "Parenting young children"]
+            },
+            {
+                id: "dueDate",
+                type: "date",
+                label: "If pregnant, when is your estimated due date?",
+                conditional: { fieldId: "parentingStatus", value: "Pregnant" }
+            },
+            {
+                id: "babyAge",
+                type: "text",
+                label: "If postnatal, how old is your baby or children?",
+                conditional: { fieldId: "parentingStatus", value: "Postpartum" }
+            },
+            {
+                id: "sec2",
+                type: "section",
+                label: "Section 2: Main Concerns"
+            },
+            {
+                id: "reason",
+                type: "textarea",
+                label: "What has led you to seek support at this time?",
+                required: true
+            },
+            {
+                id: "difficulties",
+                type: "checkbox",
+                label: "Which difficulties are affecting you? (Tick all that apply)",
+                options: [
+                    "Anxiety or excessive worry",
+                    "Low mood / depression",
+                    "Birth trauma / previous trauma",
+                    "Intrusive or distressing thoughts",
+                    "Panic attacks",
+                    "Sleep difficulties",
+                    "Bonding/attachment concerns",
+                    "Grief and distress following loss",
+                    "Other"
+                ]
+            },
+            {
+                id: "duration",
+                type: "radio",
+                label: "How long have these difficulties been affecting you?",
+                options: ["<2 weeks", "2-6 weeks", "6 weeks-6 months", ">6 months"]
+            },
+            {
+                id: "additionalDetail",
+                type: "textarea",
+                label: "If helpful, please let us know any detail in relation to your responses above."
+            },
+            {
+                id: "sec3",
+                type: "section",
+                label: "Safety and Risk"
+            },
+            {
+                id: "harmSelf",
+                type: "radio",
+                label: "Thoughts of Harming Yourself",
+                options: ["No", "Yes, Sometimes", "Yes, Frequently"],
+                required: true
+            },
+            {
+                id: "plans",
+                type: "radio",
+                label: "Any Current Plans or Intention?",
+                options: ["No", "Unsure", "Yes"],
+                required: true
+            },
+            {
+                id: "selfHarm",
+                type: "radio",
+                label: "Recent Self-Harm",
+                options: ["No", "Yes"],
+                required: true
+            },
+            {
+                id: "safetyOther",
+                type: "textarea",
+                label: "Is there anything else you think we should know about in relation to your safety?"
+            },
+            {
+                id: "sec4",
+                type: "section",
+                label: "History"
+            },
+            {
+                id: "prevTherapy",
+                type: "radio",
+                label: "Have you previously had therapy?",
+                options: ["No", "Yes"]
+            },
+            {
+                id: "prevTherapyDetails",
+                type: "textarea",
+                label: "Please tell us briefly about the therapy you have had previously",
+                conditional: { fieldId: "prevTherapy", value: "Yes" }
+            },
+            {
+                id: "diagnosis",
+                type: "radio",
+                label: "Have you ever been diagnosed with a mental health difficulty?",
+                options: ["No", "Yes"]
+            },
+            {
+                id: "diagnosisDetails",
+                type: "textarea",
+                label: "Can you provide us with some detail around this:",
+                conditional: { fieldId: "diagnosis", value: "Yes" }
+            },
+            {
+                id: "medication",
+                type: "radio",
+                label: "Are you currently prescribed any medication to support your mental health?",
+                options: ["No", "Yes"]
+            },
+            {
+                id: "medicationDetails",
+                type: "textarea",
+                label: "Can you provide us with some detail around this?",
+                conditional: { fieldId: "medication", value: "Yes" }
+            },
+            {
+                id: "careTeam",
+                type: "radio",
+                label: "Are you currently under the care of a perinatal mental health team or other NHS mental health team?",
+                options: ["Yes", "No"]
+            },
+            {
+                id: "sec5",
+                type: "section",
+                label: "Section 5: Practical Details"
+            },
+            {
+                id: "availability",
+                type: "textarea",
+                label: "What days and times would you be available for therapy?"
+            },
+            {
+                id: "neurodiversity",
+                type: "radio",
+                label: "Would you like us to be aware of any neurodiversity-related needs or adjustments?",
+                options: ["Yes", "No"]
+            },
+            {
+                id: "neurodiversityDetails",
+                type: "textarea",
+                label: "If yes, please let us know what you would find helpful:",
+                conditional: { fieldId: "neurodiversity", value: "Yes" }
+            },
+            {
+                id: "sec6",
+                type: "section",
+                label: "Section 6: Consent"
+            },
+            {
+                id: "consent",
+                type: "radio",
+                label: "Do you consent to us using this information to match you with a clinician?",
+                options: ["Yes", "No"],
+                required: true
+            }
+        ]
+    },
+    {
+        id: "f2",
+        title: "GAD-7 Assessment",
+        description: "Generalized Anxiety Disorder 7-item scale.",
+        fields: [
+            { id: "gad_intro", type: "info", label: "Instructions", content: "Over the last 2 weeks, how often have you been bothered by the following problems?" },
+            { id: "gad_1", type: "radio", label: "Feeling nervous, anxious, or on edge", options: ["Not at all", "Several days", "More than half the days", "Nearly every day"] },
+            { id: "gad_2", type: "radio", label: "Not being able to stop or control worrying", options: ["Not at all", "Several days", "More than half the days", "Nearly every day"] }
+        ]
+    },
+    {
+        id: "f3",
+        title: "PHQ-9 Assessment",
+        description: "Patient Health Questionnaire 9-item depression scale.",
+        fields: [
+             { id: "phq_intro", type: "info", label: "Instructions", content: "Over the last 2 weeks, how often have you been bothered by any of the following problems?" },
+             { id: "phq_1", type: "radio", label: "Little interest or pleasure in doing things", options: ["Not at all", "Several days", "More than half the days", "Nearly every day"] },
+             { id: "phq_2", type: "radio", label: "Feeling down, depressed, or hopeless", options: ["Not at all", "Several days", "More than half the days", "Nearly every day"] }
+        ]
+    }
+];
+
 const MOCK_CLINICIANS: Clinician[] = [
   {
     id: "c1",
@@ -199,6 +465,7 @@ interface DataContextType {
   clients: Client[];
   clinicians: Clinician[];
   tasks: Task[];
+  forms: FormTemplate[];
   addClient: (client: Client) => void;
   updateClientStatus: (id: string, status: ClientStatus) => void;
   assignClinician: (clientId: string, clinicianId: string, slotId: string) => void;
@@ -213,6 +480,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [clients, setClients] = useState<Client[]>(MOCK_CLIENTS);
   const [clinicians, setClinicians] = useState<Clinician[]>(MOCK_CLINICIANS);
   const [tasks, setTasks] = useState<Task[]>(MOCK_TASKS);
+  const [forms] = useState<FormTemplate[]>(MOCK_FORMS);
 
   const addClient = (client: Client) => {
     setClients(prev => [client, ...prev]);
@@ -269,6 +537,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       clients, 
       clinicians, 
       tasks, 
+      forms,
       addClient, 
       updateClientStatus, 
       assignClinician, 

@@ -1,10 +1,12 @@
-import { useData, Client, ClientStatus } from "@/lib/mockData";
+import { useData, Client, ClientStatus, FormTemplate } from "@/lib/mockData";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
+import { FormPreviewDialog } from "@/components/forms/FormPreview";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -31,7 +33,8 @@ import {
   Clock,
   Shield,
   CalendarCheck,
-  AlertTriangle
+  AlertTriangle,
+  Eye
 } from "lucide-react";
 import { useState } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -39,11 +42,18 @@ import { useToast } from "@/hooks/use-toast";
 import { format, parseISO, isSameDay } from "date-fns";
 
 export default function Clients() {
-  const { clients, clinicians, updateClientStatus, assignClinician, addClient } = useData();
+  const { clients, clinicians, forms, updateClientStatus, assignClinician, addClient } = useData();
   const [searchTerm, setSearchTerm] = useState("");
   const [filterStatus, setFilterStatus] = useState<string>("All");
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const { toast } = useToast();
+
+  // Send Forms State
+  const [isSendFormsOpen, setIsSendFormsOpen] = useState(false);
+  const [clientToSendForms, setClientToSendForms] = useState<Client | null>(null);
+  const [selectedForms, setSelectedForms] = useState<string[]>([]);
+  const [previewForm, setPreviewForm] = useState<FormTemplate | null>(null);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   // New Client Form State
   const [isNewClientOpen, setIsNewClientOpen] = useState(false);
@@ -89,6 +99,38 @@ export default function Clients() {
 
   const hasVacationConflict = (clinician: typeof clinicians[0]) => {
     return clinician.availability.some(s => s.type === "Vacation" && new Date(s.date!) >= new Date());
+  };
+
+  const handleOpenSendForms = (client: Client) => {
+      setClientToSendForms(client);
+      setSelectedForms([]); // Reset selection
+      setIsSendFormsOpen(true);
+  };
+
+  const handleSendForms = () => {
+      if (clientToSendForms && selectedForms.length > 0) {
+          updateClientStatus(clientToSendForms.id, "Forms Sent");
+          setIsSendFormsOpen(false);
+          setClientToSendForms(null);
+          toast({
+              title: "Forms Sent",
+              description: `${selectedForms.length} form(s) sent to ${clientToSendForms.email}.`,
+          });
+      } else {
+           toast({
+              title: "Selection Required",
+              description: "Please select at least one form to send.",
+              variant: "destructive"
+          });
+      }
+  };
+
+  const handlePreviewForm = (formId: string) => {
+      const form = forms.find(f => f.id === formId);
+      if (form) {
+          setPreviewForm(form);
+          setIsPreviewOpen(true);
+      }
   };
 
   const handleCreateClient = () => {
@@ -323,7 +365,7 @@ export default function Clients() {
                 {/* Actions */}
                 <div className="flex items-center gap-2 ml-auto">
                     {client.status === "New" && (
-                        <Button size="sm" variant="outline" className="gap-2" onClick={() => updateClientStatus(client.id, "Forms Sent")}>
+                        <Button size="sm" variant="outline" className="gap-2" onClick={() => handleOpenSendForms(client)}>
                             <Mail className="h-4 w-4" /> Send Forms
                         </Button>
                     )}
@@ -426,6 +468,62 @@ export default function Clients() {
             </div>
         )}
       </div>
+
+      <Dialog open={isSendFormsOpen} onOpenChange={setIsSendFormsOpen}>
+        <DialogContent className="sm:max-w-[500px]">
+            <DialogHeader>
+                <DialogTitle>Send Forms to {clientToSendForms?.displayId}</DialogTitle>
+                <DialogDescription>
+                    Select the intake forms to send to the client. They will receive a secure link via email.
+                </DialogDescription>
+            </DialogHeader>
+            <div className="py-4 space-y-4">
+                {forms.map(form => (
+                    <div key={form.id} className="flex items-start space-x-3 p-3 rounded border hover:bg-muted/50 transition-colors">
+                        <Checkbox 
+                            id={`form-${form.id}`} 
+                            checked={selectedForms.includes(form.id)}
+                            onCheckedChange={(checked) => {
+                                if (checked) {
+                                    setSelectedForms([...selectedForms, form.id]);
+                                } else {
+                                    setSelectedForms(selectedForms.filter(id => id !== form.id));
+                                }
+                            }}
+                        />
+                        <div className="grid gap-1.5 leading-none flex-1">
+                            <Label 
+                                htmlFor={`form-${form.id}`}
+                                className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+                            >
+                                {form.title}
+                            </Label>
+                            <p className="text-xs text-muted-foreground">
+                                {form.description}
+                            </p>
+                        </div>
+                        <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => handlePreviewForm(form.id)}>
+                            <Eye className="h-3 w-3 mr-1" /> Preview
+                        </Button>
+                    </div>
+                ))}
+            </div>
+            <DialogFooter>
+                <Button variant="outline" onClick={() => setIsSendFormsOpen(false)}>Cancel</Button>
+                <Button onClick={handleSendForms} disabled={selectedForms.length === 0}>
+                    <Mail className="h-4 w-4 mr-2" /> Send {selectedForms.length > 0 ? `(${selectedForms.length})` : ""}
+                </Button>
+            </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {previewForm && (
+        <FormPreviewDialog 
+            form={previewForm} 
+            open={isPreviewOpen} 
+            onOpenChange={setIsPreviewOpen} 
+        />
+      )}
     </div>
   );
 }

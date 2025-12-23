@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, ReactNode } from "react";
-import { format, subDays, addDays } from "date-fns";
+import { format, subDays, addDays, isSameDay, parseISO, startOfWeek, endOfWeek, eachDayOfInterval } from "date-fns";
 
 // Types
 export type ClientStatus = "New" | "Forms Sent" | "Forms Completed" | "Assigned" | "Scheduled" | "Waitlist";
@@ -16,9 +16,13 @@ export interface Client {
   notes: string;
 }
 
+export type SlotType = "Recurring" | "SpecificDate" | "Vacation";
+
 export interface TimeSlot {
   id: string;
-  day: string;
+  type: SlotType;
+  day: string; // "Monday", etc. (Used for Recurring)
+  date?: string; // YYYY-MM-DD (Used for SpecificDate and Vacation)
   startTime: string;
   endTime: string;
   isBooked: boolean;
@@ -41,7 +45,7 @@ export type TaskStatus = "Pending" | "In Progress" | "Completed";
 export interface Task {
   id: string;
   title: string;
-  description: string; // "What needs to be done next"
+  description: string;
   assignee: "Sarah" | "Rosie" | "Suzanne";
   dueDate: string;
   priority: TaskPriority;
@@ -59,9 +63,11 @@ const MOCK_CLINICIANS: Clinician[] = [
     currentLoad: 22,
     avatar: "EC",
     availability: [
-      { id: "ts1", day: "Monday", startTime: "10:00", endTime: "15:00", isBooked: true },
-      { id: "ts2", day: "Wednesday", startTime: "10:00", endTime: "15:00", isBooked: false },
-      { id: "ts3", day: "Friday", startTime: "09:00", endTime: "13:00", isBooked: false }
+      { id: "ts1", type: "Recurring", day: "Monday", startTime: "10:00", endTime: "15:00", isBooked: true },
+      { id: "ts2", type: "Recurring", day: "Wednesday", startTime: "10:00", endTime: "15:00", isBooked: false },
+      { id: "ts3", type: "Recurring", day: "Friday", startTime: "09:00", endTime: "13:00", isBooked: false },
+      // Example Vacation
+      { id: "v1", type: "Vacation", day: "", date: format(addDays(new Date(), 5), "yyyy-MM-dd"), startTime: "00:00", endTime: "23:59", isBooked: false }
     ],
     lastUpdatedAvailability: format(subDays(new Date(), 2), "MMM d")
   },
@@ -73,9 +79,9 @@ const MOCK_CLINICIANS: Clinician[] = [
     currentLoad: 12,
     avatar: "MW",
     availability: [
-      { id: "ts4", day: "Tuesday", startTime: "13:00", endTime: "16:00", isBooked: false },
-      { id: "ts5", day: "Thursday", startTime: "13:00", endTime: "16:00", isBooked: false },
-      { id: "ts6", day: "Saturday", startTime: "10:00", endTime: "14:00", isBooked: false }
+      { id: "ts4", type: "Recurring", day: "Tuesday", startTime: "13:00", endTime: "16:00", isBooked: false },
+      { id: "ts5", type: "Recurring", day: "Thursday", startTime: "13:00", endTime: "16:00", isBooked: false },
+      { id: "ts6", type: "Recurring", day: "Saturday", startTime: "10:00", endTime: "14:00", isBooked: false }
     ],
     lastUpdatedAvailability: format(subDays(new Date(), 5), "MMM d")
   },
@@ -87,10 +93,10 @@ const MOCK_CLINICIANS: Clinician[] = [
     currentLoad: 20,
     avatar: "SJ",
     availability: [
-      { id: "ts7", day: "Monday", startTime: "09:00", endTime: "17:00", isBooked: true },
-      { id: "ts8", day: "Tuesday", startTime: "09:00", endTime: "17:00", isBooked: true }
+      { id: "ts7", type: "Recurring", day: "Monday", startTime: "09:00", endTime: "17:00", isBooked: true },
+      { id: "ts8", type: "Recurring", day: "Tuesday", startTime: "09:00", endTime: "17:00", isBooked: true }
     ],
-    lastUpdatedAvailability: format(subDays(new Date(), 10), "MMM d") // Needs reminder!
+    lastUpdatedAvailability: format(subDays(new Date(), 10), "MMM d") 
   }
 ];
 

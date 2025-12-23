@@ -7,7 +7,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -28,11 +27,13 @@ import {
   UserCheck,
   Clock,
   Shield,
-  CalendarCheck
+  CalendarCheck,
+  AlertTriangle
 } from "lucide-react";
 import { useState } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { format, parseISO, isSameDay } from "date-fns";
 
 export default function Clients() {
   const { clients, clinicians, updateClientStatus, assignClinician } = useData();
@@ -69,6 +70,13 @@ export default function Clients() {
       });
       setSelectedClient(null);
     }
+  };
+
+  const hasVacationConflict = (clinician: typeof clinicians[0]) => {
+    // Basic check: does clinician have ANY vacation in the future?
+    // In a real app, this would check specifically against the slot date.
+    // For now, we flag if they have an upcoming vacation to warn the admin.
+    return clinician.availability.some(s => s.type === "Vacation" && new Date(s.date!) >= new Date());
   };
 
   return (
@@ -193,15 +201,23 @@ export default function Clients() {
                                         <p className="text-sm font-medium text-muted-foreground">AVAILABLE SLOTS</p>
                                         {clinicians.map(clinician => (
                                             <div key={clinician.id} className="space-y-2">
-                                                <div className="flex items-center gap-2">
-                                                    <div className="h-6 w-6 rounded-full bg-secondary flex items-center justify-center text-[10px] font-bold">
-                                                        {clinician.avatar}
+                                                <div className="flex items-center justify-between">
+                                                    <div className="flex items-center gap-2">
+                                                        <div className="h-6 w-6 rounded-full bg-secondary flex items-center justify-center text-[10px] font-bold">
+                                                            {clinician.avatar}
+                                                        </div>
+                                                        <p className="font-medium text-sm">{clinician.name}</p>
                                                     </div>
-                                                    <p className="font-medium text-sm">{clinician.name}</p>
+                                                    {hasVacationConflict(clinician) && (
+                                                        <div className="flex items-center text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded">
+                                                            <AlertTriangle className="h-3 w-3 mr-1" />
+                                                            Upcoming Vacation
+                                                        </div>
+                                                    )}
                                                 </div>
                                                 
                                                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pl-8">
-                                                    {clinician.availability.map(slot => (
+                                                    {clinician.availability.filter(s => s.type !== "Vacation").map(slot => (
                                                         <Button 
                                                             key={slot.id}
                                                             variant={slot.isBooked ? "ghost" : "outline"}
@@ -213,12 +229,12 @@ export default function Clients() {
                                                         >
                                                             <CalendarCheck className="h-3 w-3 mr-2" />
                                                             <div className="text-left">
-                                                                <div className="font-medium">{slot.day}</div>
+                                                                <div className="font-medium">{slot.day || format(parseISO(slot.date!), "EEE")}</div>
                                                                 <div className="text-[10px] text-muted-foreground">{slot.startTime} - {slot.endTime}</div>
                                                             </div>
                                                         </Button>
                                                     ))}
-                                                    {clinician.availability.length === 0 && (
+                                                    {clinician.availability.filter(s => s.type !== "Vacation").length === 0 && (
                                                         <div className="col-span-3 text-xs text-muted-foreground italic p-2">
                                                             No availability set.
                                                         </div>

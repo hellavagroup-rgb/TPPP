@@ -52,6 +52,7 @@ export default function Clients() {
     email: "",
     phone: "",
     referralSource: "Web Form",
+    referralSourceDetails: "",
     presentingIssue: "",
     notes: ""
   });
@@ -105,7 +106,9 @@ export default function Clients() {
         displayId: newClientData.wNumber.toUpperCase().startsWith("W") ? newClientData.wNumber : `W${newClientData.wNumber}`,
         email: newClientData.email,
         phone: newClientData.phone,
-        referralSource: newClientData.referralSource,
+        referralSource: newClientData.referralSource === "Other" && newClientData.referralSourceDetails
+            ? `Other: ${newClientData.referralSourceDetails}`
+            : newClientData.referralSource,
         status: "New",
         intakeDate: format(new Date(), "yyyy-MM-dd"),
         presentingIssues: [newClientData.presentingIssue],
@@ -119,6 +122,7 @@ export default function Clients() {
         email: "",
         phone: "",
         referralSource: "Web Form",
+        referralSourceDetails: "",
         presentingIssue: "",
         notes: ""
     });
@@ -201,6 +205,14 @@ export default function Clients() {
                                 <SelectItem value="Other">Other</SelectItem>
                             </SelectContent>
                         </Select>
+                        {newClientData.referralSource === "Other" && (
+                            <Input 
+                                placeholder="Please specify..."
+                                className="mt-1"
+                                value={newClientData.referralSourceDetails}
+                                onChange={e => setNewClientData({...newClientData, referralSourceDetails: e.target.value})}
+                            />
+                        )}
                     </div>
 
                     <div className="grid gap-2">

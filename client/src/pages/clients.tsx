@@ -3,6 +3,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,6 +19,7 @@ import {
     DialogHeader,
     DialogTitle,
     DialogTrigger,
+    DialogFooter,
 } from "@/components/ui/dialog";
 import { 
   MoreHorizontal, 
@@ -36,11 +39,22 @@ import { useToast } from "@/hooks/use-toast";
 import { format, parseISO, isSameDay } from "date-fns";
 
 export default function Clients() {
-  const { clients, clinicians, updateClientStatus, assignClinician } = useData();
+  const { clients, clinicians, updateClientStatus, assignClinician, addClient } = useData();
   const [searchTerm, setSearchTerm] = useState("");
   const [filterStatus, setFilterStatus] = useState<string>("All");
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const { toast } = useToast();
+
+  // New Client Form State
+  const [isNewClientOpen, setIsNewClientOpen] = useState(false);
+  const [newClientData, setNewClientData] = useState({
+    wNumber: "",
+    email: "",
+    phone: "",
+    referralSource: "Web Form",
+    presentingIssue: "",
+    notes: ""
+  });
 
   const filteredClients = clients.filter(client => {
     // Search now works on ID instead of Name
@@ -73,10 +87,46 @@ export default function Clients() {
   };
 
   const hasVacationConflict = (clinician: typeof clinicians[0]) => {
-    // Basic check: does clinician have ANY vacation in the future?
-    // In a real app, this would check specifically against the slot date.
-    // For now, we flag if they have an upcoming vacation to warn the admin.
     return clinician.availability.some(s => s.type === "Vacation" && new Date(s.date!) >= new Date());
+  };
+
+  const handleCreateClient = () => {
+    if (!newClientData.wNumber) {
+        toast({
+            title: "Validation Error",
+            description: "W-Number is required.",
+            variant: "destructive"
+        });
+        return;
+    }
+
+    const newClient: Client = {
+        id: `cl-${Date.now()}`,
+        displayId: newClientData.wNumber.toUpperCase().startsWith("W") ? newClientData.wNumber : `W${newClientData.wNumber}`,
+        email: newClientData.email,
+        phone: newClientData.phone,
+        referralSource: newClientData.referralSource,
+        status: "New",
+        intakeDate: format(new Date(), "yyyy-MM-dd"),
+        presentingIssues: [newClientData.presentingIssue],
+        notes: newClientData.notes
+    };
+
+    addClient(newClient);
+    setIsNewClientOpen(false);
+    setNewClientData({
+        wNumber: "",
+        email: "",
+        phone: "",
+        referralSource: "Web Form",
+        presentingIssue: "",
+        notes: ""
+    });
+    
+    toast({
+        title: "Client Created",
+        description: "New referral added successfully. Ready for form sending.",
+    });
   };
 
   return (
@@ -86,10 +136,96 @@ export default function Clients() {
           <h2 className="text-3xl font-serif font-bold text-foreground">Client Allocation</h2>
           <p className="text-muted-foreground mt-1">Anonymized client management.</p>
         </div>
-        <Button className="gap-2">
-          <UserPlus className="h-4 w-4" />
-          New Referral
-        </Button>
+        
+        <Dialog open={isNewClientOpen} onOpenChange={setIsNewClientOpen}>
+            <DialogTrigger asChild>
+                <Button className="gap-2">
+                    <UserPlus className="h-4 w-4" />
+                    New Referral
+                </Button>
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-[500px]">
+                <DialogHeader>
+                    <DialogTitle>Add New Referral</DialogTitle>
+                    <DialogDescription>
+                        Enter client details from WriteUpp. The ID will be used for anonymization.
+                    </DialogDescription>
+                </DialogHeader>
+                <div className="grid gap-4 py-4">
+                    <div className="grid gap-2">
+                        <Label>WriteUpp ID (W-Number)</Label>
+                        <div className="relative">
+                            <Shield className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                            <Input 
+                                placeholder="W..." 
+                                className="pl-9 font-mono" 
+                                value={newClientData.wNumber}
+                                onChange={e => setNewClientData({...newClientData, wNumber: e.target.value})}
+                            />
+                        </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="grid gap-2">
+                            <Label>Email</Label>
+                            <Input 
+                                type="email" 
+                                placeholder="client@example.com"
+                                value={newClientData.email}
+                                onChange={e => setNewClientData({...newClientData, email: e.target.value})}
+                            />
+                        </div>
+                        <div className="grid gap-2">
+                            <Label>Phone (Optional)</Label>
+                            <Input 
+                                placeholder="555-0123"
+                                value={newClientData.phone}
+                                onChange={e => setNewClientData({...newClientData, phone: e.target.value})}
+                            />
+                        </div>
+                    </div>
+
+                    <div className="grid gap-2">
+                        <Label>Referral Source</Label>
+                        <Select 
+                            value={newClientData.referralSource} 
+                            onValueChange={v => setNewClientData({...newClientData, referralSource: v})}
+                        >
+                            <SelectTrigger>
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="Web Form">Web Form</SelectItem>
+                                <SelectItem value="Direct Email">Direct Email</SelectItem>
+                                <SelectItem value="Psychiatrist Referral">Psychiatrist Referral</SelectItem>
+                                <SelectItem value="Other">Other</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </div>
+
+                    <div className="grid gap-2">
+                        <Label>Primary Issue</Label>
+                        <Input 
+                            placeholder="e.g. Anxiety, Trauma, etc."
+                            value={newClientData.presentingIssue}
+                            onChange={e => setNewClientData({...newClientData, presentingIssue: e.target.value})}
+                        />
+                    </div>
+
+                    <div className="grid gap-2">
+                        <Label>Notes</Label>
+                        <Textarea 
+                            placeholder="Any additional intake notes..."
+                            value={newClientData.notes}
+                            onChange={e => setNewClientData({...newClientData, notes: e.target.value})}
+                        />
+                    </div>
+                </div>
+                <DialogFooter>
+                    <Button onClick={handleCreateClient}>Create Referral</Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
       </div>
 
       {/* Filters and Search */}
@@ -141,6 +277,12 @@ export default function Clients() {
                   </div>
                   <p className="text-sm text-muted-foreground flex items-center gap-2">
                     <Clock className="h-3 w-3" /> Intake: {client.intakeDate}
+                    {client.referralSource && (
+                        <>
+                            <span className="text-border mx-1">|</span>
+                            <span>{client.referralSource}</span>
+                        </>
+                    )}
                   </p>
                 </div>
 

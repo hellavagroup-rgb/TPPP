@@ -8,6 +8,8 @@ export interface Client {
   id: string; // Internal ID
   displayId: string; // The W12345678 format
   email: string; // Hidden from display
+  phone?: string;
+  referralSource?: string;
   status: ClientStatus;
   intakeDate: string;
   assignedClinicianId?: string;

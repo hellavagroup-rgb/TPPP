@@ -1,0 +1,415 @@
+import { useState, useEffect } from "react";
+import { useRoute, useLocation } from "wouter";
+import { useData, FormTemplate, FormField } from "@/lib/mockData";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import { 
+  ArrowLeft, 
+  Save, 
+  Plus, 
+  Trash2, 
+  GripVertical, 
+  Type, 
+  List, 
+  CheckSquare, 
+  Calendar as CalendarIcon, 
+  Heading, 
+  Info,
+  Smartphone,
+  Mail,
+  Eye,
+  Settings
+} from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { FormPreview } from "@/components/forms/FormPreview";
+
+const FIELD_TYPES = [
+  { type: "text", label: "Short Text", icon: Type },
+  { type: "textarea", label: "Long Text", icon: Type },
+  { type: "select", label: "Dropdown", icon: List },
+  { type: "radio", label: "Single Choice", icon: CheckSquare },
+  { type: "checkbox", label: "Multiple Choice", icon: CheckSquare },
+  { type: "date", label: "Date", icon: CalendarIcon },
+  { type: "email", label: "Email", icon: Mail },
+  { type: "tel", label: "Phone", icon: Smartphone },
+  { type: "section", label: "Section Header", icon: Heading },
+  { type: "info", label: "Info Text", icon: Info },
+];
+
+export default function FormBuilder() {
+  const [, params] = useRoute("/forms/:id");
+  const [, setLocation] = useLocation();
+  const { forms, addForm, updateForm } = useData();
+  const { toast } = useToast();
+  
+  const isNew = params?.id === "new";
+  const [activeTab, setActiveTab] = useState("builder");
+  
+  // Form State
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [fields, setFields] = useState<FormField[]>([]);
+  const [selectedFieldId, setSelectedFieldId] = useState<string | null>(null);
+
+  // Load existing form data
+  useEffect(() => {
+    if (!isNew && params?.id) {
+      const existingForm = forms.find(f => f.id === params.id);
+      if (existingForm) {
+        setTitle(existingForm.title);
+        setDescription(existingForm.description);
+        setFields(JSON.parse(JSON.stringify(existingForm.fields))); // Deep copy
+      }
+    }
+  }, [isNew, params?.id, forms]);
+
+  const handleSave = () => {
+    if (!title.trim()) {
+      toast({
+        title: "Validation Error",
+        description: "Form title is required.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    const formData: FormTemplate = {
+      id: isNew ? `f-${Date.now()}` : params!.id!,
+      title,
+      description,
+      fields
+    };
+
+    if (isNew) {
+      addForm(formData);
+      toast({ title: "Form Created", description: "New form template saved successfully." });
+    } else {
+      updateForm(formData.id, formData);
+      toast({ title: "Form Updated", description: "Form template changes saved." });
+    }
+    
+    setLocation("/forms");
+  };
+
+  const addField = (type: FormField["type"]) => {
+    const newField: FormField = {
+      id: `field-${Date.now()}`,
+      type,
+      label: type === "section" ? "New Section" : type === "info" ? "Information" : "New Question",
+      required: false,
+      placeholder: "",
+      options: ["Option 1", "Option 2"] // Default options for choice fields
+    };
+    
+    setFields([...fields, newField]);
+    setSelectedFieldId(newField.id);
+  };
+
+  const removeField = (id: string) => {
+    setFields(fields.filter(f => f.id !== id));
+    if (selectedFieldId === id) setSelectedFieldId(null);
+  };
+
+  const updateField = (id: string, updates: Partial<FormField>) => {
+    setFields(fields.map(f => f.id === id ? { ...f, ...updates } : f));
+  };
+
+  const moveField = (index: number, direction: 'up' | 'down') => {
+    if (direction === 'up' && index === 0) return;
+    if (direction === 'down' && index === fields.length - 1) return;
+    
+    const newFields = [...fields];
+    const temp = newFields[index];
+    newFields[index] = newFields[index + (direction === 'up' ? -1 : 1)];
+    newFields[index + (direction === 'up' ? -1 : 1)] = temp;
+    setFields(newFields);
+  };
+
+  const selectedField = fields.find(f => f.id === selectedFieldId);
+
+  return (
+    <div className="h-[calc(100vh-6rem)] flex flex-col">
+      {/* Header */}
+      <header className="flex items-center justify-between border-b pb-4 mb-4">
+        <div className="flex items-center gap-4">
+          <Button variant="ghost" size="icon" onClick={() => setLocation("/forms")}>
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+          <div>
+            <h1 className="text-2xl font-bold font-serif">{isNew ? "Create New Form" : "Edit Form"}</h1>
+            <p className="text-sm text-muted-foreground">{isNew ? "Design a new intake form" : `Editing: ${title}`}</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+           <Tabs value={activeTab} onValueChange={setActiveTab} className="mr-4">
+            <TabsList>
+                <TabsTrigger value="builder" className="gap-2"><Settings className="h-4 w-4" /> Builder</TabsTrigger>
+                <TabsTrigger value="preview" className="gap-2"><Eye className="h-4 w-4" /> Preview</TabsTrigger>
+            </TabsList>
+           </Tabs>
+          <Button onClick={handleSave} className="gap-2">
+            <Save className="h-4 w-4" />
+            Save Form
+          </Button>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <div className="flex-1 flex overflow-hidden gap-6">
+        
+        {activeTab === "preview" ? (
+             <div className="flex-1 flex justify-center bg-muted/20 rounded-lg border p-8 overflow-y-auto">
+                <div className="w-full max-w-2xl bg-white shadow-sm rounded-lg border p-8 h-fit">
+                    <FormPreview form={{ id: "preview", title, description, fields }} />
+                </div>
+             </div>
+        ) : (
+            <>
+                {/* Left Sidebar - Toolbox */}
+                <div className="w-64 flex flex-col gap-4 overflow-y-auto pr-2">
+                <Card>
+                    <CardHeader className="pb-3">
+                    <CardTitle className="text-sm font-medium">Form Elements</CardTitle>
+                    </CardHeader>
+                    <CardContent className="grid gap-2">
+                    {FIELD_TYPES.map((item) => (
+                        <Button 
+                        key={item.type} 
+                        variant="outline" 
+                        className="justify-start gap-2 h-auto py-3 font-normal"
+                        onClick={() => addField(item.type as any)}
+                        >
+                        <item.icon className="h-4 w-4 text-muted-foreground" />
+                        {item.label}
+                        </Button>
+                    ))}
+                    </CardContent>
+                </Card>
+                </div>
+
+                {/* Center Canvas */}
+                <div className="flex-1 bg-muted/20 rounded-lg border flex flex-col overflow-hidden">
+                <div className="p-4 border-b bg-background/50 backdrop-blur-sm sticky top-0 z-10">
+                    <Input 
+                    className="text-lg font-bold border-transparent hover:border-border focus:border-primary px-2 h-auto py-1 mb-2 bg-transparent" 
+                    placeholder="Form Title" 
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    />
+                    <Textarea 
+                    className="text-sm text-muted-foreground border-transparent hover:border-border focus:border-primary px-2 py-1 min-h-[40px] resize-none bg-transparent" 
+                    placeholder="Form Description (optional)" 
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    />
+                </div>
+                
+                <ScrollArea className="flex-1 p-6">
+                    <div className="max-w-2xl mx-auto space-y-4 pb-12">
+                    {fields.length === 0 && (
+                        <div className="text-center py-12 text-muted-foreground border-2 border-dashed rounded-lg">
+                        <p>Click an element from the left sidebar to add it to your form.</p>
+                        </div>
+                    )}
+
+                    {fields.map((field, index) => (
+                        <div 
+                        key={field.id}
+                        onClick={() => setSelectedFieldId(field.id)}
+                        className={`group relative p-4 rounded-lg border transition-all cursor-pointer ${
+                            selectedFieldId === field.id 
+                            ? "bg-background border-primary shadow-sm ring-1 ring-primary" 
+                            : "bg-background border-border hover:border-primary/50"
+                        }`}
+                        >
+                        <div className="flex items-start gap-3">
+                            <div className="mt-1 text-muted-foreground cursor-grab active:cursor-grabbing">
+                                <GripVertical className="h-4 w-4" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                            {field.type === "section" ? (
+                                <h3 className="font-semibold text-lg text-primary">{field.label}</h3>
+                            ) : field.type === "info" ? (
+                                <div className="space-y-1">
+                                    <h4 className="font-medium text-sm">{field.label}</h4>
+                                    <p className="text-sm text-muted-foreground whitespace-pre-wrap">{field.content || "Enter information text..."}</p>
+                                </div>
+                            ) : (
+                                <div className="space-y-2 pointer-events-none">
+                                    <Label className="font-medium flex items-center gap-1">
+                                    {field.label}
+                                    {field.required && <span className="text-destructive">*</span>}
+                                    </Label>
+                                    
+                                    {(field.type === "text" || field.type === "email" || field.type === "tel") && (
+                                    <Input disabled placeholder={field.placeholder || "Answer..."} />
+                                    )}
+                                    {field.type === "textarea" && (
+                                    <Textarea disabled placeholder={field.placeholder || "Long answer..."} className="min-h-[80px]" />
+                                    )}
+                                    {(field.type === "select") && (
+                                    <Select disabled>
+                                        <SelectTrigger><SelectValue placeholder="Select an option" /></SelectTrigger>
+                                    </Select>
+                                    )}
+                                    {(field.type === "radio" || field.type === "checkbox") && (
+                                    <div className="space-y-2">
+                                        {field.options?.map((opt, i) => (
+                                        <div key={i} className="flex items-center gap-2">
+                                            <div className={`h-4 w-4 border rounded ${field.type === "radio" ? "rounded-full" : "rounded-sm"}`} />
+                                            <span className="text-sm text-muted-foreground">{opt}</span>
+                                        </div>
+                                        ))}
+                                    </div>
+                                    )}
+                                    {field.type === "date" && (
+                                    <Button variant="outline" disabled className="w-full justify-start text-muted-foreground font-normal">
+                                        <CalendarIcon className="mr-2 h-4 w-4" /> Pick a date
+                                    </Button>
+                                    )}
+                                </div>
+                            )}
+                            </div>
+                            
+                            <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center">
+                                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={(e) => { e.stopPropagation(); removeField(field.id); }}>
+                                    <Trash2 className="h-4 w-4 text-muted-foreground hover:text-destructive" />
+                                </Button>
+                            </div>
+                        </div>
+                        
+                        {/* Reorder Handles - Only show on hover */}
+                        {/* Simplified for mock - would use dnd-kit normally */}
+                        <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 flex flex-col">
+                            {/* Visual cue only for now */}
+                        </div>
+                        </div>
+                    ))}
+                    </div>
+                </ScrollArea>
+                </div>
+
+                {/* Right Sidebar - Properties */}
+                <div className="w-80 border-l bg-background overflow-y-auto">
+                {selectedField ? (
+                    <div className="p-4 space-y-6">
+                    <div>
+                        <h3 className="font-semibold mb-1">Edit Field</h3>
+                        <p className="text-xs text-muted-foreground">ID: {selectedField.id}</p>
+                    </div>
+                    
+                    <div className="space-y-4">
+                        <div className="space-y-2">
+                        <Label>Label / Question</Label>
+                        <Input 
+                            value={selectedField.label} 
+                            onChange={(e) => updateField(selectedField.id, { label: e.target.value })}
+                        />
+                        </div>
+
+                        {selectedField.type === "info" && (
+                             <div className="space-y-2">
+                                <Label>Content</Label>
+                                <Textarea 
+                                    value={selectedField.content || ""} 
+                                    onChange={(e) => updateField(selectedField.id, { content: e.target.value })}
+                                    className="min-h-[150px]"
+                                />
+                            </div>
+                        )}
+                        
+                        {selectedField.type !== "section" && selectedField.type !== "info" && (
+                        <>
+                            <div className="space-y-2">
+                            <Label>Placeholder</Label>
+                            <Input 
+                                value={selectedField.placeholder || ""} 
+                                onChange={(e) => updateField(selectedField.id, { placeholder: e.target.value })}
+                            />
+                            </div>
+                            
+                            <div className="flex items-center justify-between">
+                            <Label>Required Field</Label>
+                            <Switch 
+                                checked={selectedField.required}
+                                onCheckedChange={(checked) => updateField(selectedField.id, { required: checked })}
+                            />
+                            </div>
+                        </>
+                        )}
+                        
+                        {(selectedField.type === "select" || selectedField.type === "radio" || selectedField.type === "checkbox") && (
+                        <div className="space-y-3 pt-2 border-t">
+                            <Label>Options</Label>
+                            <div className="space-y-2">
+                            {selectedField.options?.map((option, index) => (
+                                <div key={index} className="flex gap-2">
+                                <Input 
+                                    value={option}
+                                    onChange={(e) => {
+                                    const newOptions = [...(selectedField.options || [])];
+                                    newOptions[index] = e.target.value;
+                                    updateField(selectedField.id, { options: newOptions });
+                                    }}
+                                />
+                                <Button 
+                                    variant="ghost" 
+                                    size="icon"
+                                    onClick={() => {
+                                    const newOptions = selectedField.options?.filter((_, i) => i !== index);
+                                    updateField(selectedField.id, { options: newOptions });
+                                    }}
+                                >
+                                    <Trash2 className="h-4 w-4" />
+                                </Button>
+                                </div>
+                            ))}
+                            <Button 
+                                variant="outline" 
+                                size="sm" 
+                                className="w-full"
+                                onClick={() => {
+                                const newOptions = [...(selectedField.options || []), `Option ${(selectedField.options?.length || 0) + 1}`];
+                                updateField(selectedField.id, { options: newOptions });
+                                }}
+                            >
+                                <Plus className="h-3 w-3 mr-2" /> Add Option
+                            </Button>
+                            </div>
+                        </div>
+                        )}
+                    </div>
+                    </div>
+                ) : (
+                    <div className="p-8 text-center text-muted-foreground h-full flex flex-col items-center justify-center">
+                    <Settings className="h-10 w-10 mb-4 opacity-20" />
+                    <p>Select a field on the canvas to edit its properties.</p>
+                    </div>
+                )}
+                </div>
+            </>
+        )}
+      </div>
+    </div>
+  );
+}

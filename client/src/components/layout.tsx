@@ -9,7 +9,8 @@ import {
   LogOut,
   Bell,
   Search,
-  Menu
+  Menu,
+  FileText
 } from "lucide-react";
 import logo from "@assets/xPerinatalPP-logo-large-digital.png.pagespeed.ic.wAjk_RUOnf_1766008188694.png";
 import { useState } from "react";
@@ -28,6 +29,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     { name: "Waitlist", href: "/waitlist", icon: CalendarClock },
     { name: "Tasks", href: "/tasks", icon: ClipboardList },
     { name: "Availability", href: "/availability", icon: CalendarClock },
+    { name: "Forms", href: "/forms", icon: FileText },
     { name: "Settings", href: "/settings", icon: Settings },
   ];
 

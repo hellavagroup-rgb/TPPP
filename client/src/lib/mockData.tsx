@@ -472,6 +472,9 @@ interface DataContextType {
   addTask: (task: Task) => void;
   updateTaskStatus: (id: string, status: TaskStatus) => void;
   updateClinicianAvailability: (clinicianId: string, slots: TimeSlot[]) => void;
+  addForm: (form: FormTemplate) => void;
+  updateForm: (id: string, form: FormTemplate) => void;
+  deleteForm: (id: string) => void;
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
@@ -480,7 +483,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [clients, setClients] = useState<Client[]>(MOCK_CLIENTS);
   const [clinicians, setClinicians] = useState<Clinician[]>(MOCK_CLINICIANS);
   const [tasks, setTasks] = useState<Task[]>(MOCK_TASKS);
-  const [forms] = useState<FormTemplate[]>(MOCK_FORMS);
+  const [forms, setForms] = useState<FormTemplate[]>(MOCK_FORMS);
 
   const addClient = (client: Client) => {
     setClients(prev => [client, ...prev]);
@@ -532,6 +535,18 @@ export function DataProvider({ children }: { children: ReactNode }) {
     } : c));
   };
 
+  const addForm = (form: FormTemplate) => {
+    setForms(prev => [form, ...prev]);
+  };
+
+  const updateForm = (id: string, form: FormTemplate) => {
+    setForms(prev => prev.map(f => f.id === id ? form : f));
+  };
+
+  const deleteForm = (id: string) => {
+    setForms(prev => prev.filter(f => f.id !== id));
+  };
+
   return (
     <DataContext.Provider value={{ 
       clients, 
@@ -543,7 +558,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
       assignClinician, 
       addTask, 
       updateTaskStatus,
-      updateClinicianAvailability 
+      updateClinicianAvailability,
+      addForm,
+      updateForm,
+      deleteForm
     }}>
       {children}
     </DataContext.Provider>

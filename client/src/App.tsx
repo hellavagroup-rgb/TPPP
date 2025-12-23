@@ -9,6 +9,8 @@ import Tasks from "@/pages/tasks";
 import Waitlist from "@/pages/waitlist";
 import Settings from "@/pages/settings";
 import Availability from "@/pages/availability";
+import Forms from "@/pages/forms";
+import FormBuilder from "@/pages/form-builder";
 import Layout from "@/components/layout";
 import { DataProvider } from "@/lib/mockData";
 
@@ -22,6 +24,8 @@ function Router() {
         <Route path="/waitlist" component={Waitlist} />
         <Route path="/settings" component={Settings} />
         <Route path="/availability" component={Availability} />
+        <Route path="/forms" component={Forms} />
+        <Route path="/forms/:id" component={FormBuilder} />
         <Route component={NotFound} />
       </Switch>
     </Layout>

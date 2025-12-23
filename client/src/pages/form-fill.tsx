@@ -39,15 +39,14 @@ export default function FormFill() {
       const foundForm = forms.find(f => f.id === params.formId);
       const foundClient = clients.find(c => c.id === params.clientId);
       
-      if (foundForm) setForm(foundForm);
-      if (foundClient) setClient(foundClient);
-      
-      // Pre-fill email if available to simulate personalization
-      if (foundClient) {
+      if (foundForm && foundForm.id !== form?.id) setForm(foundForm);
+      if (foundClient && foundClient.id !== client?.id) {
+          setClient(foundClient);
+          // Pre-fill email only when client is first loaded
           setFormState(prev => ({ ...prev, email: foundClient.email }));
       }
     }
-  }, [params, forms, clients]);
+  }, [params?.formId, params?.clientId, forms, clients, form?.id, client?.id]);
 
   const handleValueChange = (fieldId: string, value: any) => {
     setFormState(prev => ({ ...prev, [fieldId]: value }));

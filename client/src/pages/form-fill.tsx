@@ -18,7 +18,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { CalendarIcon, CheckCircle2, Lock, ShieldCheck, Save } from "lucide-react";
+import { CalendarIcon, CheckCircle2, Lock, ShieldCheck } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import logo from "@assets/xPerinatalPP-logo-large-digital.png.pagespeed.ic.wAjk_RUOnf_1766008188694.png";
@@ -44,31 +44,12 @@ export default function FormFill() {
           setClient(foundClient);
           // Pre-fill email only when client is first loaded
           setFormState(prev => ({ ...prev, email: foundClient.email }));
-          
-          // Restore from localStorage if available
-          const savedData = localStorage.getItem(`form_data_${foundClient.id}_${foundForm.id}`);
-          if (savedData) {
-              try {
-                  const parsed = JSON.parse(savedData);
-                  // Restore saved fields, but preserve email from client record
-                  setFormState(prev => ({ ...parsed, email: foundClient.email }));
-              } catch (e) {
-                  console.error("Failed to parse saved form data", e);
-              }
-          }
       }
     }
   }, [params?.formId, params?.clientId, forms, clients, form?.id, client?.id]);
 
   const handleValueChange = (fieldId: string, value: any) => {
-    setFormState(prev => {
-        const newState = { ...prev, [fieldId]: value };
-        // Save to localStorage
-        if (client && form) {
-            localStorage.setItem(`form_data_${client.id}_${form.id}`, JSON.stringify(newState));
-        }
-        return newState;
-    });
+    setFormState(prev => ({ ...prev, [fieldId]: value }));
     // Clear error if exists
     if (errors[fieldId]) {
         const newErrors = { ...errors };
@@ -106,11 +87,6 @@ export default function FormFill() {
 
     // Submit mock
     setIsSubmitted(true);
-    
-    // Clear saved data on successful submission
-    if (client && form) {
-        localStorage.removeItem(`form_data_${client.id}_${form.id}`);
-    }
     
     // In a real app, we'd save the form response data.
     // Here we just update the status and notify.
@@ -326,13 +302,7 @@ export default function FormFill() {
                 })}
             </CardContent>
             <CardFooter className="p-6 sm:p-10 pt-0 bg-slate-50/50 border-t mt-4 flex justify-between items-center">
-                <div className="flex flex-col gap-1">
-                    <p className="text-sm text-muted-foreground">Securely powered by Perinatal Psychology Practice</p>
-                    <p className="text-xs text-emerald-600 flex items-center gap-1">
-                        <Save className="h-3 w-3" />
-                        Progress saved automatically
-                    </p>
-                </div>
+                <p className="text-sm text-muted-foreground">Securely powered by Perinatal Psychology Practice</p>
                 <Button size="lg" onClick={handleSubmit} className="px-8">
                     Submit Form
                 </Button>

@@ -11,6 +11,23 @@ import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
+  DndContext, 
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  useSortable
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -56,6 +73,107 @@ const FIELD_TYPES = [
   { type: "info", label: "Info Text", icon: Info },
 ];
 
+function SortableField({ 
+  field, 
+  selectedFieldId, 
+  setSelectedFieldId, 
+  removeField 
+}: { 
+  field: FormField, 
+  selectedFieldId: string | null, 
+  setSelectedFieldId: (id: string) => void,
+  removeField: (id: string) => void
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging
+  } = useSortable({ id: field.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 10 : 1,
+    opacity: isDragging ? 0.5 : 1
+  };
+
+  return (
+    <div 
+      ref={setNodeRef}
+      style={style}
+      onClick={() => setSelectedFieldId(field.id)}
+      className={`group relative p-4 rounded-lg border transition-all cursor-pointer ${
+        selectedFieldId === field.id 
+        ? "bg-background border-primary shadow-sm ring-1 ring-primary" 
+        : "bg-background border-border hover:border-primary/50"
+      }`}
+    >
+      <div className="flex items-start gap-3">
+        <div 
+          className="mt-1 text-muted-foreground cursor-grab active:cursor-grabbing outline-none"
+          {...attributes} 
+          {...listeners}
+        >
+            <GripVertical className="h-4 w-4" />
+        </div>
+        <div className="flex-1 min-w-0">
+        {field.type === "section" ? (
+            <h3 className="font-semibold text-lg text-primary">{field.label}</h3>
+        ) : field.type === "info" ? (
+            <div className="space-y-1">
+                <h4 className="font-medium text-sm">{field.label}</h4>
+                <p className="text-sm text-muted-foreground whitespace-pre-wrap">{field.content || "Enter information text..."}</p>
+            </div>
+        ) : (
+            <div className="space-y-2 pointer-events-none">
+                <Label className="font-medium flex items-center gap-1">
+                {field.label}
+                {field.required && <span className="text-destructive">*</span>}
+                </Label>
+                
+                {(field.type === "text" || field.type === "email" || field.type === "tel") && (
+                <Input disabled placeholder={field.placeholder || "Answer..."} />
+                )}
+                {field.type === "textarea" && (
+                <Textarea disabled placeholder={field.placeholder || "Long answer..."} className="min-h-[80px]" />
+                )}
+                {(field.type === "select") && (
+                <Select disabled>
+                    <SelectTrigger><SelectValue placeholder="Select an option" /></SelectTrigger>
+                </Select>
+                )}
+                {(field.type === "radio" || field.type === "checkbox") && (
+                <div className="space-y-2">
+                    {field.options?.map((opt, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                        <div className={`h-4 w-4 border rounded ${field.type === "radio" ? "rounded-full" : "rounded-sm"}`} />
+                        <span className="text-sm text-muted-foreground">{opt}</span>
+                    </div>
+                    ))}
+                </div>
+                )}
+                {field.type === "date" && (
+                <Button variant="outline" disabled className="w-full justify-start text-muted-foreground font-normal">
+                    <CalendarIcon className="mr-2 h-4 w-4" /> Pick a date
+                </Button>
+                )}
+            </div>
+        )}
+        </div>
+        
+        <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center">
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={(e) => { e.stopPropagation(); removeField(field.id); }}>
+                <Trash2 className="h-4 w-4 text-muted-foreground hover:text-destructive" />
+            </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function FormBuilder() {
   const [, params] = useRoute("/forms/:id");
   const [, setLocation] = useLocation();
@@ -70,6 +188,27 @@ export default function FormBuilder() {
   const [description, setDescription] = useState("");
   const [fields, setFields] = useState<FormField[]>([]);
   const [selectedFieldId, setSelectedFieldId] = useState<string | null>(null);
+
+  // DnD Sensors
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    
+    if (over && active.id !== over.id) {
+      setFields((items) => {
+        const oldIndex = items.findIndex((item) => item.id === active.id);
+        const newIndex = items.findIndex((item) => item.id === over.id);
+        
+        return arrayMove(items, oldIndex, newIndex);
+      });
+    }
+  };
 
   // Load existing form data
   useEffect(() => {
@@ -132,17 +271,6 @@ export default function FormBuilder() {
 
   const updateField = (id: string, updates: Partial<FormField>) => {
     setFields(fields.map(f => f.id === id ? { ...f, ...updates } : f));
-  };
-
-  const moveField = (index: number, direction: 'up' | 'down') => {
-    if (direction === 'up' && index === 0) return;
-    if (direction === 'down' && index === fields.length - 1) return;
-    
-    const newFields = [...fields];
-    const temp = newFields[index];
-    newFields[index] = newFields[index + (direction === 'up' ? -1 : 1)];
-    newFields[index + (direction === 'up' ? -1 : 1)] = temp;
-    setFields(newFields);
   };
 
   const selectedField = fields.find(f => f.id === selectedFieldId);
@@ -232,79 +360,26 @@ export default function FormBuilder() {
                         </div>
                     )}
 
-                    {fields.map((field, index) => (
-                        <div 
-                        key={field.id}
-                        onClick={() => setSelectedFieldId(field.id)}
-                        className={`group relative p-4 rounded-lg border transition-all cursor-pointer ${
-                            selectedFieldId === field.id 
-                            ? "bg-background border-primary shadow-sm ring-1 ring-primary" 
-                            : "bg-background border-border hover:border-primary/50"
-                        }`}
-                        >
-                        <div className="flex items-start gap-3">
-                            <div className="mt-1 text-muted-foreground cursor-grab active:cursor-grabbing">
-                                <GripVertical className="h-4 w-4" />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                            {field.type === "section" ? (
-                                <h3 className="font-semibold text-lg text-primary">{field.label}</h3>
-                            ) : field.type === "info" ? (
-                                <div className="space-y-1">
-                                    <h4 className="font-medium text-sm">{field.label}</h4>
-                                    <p className="text-sm text-muted-foreground whitespace-pre-wrap">{field.content || "Enter information text..."}</p>
-                                </div>
-                            ) : (
-                                <div className="space-y-2 pointer-events-none">
-                                    <Label className="font-medium flex items-center gap-1">
-                                    {field.label}
-                                    {field.required && <span className="text-destructive">*</span>}
-                                    </Label>
-                                    
-                                    {(field.type === "text" || field.type === "email" || field.type === "tel") && (
-                                    <Input disabled placeholder={field.placeholder || "Answer..."} />
-                                    )}
-                                    {field.type === "textarea" && (
-                                    <Textarea disabled placeholder={field.placeholder || "Long answer..."} className="min-h-[80px]" />
-                                    )}
-                                    {(field.type === "select") && (
-                                    <Select disabled>
-                                        <SelectTrigger><SelectValue placeholder="Select an option" /></SelectTrigger>
-                                    </Select>
-                                    )}
-                                    {(field.type === "radio" || field.type === "checkbox") && (
-                                    <div className="space-y-2">
-                                        {field.options?.map((opt, i) => (
-                                        <div key={i} className="flex items-center gap-2">
-                                            <div className={`h-4 w-4 border rounded ${field.type === "radio" ? "rounded-full" : "rounded-sm"}`} />
-                                            <span className="text-sm text-muted-foreground">{opt}</span>
-                                        </div>
-                                        ))}
-                                    </div>
-                                    )}
-                                    {field.type === "date" && (
-                                    <Button variant="outline" disabled className="w-full justify-start text-muted-foreground font-normal">
-                                        <CalendarIcon className="mr-2 h-4 w-4" /> Pick a date
-                                    </Button>
-                                    )}
-                                </div>
-                            )}
-                            </div>
-                            
-                            <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center">
-                                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={(e) => { e.stopPropagation(); removeField(field.id); }}>
-                                    <Trash2 className="h-4 w-4 text-muted-foreground hover:text-destructive" />
-                                </Button>
-                            </div>
-                        </div>
-                        
-                        {/* Reorder Handles - Only show on hover */}
-                        {/* Simplified for mock - would use dnd-kit normally */}
-                        <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 flex flex-col">
-                            {/* Visual cue only for now */}
-                        </div>
-                        </div>
-                    ))}
+                    <DndContext 
+                      sensors={sensors}
+                      collisionDetection={closestCenter}
+                      onDragEnd={handleDragEnd}
+                    >
+                      <SortableContext 
+                        items={fields.map(f => f.id)}
+                        strategy={verticalListSortingStrategy}
+                      >
+                        {fields.map((field) => (
+                          <SortableField 
+                            key={field.id}
+                            field={field}
+                            selectedFieldId={selectedFieldId}
+                            setSelectedFieldId={setSelectedFieldId}
+                            removeField={removeField}
+                          />
+                        ))}
+                      </SortableContext>
+                    </DndContext>
                     </div>
                 </ScrollArea>
                 </div>

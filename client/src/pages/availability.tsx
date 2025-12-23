@@ -188,7 +188,7 @@ export default function Availability() {
                                 </SelectTrigger>
                                 <SelectContent>
                                     <SelectItem value="SpecificDate">Extra Shift / Specific Date</SelectItem>
-                                    <SelectItem value="Vacation">Vacation / Time Off</SelectItem>
+                                    <SelectItem value="Vacation">Not Available</SelectItem>
                                 </SelectContent>
                             </Select>
                         </div>

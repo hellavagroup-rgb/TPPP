@@ -29,9 +29,6 @@ export default function FormFill() {
   const [form, setForm] = useState<FormTemplate | null>(null);
   const [client, setClient] = useState<Client | null>(null);
   const [isSubmitted, setIsSubmitted] = useState(false);
-  const [isVerified, setIsVerified] = useState(false);
-  const [verificationDob, setVerificationDob] = useState<Date | undefined>(undefined);
-  const [verificationError, setVerificationError] = useState(false);
   const [formState, setFormState] = useState<Record<string, any>>({});
   
   // Validation state
@@ -50,20 +47,6 @@ export default function FormFill() {
       }
     }
   }, [params?.formId, params?.clientId, forms, clients, form?.id, client?.id]);
-
-  const verifyIdentity = () => {
-      if (!client || !verificationDob) return;
-      
-      // Check if DOB matches client DOB
-      const inputDob = format(verificationDob, "yyyy-MM-dd");
-      
-      if (client.dob === inputDob) {
-          setIsVerified(true);
-          setVerificationError(false);
-      } else {
-          setVerificationError(true);
-      }
-  };
 
   const handleValueChange = (fieldId: string, value: any) => {
     setFormState(prev => ({ ...prev, [fieldId]: value }));
@@ -143,7 +126,8 @@ export default function FormFill() {
       return <div className="p-8 text-center">Loading form...</div>;
   }
 
-  if (!isVerified) {
+  // Security: Check if form is already completed
+  if (client.status === "Forms Completed" && !isSubmitted) {
       return (
           <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
               <div className="flex flex-col items-center mb-8">
@@ -155,63 +139,22 @@ export default function FormFill() {
               </div>
               
               <Card className="max-w-md w-full p-6 shadow-lg border-t-4 border-t-slate-800">
-                  <CardHeader className="px-0 pt-0">
-                      <CardTitle className="text-xl font-serif font-bold text-slate-900">Identity Verification</CardTitle>
+                  <CardHeader className="px-0 pt-0 text-center">
+                      <div className="mx-auto w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center mb-4 text-slate-500">
+                          <Lock className="h-6 w-6" />
+                      </div>
+                      <CardTitle className="text-xl font-serif font-bold text-slate-900">Link Expired</CardTitle>
                       <CardDescription>
-                          For your security, please verify your identity to access this form.
+                          This form has already been submitted and can no longer be accessed.
                       </CardDescription>
                   </CardHeader>
-                  
-                  <div className="space-y-4 py-4">
-                      <div className="space-y-2">
-                          <Label>Date of Birth</Label>
-                          <Popover>
-                              <PopoverTrigger asChild>
-                                  <Button
-                                      variant={"outline"}
-                                      className={cn(
-                                          "w-full pl-3 text-left font-normal",
-                                          !verificationDob && "text-muted-foreground",
-                                          verificationError && "border-destructive text-destructive hover:text-destructive"
-                                      )}
-                                  >
-                                      {verificationDob ? (
-                                          format(verificationDob, "PPP")
-                                      ) : (
-                                          <span>Pick a date</span>
-                                      )}
-                                      <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
-                                  </Button>
-                              </PopoverTrigger>
-                              <PopoverContent className="w-auto p-0" align="start">
-                                  <Calendar
-                                      mode="single"
-                                      selected={verificationDob}
-                                      onSelect={setVerificationDob}
-                                      disabled={(date) =>
-                                          date > new Date() || date < new Date("1900-01-01")
-                                      }
-                                      initialFocus
-                                  />
-                              </PopoverContent>
-                          </Popover>
-                          {verificationError && (
-                              <p className="text-sm text-destructive font-medium">
-                                  Verification failed. Date of birth does not match our records.
-                              </p>
-                          )}
-                      </div>
-                      
-                      <Button className="w-full bg-slate-900 hover:bg-slate-800" onClick={verifyIdentity}>
-                          Verify & Access Form
+                  <CardContent className="text-center text-sm text-muted-foreground pb-2">
+                      <p>For security reasons, form links expire after submission. If you believe this is an error or need to update your information, please contact the practice directly.</p>
+                  </CardContent>
+                  <CardFooter className="justify-center pt-4">
+                      <Button variant="outline" onClick={() => window.close()}>
+                          Close Window
                       </Button>
-                  </div>
-                  
-                  <CardFooter className="px-0 pb-0 pt-4 flex justify-center border-t">
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <ShieldCheck className="h-3 w-3 text-emerald-600" />
-                          <span>End-to-end encrypted submission</span>
-                      </div>
                   </CardFooter>
               </Card>
           </div>

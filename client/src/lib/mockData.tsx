@@ -8,7 +8,6 @@ export interface Client {
   id: string; // Internal ID
   displayId: string; // The W12345678 format
   email: string; // Hidden from display
-  dob?: string; // For verification
   phone?: string;
   referralSource?: string;
   status: ClientStatus;
@@ -371,7 +370,6 @@ const MOCK_CLIENTS: Client[] = [
     id: "cl1",
     displayId: "W83920192",
     email: "redacted@example.com",
-    dob: "1990-05-15",
     status: "New",
     intakeDate: format(new Date(), "yyyy-MM-dd"),
     presentingIssues: ["Anxiety", "Work Stress"],
@@ -381,7 +379,6 @@ const MOCK_CLIENTS: Client[] = [
     id: "cl2",
     displayId: "W92837102",
     email: "redacted@example.com",
-    dob: "1985-08-22",
     status: "Forms Sent",
     intakeDate: format(subDays(new Date(), 2), "yyyy-MM-dd"),
     presentingIssues: ["Depression"],
@@ -391,7 +388,6 @@ const MOCK_CLIENTS: Client[] = [
     id: "cl3",
     displayId: "W73829103",
     email: "redacted@example.com",
-    dob: "1992-11-30",
     status: "Forms Completed",
     intakeDate: format(subDays(new Date(), 5), "yyyy-MM-dd"),
     presentingIssues: ["Couples Therapy", "Communication"],
@@ -401,7 +397,6 @@ const MOCK_CLIENTS: Client[] = [
     id: "cl4",
     displayId: "W12039482",
     email: "redacted@example.com",
-    dob: "1988-02-14",
     status: "Assigned",
     intakeDate: format(subDays(new Date(), 7), "yyyy-MM-dd"),
     assignedClinicianId: "c1",
@@ -413,7 +408,6 @@ const MOCK_CLIENTS: Client[] = [
     id: "cl5",
     displayId: "W39201928",
     email: "redacted@example.com",
-    dob: "1995-07-10",
     status: "Waitlist",
     intakeDate: format(subDays(new Date(), 10), "yyyy-MM-dd"),
     presentingIssues: ["Specific Phobia"],

@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, ReactNode, useEffect } from "react";
 import { useLocation } from "wouter";
+import { useQueryClient } from "@tanstack/react-query";
 import * as api from "./api";
 import type { SafeUser } from "@shared/schema";
 
@@ -25,6 +26,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [location, setLocation] = useLocation();
+  const queryClient = useQueryClient();
 
   // Check if user is already logged in on mount
   useEffect(() => {
@@ -48,6 +50,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const loggedInUser = await api.login(email, password);
       setUser(loggedInUser as User);
+      
+      // Invalidate all queries so they refetch with the new session
+      await queryClient.invalidateQueries();
       
       // Redirect based on role
       if (loggedInUser.role === "clinician") {

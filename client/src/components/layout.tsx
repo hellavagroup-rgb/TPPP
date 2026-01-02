@@ -13,7 +13,7 @@ import {
   Menu,
   FileText,
   BarChart3,
-  Stethoscope
+  Brain
 } from "lucide-react";
 import logo from "@assets/xPerinatalPP-logo-large-digital.png.pagespeed.ic.wAjk_RUOnf_1766008188694.png";
 import { useState } from "react";
@@ -34,7 +34,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     { name: "Clients", href: "/clients", icon: Users },
     { name: "Waitlist", href: "/waitlist", icon: CalendarClock },
     { name: "Tasks", href: "/tasks", icon: ClipboardList },
-    { name: "Clinicians", href: "/clinicians", icon: Stethoscope },
+    { name: "Clinicians", href: "/clinicians", icon: Brain },
     { name: "Availability", href: "/availability", icon: CalendarClock },
     { name: "Forms", href: "/forms", icon: FileText },
     { name: "Analytics", href: "/analytics", icon: BarChart3 },

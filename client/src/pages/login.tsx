@@ -36,6 +36,13 @@ export default function Login() {
     setPassword("password123"); // Dummy fill
     login(emailValue);
   };
+  
+  const handleForgotPassword = () => {
+    toast({
+        title: "Recovery Instructions Sent",
+        description: "If an account exists for this email, you will receive password reset instructions.",
+    });
+  };
 
   return (
     <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 p-4">
@@ -60,7 +67,17 @@ export default function Login() {
                     />
                 </div>
                 <div className="space-y-2">
-                    <Label htmlFor="password">Password</Label>
+                    <div className="flex items-center justify-between">
+                        <Label htmlFor="password">Password</Label>
+                        <Button 
+                            variant="link" 
+                            className="p-0 h-auto text-xs text-muted-foreground font-normal" 
+                            type="button"
+                            onClick={handleForgotPassword}
+                        >
+                            Forgot password?
+                        </Button>
+                    </div>
                     <Input 
                         id="password" 
                         type="password" 

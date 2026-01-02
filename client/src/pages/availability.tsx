@@ -7,7 +7,8 @@ import { useState, useEffect } from "react";
 import { Filter, ChevronLeft, ChevronRight, Calendar as CalendarIcon, Plus, AlertCircle, Briefcase } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { format, addWeeks, subWeeks, startOfWeek, endOfWeek, eachDayOfInterval, isSameDay, parseISO } from "date-fns";
+import { format, addWeeks, subWeeks, startOfWeek, endOfWeek, eachDayOfInterval, isSameDay, parseISO, isWithinInterval } from "date-fns";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -21,6 +22,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 
+const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
 export default function Availability() {
   const { clinicians, updateClinicianAvailability, clients } = useData();
   const { user } = useAuth();
@@ -33,6 +36,7 @@ export default function Availability() {
   const [newSlotType, setNewSlotType] = useState<SlotType>("SpecificDate");
   const [newDate, setNewDate] = useState(format(new Date(), "yyyy-MM-dd"));
   const [endDate, setEndDate] = useState(format(new Date(), "yyyy-MM-dd")); // Added for range
+  const [selectedDays, setSelectedDays] = useState<string[]>([]);
   const [newStartTime, setNewStartTime] = useState("09:00");
   const [newEndTime, setNewEndTime] = useState("17:00");
   
@@ -83,27 +87,25 @@ export default function Availability() {
   // Check if a slot should be displayed on a specific date
   const isSlotActiveOnDate = (slot: TimeSlot, date: Date) => {
     if (slot.type === "Recurring") {
-      return slot.day === format(date, "EEEE");
+      // Basic check: Is it the right day of week?
+      if (slot.day !== format(date, "EEEE")) return false;
+
+      // Range check: If start/end date exists, is current date within range?
+      if (slot.startDate && slot.endDate) {
+          const start = parseISO(slot.startDate);
+          const end = parseISO(slot.endDate);
+          // Set times to ensure inclusive comparison
+          start.setHours(0,0,0,0);
+          end.setHours(23,59,59,999);
+          
+          if (!isWithinInterval(date, { start, end })) return false;
+      }
+      return true;
     }
     if (slot.type === "SpecificDate" || slot.type === "Vacation") {
       return slot.date === format(date, "yyyy-MM-dd");
     }
     return false;
-  };
-
-  // Helper to get client info for a booked slot
-  const getClientForSlot = (clinicianId: string, slotId: string) => {
-      // Find client who has this assignedClinicianId and assignedSlot matching
-      // Note: In a real app we'd match exact Slot ID. 
-      // In this mock, we don't strictly link slot ID to client, but we can fake it or try to match based on display logic.
-      // Or we can rely on the fact that if isBooked=true, we should show "Booked".
-      // Let's see if we can find a client.
-      const client = clients.find(c => c.assignedClinicianId === clinicianId && c.assignedSlot?.includes(slotId)); 
-      // Actually mockData just stores string "Monday 10:00".
-      
-      // Let's just return a placeholder or check if any client is assigned to this clinician
-      // For the prototype, if it's booked, we'll just show "Booked Client".
-      return "Client Booked";
   };
 
   const handleNextWeek = () => setCurrentDate(addWeeks(currentDate, 1));
@@ -115,33 +117,64 @@ export default function Availability() {
     if (clinician) {
       const newSlots: TimeSlot[] = [];
       const start = parseISO(newDate);
-      const end = parseISO(endDate); // Use separate state for end date
+      const end = parseISO(endDate); 
       
-      // If end date is before start date, just use start date (single day)
-      const rangeEnd = end < start ? start : end;
-      
-      const daysInRange = eachDayOfInterval({ start, end: rangeEnd });
+      // Validation
+      if (newSlotType === "Recurring" && selectedDays.length === 0) {
+          toast({ title: "Validation Error", description: "Select at least one day of the week.", variant: "destructive" });
+          return;
+      }
 
-      daysInRange.forEach(day => {
-          newSlots.push({
-            id: `ts-${Date.now()}-${day.getTime()}`,
-            type: newSlotType,
-            day: format(day, "EEEE"),
-            date: format(day, "yyyy-MM-dd"),
-            startTime: newSlotType === "Vacation" ? "00:00" : newStartTime,
-            endTime: newSlotType === "Vacation" ? "23:59" : newEndTime,
-            isBooked: false
+      if (newSlotType === "Recurring") {
+          // Add one entry per selected weekday
+          selectedDays.forEach(day => {
+            newSlots.push({
+                id: `ts-${Date.now()}-${day}`,
+                type: "Recurring",
+                day: day,
+                startDate: newDate,
+                endDate: endDate,
+                startTime: newStartTime,
+                endTime: newEndTime,
+                isBooked: false
+            });
           });
-      });
+      } else {
+        // Specific Date or Vacation logic (Specific Dates per day in range)
+        const rangeEnd = end < start ? start : end;
+        const daysInRange = eachDayOfInterval({ start, end: rangeEnd });
+
+        daysInRange.forEach(day => {
+            newSlots.push({
+                id: `ts-${Date.now()}-${day.getTime()}`,
+                type: newSlotType,
+                day: format(day, "EEEE"),
+                date: format(day, "yyyy-MM-dd"),
+                startTime: newSlotType === "Vacation" ? "00:00" : newStartTime,
+                endTime: newSlotType === "Vacation" ? "23:59" : newEndTime,
+                isBooked: false
+            });
+        });
+      }
       
       updateClinicianAvailability(dialogClinicianId, [...clinician.availability, ...newSlots]);
       
       toast({
-        title: newSlotType === "Vacation" ? "Vacation Added" : "Availability Added",
-        description: `Schedule updated for ${clinician.name} (${newSlots.length} days)`,
+        title: "Availability Updated",
+        description: newSlotType === "Recurring" 
+            ? `Added recurring schedule for ${selectedDays.length} days/week`
+            : `Schedule updated for ${clinician.name} (${newSlots.length} days)`,
       });
       setIsDialogOpen(false);
+      // Reset
+      setSelectedDays([]);
     }
+  };
+
+  const toggleDaySelection = (day: string) => {
+      setSelectedDays(prev => 
+        prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day]
+      );
   };
 
   const getClinicianColor = (index: number) => {
@@ -209,7 +242,7 @@ export default function Availability() {
                 <DialogContent>
                     <DialogHeader>
                         <DialogTitle>Manage Availability</DialogTitle>
-                        <DialogDescription>Add a specific shift or mark time off/vacation.</DialogDescription>
+                        <DialogDescription>Add a specific shift, recurring bank, or vacation.</DialogDescription>
                     </DialogHeader>
                     <div className="grid gap-4 py-4">
                         {user?.role !== "clinician" && (
@@ -235,21 +268,46 @@ export default function Availability() {
                                     <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="SpecificDate">Extra Shift / Specific Date</SelectItem>
-                                    <SelectItem value="Vacation">Not Available</SelectItem>
+                                    <SelectItem value="SpecificDate">One-Off / Specific Date</SelectItem>
+                                    <SelectItem value="Recurring">Recurring Schedule (Bank)</SelectItem>
+                                    <SelectItem value="Vacation">Time Off / Vacation</SelectItem>
                                 </SelectContent>
                             </Select>
                         </div>
+                        
                         <div className="grid grid-cols-2 gap-4">
                             <div className="grid gap-2">
-                                <Label>Start Date</Label>
+                                <Label>{newSlotType === "Recurring" ? "Valid From" : "Start Date"}</Label>
                                 <Input type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)} />
                             </div>
                             <div className="grid gap-2">
-                                <Label>End Date</Label>
+                                <Label>{newSlotType === "Recurring" ? "Valid Until" : "End Date"}</Label>
                                 <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
                             </div>
                         </div>
+
+                        {newSlotType === "Recurring" && (
+                            <div className="space-y-2">
+                                <Label>Repeat On</Label>
+                                <div className="flex flex-wrap gap-2">
+                                    {WEEKDAYS.map(day => (
+                                        <div 
+                                            key={day}
+                                            className={cn(
+                                                "cursor-pointer text-xs px-2.5 py-1.5 rounded-full border transition-colors",
+                                                selectedDays.includes(day) 
+                                                    ? "bg-primary text-primary-foreground border-primary" 
+                                                    : "bg-background text-muted-foreground border-input hover:border-primary"
+                                            )}
+                                            onClick={() => toggleDaySelection(day)}
+                                        >
+                                            {day.substring(0,3)}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
                         {newSlotType !== "Vacation" && (
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="grid gap-2">

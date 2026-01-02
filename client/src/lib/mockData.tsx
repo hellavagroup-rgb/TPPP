@@ -26,6 +26,8 @@ export interface TimeSlot {
   type: SlotType;
   day: string; // "Monday", etc. (Used for Recurring)
   date?: string; // YYYY-MM-DD (Used for SpecificDate and Vacation)
+  startDate?: string; // YYYY-MM-DD (For Recurring range)
+  endDate?: string; // YYYY-MM-DD (For Recurring range)
   startTime: string;
   endTime: string;
   isBooked: boolean;

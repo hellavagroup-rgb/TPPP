@@ -5,8 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { useData } from "@/lib/mockData";
-import { Loader2, Shield, Stethoscope, ArrowRight } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import logo from "@assets/xPerinatalPP-logo-large-digital.png.pagespeed.ic.wAjk_RUOnf_1766008188694.png";
 
 export default function Login() {
@@ -14,27 +13,21 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const { login, isLoading } = useAuth();
   const { toast } = useToast();
-  const { clinicians } = useData();
 
   const handleLogin = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!email) {
-        toast({ title: "Email required", variant: "destructive" });
+    
+    if (!email || !password) {
+        toast({ title: "Required fields", description: "Please enter email and password", variant: "destructive" });
         return;
     }
 
-    const success = await login(email);
+    const success = await login(email, password);
     if (success) {
         toast({ title: "Welcome back!", description: "Successfully logged in." });
     } else {
-        toast({ title: "Login Failed", description: "Invalid credentials. Try admin@perinatalpsych.com", variant: "destructive" });
+        toast({ title: "Login Failed", description: "Invalid email or password", variant: "destructive" });
     }
-  };
-
-  const handleTestLogin = (role: "admin" | "clinician", emailValue: string) => {
-    setEmail(emailValue);
-    setPassword("password123"); // Dummy fill
-    login(emailValue);
   };
   
   const handleForgotPassword = () => {
@@ -91,36 +84,10 @@ export default function Login() {
                 </Button>
             </form>
 
-            <div className="relative">
-                <div className="absolute inset-0 flex items-center">
-                    <span className="w-full border-t" />
-                </div>
-                <div className="relative flex justify-center text-xs uppercase">
-                    <span className="bg-background px-2 text-muted-foreground">Test Mode</span>
-                </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-2">
-                <Button variant="outline" className="justify-start h-auto py-3" onClick={() => handleTestLogin("admin", "admin@perinatalpsych.com")}>
-                    <Shield className="h-5 w-5 mr-3 text-indigo-600" />
-                    <div className="flex flex-col items-start">
-                        <span className="font-medium text-sm">Admin Access</span>
-                        <span className="text-[10px] text-muted-foreground">View all clients & settings</span>
-                    </div>
-                    <ArrowRight className="ml-auto h-4 w-4 text-slate-300" />
-                </Button>
-                
-                <p className="text-xs text-muted-foreground font-medium mt-1 mb-1">Clinician Access:</p>
-                {clinicians.slice(0, 2).map(c => (
-                    <Button key={c.id} variant="outline" className="justify-start h-auto py-3" onClick={() => handleTestLogin("clinician", `${c.name.split(' ')[1].toLowerCase()}@perinatalpsych.com`)}>
-                        <Stethoscope className="h-5 w-5 mr-3 text-emerald-600" />
-                        <div className="flex flex-col items-start">
-                            <span className="font-medium text-sm">{c.name}</span>
-                            <span className="text-[10px] text-muted-foreground">View only own schedule</span>
-                        </div>
-                        <ArrowRight className="ml-auto h-4 w-4 text-slate-300" />
-                    </Button>
-                ))}
+            <div className="text-center text-sm text-muted-foreground mt-2">
+                <p>Demo Credentials:</p>
+                <p className="font-mono text-xs mt-1">admin@perinatalpsych.com / admin123</p>
+                <p className="font-mono text-xs">emily@perinatalpsych.com / clinician123</p>
             </div>
         </CardContent>
         <CardFooter className="flex justify-center text-xs text-muted-foreground">

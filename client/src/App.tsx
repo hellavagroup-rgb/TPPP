@@ -15,7 +15,6 @@ import FormFill from "@/pages/form-fill";
 import Analytics from "@/pages/analytics";
 import Clinicians from "@/pages/clinicians";
 import Layout from "@/components/layout";
-import { DataProvider } from "@/lib/mockData";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import Login from "@/pages/login";
 import ClinicianProfile from "@/pages/clinician-profile";
@@ -79,12 +78,10 @@ function Router() {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <DataProvider>
-        <AuthProvider>
-            <Router />
-            <Toaster />
-        </AuthProvider>
-      </DataProvider>
+      <AuthProvider>
+          <Router />
+          <Toaster />
+      </AuthProvider>
     </QueryClientProvider>
   );
 }

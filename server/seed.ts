@@ -296,11 +296,9 @@ async function seed() {
   }
 }
 
-// Run seed if called directly
-if (require.main === module) {
-  seed()
-    .then(() => process.exit(0))
-    .catch(() => process.exit(1));
-}
-
 export { seed };
+
+// Run seed
+seed()
+  .then(() => process.exit(0))
+  .catch(() => process.exit(1));

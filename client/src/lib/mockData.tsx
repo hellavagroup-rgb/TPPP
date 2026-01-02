@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, ReactNode } from "react";
 import { format, subDays, addDays, isSameDay, parseISO, startOfWeek, endOfWeek, eachDayOfInterval } from "date-fns";
+import { useAppData } from "./useAppData";
 
 // Types
 export type ClientStatus = "New" | "Forms Sent" | "Forms Completed" | "Assigned" | "Scheduled" | "Waitlist";
@@ -512,114 +513,12 @@ interface DataContextType {
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
 
-export function DataProvider({ children }: { children: ReactNode }) {
-  const [clients, setClients] = useState<Client[]>(MOCK_CLIENTS);
-  const [clinicians, setClinicians] = useState<Clinician[]>(MOCK_CLINICIANS);
-  const [tasks, setTasks] = useState<Task[]>(MOCK_TASKS);
-  const [forms, setForms] = useState<FormTemplate[]>(MOCK_FORMS);
-  const [notifications, setNotifications] = useState<Notification[]>([
-      { id: "n1", type: "System", message: "System maintenance scheduled for Sunday", timestamp: format(subDays(new Date(), 1), "yyyy-MM-dd HH:mm"), read: false },
-      { id: "n2", type: "Form", message: "W83920192 completed Intake Form", timestamp: format(subDays(new Date(), 0), "yyyy-MM-dd HH:mm"), read: true }
-  ]);
+// Old DataProvider removed - now using real API
 
-  const addClient = (client: Client) => {
-    setClients(prev => [client, ...prev]);
-  };
-
-  const updateClientStatus = (id: string, status: ClientStatus) => {
-    setClients(prev => prev.map(c => c.id === id ? { ...c, status } : c));
-  };
-
-  const assignClinician = (clientId: string, clinicianId: string, slotId: string) => {
-    // 1. Update Client
-    const clinician = clinicians.find(c => c.id === clinicianId);
-    const slot = clinician?.availability.find(s => s.id === slotId);
-    const slotString = slot ? `${slot.day} ${slot.startTime}` : "Assigned";
-
-    setClients(prev => prev.map(c => c.id === clientId ? { 
-      ...c, 
-      status: "Assigned", 
-      assignedClinicianId: clinicianId,
-      assignedSlot: slotString
-    } : c));
-
-    // 2. Update Clinician Load and Slot Status
-    setClinicians(prev => prev.map(c => {
-      if (c.id === clinicianId) {
-        return {
-          ...c,
-          currentLoad: c.currentLoad + 1,
-          availability: c.availability.map(s => s.id === slotId ? { ...s, isBooked: true } : s)
-        };
-      }
-      return c;
-    }));
-  };
-
-  const addTask = (task: Task) => {
-    setTasks(prev => [task, ...prev]);
-  };
-
-  const updateTaskStatus = (id: string, status: TaskStatus) => {
-    setTasks(prev => prev.map(t => t.id === id ? { ...t, status } : t));
-  };
-
-  const updateClinicianAvailability = (clinicianId: string, slots: TimeSlot[]) => {
-    setClinicians(prev => prev.map(c => c.id === clinicianId ? { 
-      ...c, 
-      availability: slots,
-      lastUpdatedAvailability: format(new Date(), "MMM d")
-    } : c));
-  };
-
-  const addForm = (form: FormTemplate) => {
-    setForms(prev => [form, ...prev]);
-  };
-
-  const updateForm = (id: string, form: FormTemplate) => {
-    setForms(prev => prev.map(f => f.id === id ? form : f));
-  };
-
-  const deleteForm = (id: string) => {
-    setForms(prev => prev.filter(f => f.id !== id));
-  };
-
-  const addNotification = (notification: Notification) => {
-      setNotifications(prev => [notification, ...prev]);
-  };
-
-  const markNotificationRead = (id: string) => {
-      setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
-  };
-
-  return (
-    <DataContext.Provider value={{ 
-      clients, 
-      clinicians, 
-      tasks, 
-      forms,
-      addClient, 
-      updateClientStatus, 
-      assignClinician, 
-      addTask, 
-      updateTaskStatus,
-      updateClinicianAvailability,
-      addForm,
-      updateForm,
-      deleteForm,
-      notifications,
-      addNotification,
-      markNotificationRead
-    }}>
-      {children}
-    </DataContext.Provider>
-  );
-}
-
+// Legacy hook - now uses real API via useAppData
 export function useData() {
-  const context = useContext(DataContext);
-  if (context === undefined) {
-    throw new Error("useData must be used within a DataProvider");
-  }
-  return context;
+  return useAppData();
 }
+
+// Keep the DataProvider for backward compatibility but it does nothing now
+export { DataProvider } from "./useAppData";

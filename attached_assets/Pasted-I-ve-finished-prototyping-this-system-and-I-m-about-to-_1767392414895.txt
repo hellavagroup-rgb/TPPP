@@ -1,0 +1,80 @@
+I've finished prototyping this system and I'm about to convert it 
+to a production application with real users and real data.
+
+Before I proceed, I need a comprehensive security and code quality 
+audit. Please review the ENTIRE codebase and identify issues in 
+these categories:
+
+=== SECURITY VULNERABILITIES ===
+
+1. AUTHENTICATION & AUTHORIZATION
+- Are passwords properly hashed (bcrypt/argon2)?
+- Are API keys and secrets in environment variables (not hardcoded)?
+- Do all protected routes check if user is logged in?
+- Do all actions check if user has permission?
+- Are sessions secure (httpOnly, secure flags)?
+- Do sessions expire?
+- Is there rate limiting on login attempts?
+
+2. INPUT VALIDATION & INJECTION ATTACKS
+- Are all user inputs validated and sanitized?
+- Are we vulnerable to SQL injection?
+- Are we vulnerable to XSS (cross-site scripting)?
+- Are we vulnerable to command injection?
+- Do we validate file uploads (type, size)?
+
+3. DATA PROTECTION
+- Is sensitive data encrypted at rest?
+- Are database queries using parameterized queries?
+- Are error messages hiding sensitive information?
+- Are we logging sensitive data (passwords, tokens)?
+- Is HTTPS enforced?
+
+4. API SECURITY
+- Do all API endpoints require authentication?
+- Is there rate limiting on API calls?
+- Are we checking CORS properly?
+- Are we vulnerable to CSRF attacks?
+
+=== CODE QUALITY ISSUES ===
+
+5. ERROR HANDLING
+- Are all async operations wrapped in try-catch?
+- Do we handle database connection failures?
+- Do we handle external API failures (email, payments)?
+- Are errors logged properly?
+- Do users get helpful error messages (not crashes)?
+
+6. PERFORMANCE & SCALABILITY
+- Are there N+1 query problems?
+- Are we caching appropriately?
+- Are there memory leaks (growing arrays/objects)?
+- Are file uploads handled efficiently?
+- Will this work with 100+ users?
+
+7. DATA INTEGRITY
+- Can race conditions cause duplicate records?
+- Are database transactions used where needed?
+- Is data validated before saving?
+- Are there proper database constraints?
+
+8. MAINTAINABILITY
+- Is code organized logically?
+- Are there comments explaining complex logic?
+- Are there overly long functions (>50 lines)?
+- Is there duplicated code that should be refactored?
+
+=== OUTPUT FORMAT ===
+
+For each issue found, provide:
+1. Severity: CRITICAL / HIGH / MEDIUM / LOW
+2. Location: Which file and line number
+3. Problem: What's wrong and why it's dangerous
+4. Fix: Exact code to fix it
+
+Then give me a prioritized action plan:
+1. Must fix before launch (CRITICAL)
+2. Should fix soon (HIGH)
+3. Fix when you can (MEDIUM/LOW)
+
+Start the audit now.

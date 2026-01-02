@@ -34,10 +34,14 @@ import {
   Shield,
   CalendarCheck,
   AlertTriangle,
-  Eye
+  Eye,
+  CheckCircle2,
+  XCircle,
+  Briefcase
 } from "lucide-react";
 import { useState } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { format, parseISO, isSameDay } from "date-fns";
 
@@ -54,6 +58,7 @@ export default function Clients() {
   const [selectedForms, setSelectedForms] = useState<string[]>([]);
   const [previewForm, setPreviewForm] = useState<FormTemplate | null>(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [showAllClinicians, setShowAllClinicians] = useState(false); // Admin override toggle
 
   // New Client Form State
   const [isNewClientOpen, setIsNewClientOpen] = useState(false);
@@ -61,6 +66,7 @@ export default function Clients() {
     wNumber: "",
     email: "",
     phone: "",
+    insurer: "Private",
     referralSource: "Web Form",
     referralSourceDetails: "",
     presentingIssue: "",
@@ -162,6 +168,7 @@ export default function Clients() {
         displayId: newClientData.wNumber.toUpperCase().startsWith("W") ? newClientData.wNumber : `W${newClientData.wNumber}`,
         email: newClientData.email,
         phone: newClientData.phone,
+        insurer: newClientData.insurer,
         referralSource: newClientData.referralSource === "Other" && newClientData.referralSourceDetails
             ? `Other: ${newClientData.referralSourceDetails}`
             : newClientData.referralSource,
@@ -177,6 +184,7 @@ export default function Clients() {
         wNumber: "",
         email: "",
         phone: "",
+        insurer: "Private",
         referralSource: "Web Form",
         referralSourceDetails: "",
         presentingIssue: "",
@@ -187,6 +195,24 @@ export default function Clients() {
         title: "Client Created",
         description: "New referral added successfully. Ready for form sending.",
     });
+  };
+
+  // Helper to determine if a clinician matches the client's needs
+  const isClinicianMatch = (clinician: typeof clinicians[0], client: Client) => {
+      // 1. Check Capacity (Load vs New Client Cap)
+      const hasSpace = (clinician.maxNewClients || 999) > (clinician.currentLoad % 5); // Mock logic for "new client" load
+      
+      // 2. Check Insurer
+      const clientInsurer = client.insurer || "Private";
+      const acceptsInsurer = clientInsurer === "Private" || clinician.insurers?.includes(clientInsurer);
+      
+      return hasSpace && acceptsInsurer;
+  };
+
+  const getCliniciansForAllocation = (client: Client) => {
+      if (showAllClinicians) return clinicians;
+      // Filter by match logic
+      return clinicians.filter(c => isClinicianMatch(c, client));
   };
 
   return (
@@ -243,6 +269,27 @@ export default function Clients() {
                                 onChange={e => setNewClientData({...newClientData, phone: e.target.value})}
                             />
                         </div>
+                    </div>
+
+                    <div className="grid gap-2">
+                        <Label>Insurer</Label>
+                        <Select 
+                            value={newClientData.insurer} 
+                            onValueChange={v => setNewClientData({...newClientData, insurer: v})}
+                        >
+                            <SelectTrigger>
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="Private">Private / Self-Pay</SelectItem>
+                                <SelectItem value="Bupa">Bupa</SelectItem>
+                                <SelectItem value="Axa">Axa</SelectItem>
+                                <SelectItem value="Aviva">Aviva</SelectItem>
+                                <SelectItem value="Cigna">Cigna</SelectItem>
+                                <SelectItem value="Vitality">Vitality</SelectItem>
+                                <SelectItem value="WPA">WPA</SelectItem>
+                            </SelectContent>
+                        </Select>
                     </div>
 
                     <div className="grid gap-2">
@@ -399,31 +446,64 @@ export default function Clients() {
                                     </DialogDescription>
                                 </DialogHeader>
                                 <div className="grid gap-6 py-4">
-                                    <div className="p-3 bg-muted/30 rounded border border-border">
-                                        <p className="text-xs text-muted-foreground font-medium mb-1">CLIENT NEEDS</p>
+                                    <div className="p-3 bg-muted/30 rounded border border-border space-y-2">
+                                        <div className="flex items-center justify-between">
+                                            <p className="text-xs text-muted-foreground font-medium">CLIENT PROFILE</p>
+                                            <Badge variant={(client.insurer || "Private") === "Private" ? "outline" : "default"} className="text-[10px]">
+                                                {client.insurer || "Private"}
+                                            </Badge>
+                                        </div>
                                         <div className="flex gap-2">
                                             {client.presentingIssues.map(i => <Badge key={i} variant="secondary">{i}</Badge>)}
                                         </div>
-                                        <p className="text-sm mt-2 italic">"{client.notes}"</p>
+                                        <p className="text-sm italic">"{client.notes}"</p>
                                     </div>
                                     
                                     <div className="space-y-4">
-                                        <p className="text-sm font-medium text-muted-foreground">AVAILABLE SLOTS</p>
-                                        {clinicians.map(clinician => (
-                                            <div key={clinician.id} className="space-y-2">
-                                                <div className="flex items-center justify-between">
+                                        <div className="flex items-center justify-between">
+                                            <p className="text-sm font-medium text-muted-foreground">AVAILABLE SLOTS</p>
+                                            <div className="flex items-center gap-2">
+                                                <Label htmlFor="override-mode" className="text-xs text-muted-foreground cursor-pointer">Admin Override</Label>
+                                                <Switch id="override-mode" checked={showAllClinicians} onCheckedChange={setShowAllClinicians} />
+                                            </div>
+                                        </div>
+                                        
+                                        {getCliniciansForAllocation(client).length === 0 && (
+                                            <div className="text-center py-8 text-muted-foreground border rounded-md bg-slate-50">
+                                                <AlertTriangle className="h-8 w-8 mx-auto mb-2 text-amber-500" />
+                                                <p>No matching clinicians found.</p>
+                                                <p className="text-xs mt-1">Try enabling "Admin Override" to see all schedules.</p>
+                                            </div>
+                                        )}
+
+                                        {getCliniciansForAllocation(client).map(clinician => {
+                                            const isMatch = isClinicianMatch(clinician, client);
+                                            return (
+                                            <div key={clinician.id} className={!isMatch ? "opacity-75" : ""}>
+                                                <div className="flex items-center justify-between mb-2">
                                                     <div className="flex items-center gap-2">
                                                         <div className="h-6 w-6 rounded-full bg-secondary flex items-center justify-center text-[10px] font-bold">
                                                             {clinician.avatar}
                                                         </div>
-                                                        <p className="font-medium text-sm">{clinician.name}</p>
+                                                        <p className="font-medium text-sm">
+                                                            {clinician.name}
+                                                            {!isMatch && <span className="text-xs text-muted-foreground ml-2 font-normal italic">(Override)</span>}
+                                                        </p>
                                                     </div>
-                                                    {hasVacationConflict(clinician) && (
-                                                        <div className="flex items-center text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded">
-                                                            <AlertTriangle className="h-3 w-3 mr-1" />
-                                                            Upcoming Vacation
-                                                        </div>
-                                                    )}
+                                                    <div className="flex items-center gap-2">
+                                                        {(clinician.maxNewClients || 0) <= (clinician.currentLoad % 5) && (
+                                                            <div className="flex items-center text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded" title="Capacity Limit Reached">
+                                                                <Briefcase className="h-3 w-3 mr-1" />
+                                                                Cap Reached
+                                                            </div>
+                                                        )}
+                                                        {hasVacationConflict(clinician) && (
+                                                            <div className="flex items-center text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded">
+                                                                <AlertTriangle className="h-3 w-3 mr-1" />
+                                                                Vacation
+                                                            </div>
+                                                        )}
+                                                    </div>
                                                 </div>
                                                 
                                                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pl-8">
@@ -445,13 +525,13 @@ export default function Clients() {
                                                         </Button>
                                                     ))}
                                                     {clinician.availability.filter(s => s.type !== "Vacation").length === 0 && (
-                                                        <div className="col-span-3 text-xs text-muted-foreground italic p-2">
+                                                        <div className="col-span-3 text-xs text-muted-foreground italic p-2 border border-dashed rounded bg-slate-50/50 text-center">
                                                             No availability set.
                                                         </div>
                                                     )}
                                                 </div>
                                             </div>
-                                        ))}
+                                        )})}
                                     </div>
                                 </div>
                             </DialogContent>

@@ -30,6 +30,7 @@ export default function Availability() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [newSlotType, setNewSlotType] = useState<SlotType>("SpecificDate");
   const [newDate, setNewDate] = useState(format(new Date(), "yyyy-MM-dd"));
+  const [endDate, setEndDate] = useState(format(new Date(), "yyyy-MM-dd")); // Added for range
   const [newStartTime, setNewStartTime] = useState("09:00");
   const [newEndTime, setNewEndTime] = useState("17:00");
   
@@ -87,21 +88,32 @@ export default function Availability() {
     const clinician = clinicians.find(c => c.id === dialogClinicianId);
 
     if (clinician) {
-      const newSlot: TimeSlot = {
-        id: `ts-${Date.now()}`,
-        type: newSlotType,
-        day: format(parseISO(newDate), "EEEE"),
-        date: newDate,
-        startTime: newSlotType === "Vacation" ? "00:00" : newStartTime,
-        endTime: newSlotType === "Vacation" ? "23:59" : newEndTime,
-        isBooked: false
-      };
+      const newSlots: TimeSlot[] = [];
+      const start = parseISO(newDate);
+      const end = parseISO(endDate); // Use separate state for end date
       
-      updateClinicianAvailability(dialogClinicianId, [...clinician.availability, newSlot]);
+      // If end date is before start date, just use start date (single day)
+      const rangeEnd = end < start ? start : end;
+      
+      const daysInRange = eachDayOfInterval({ start, end: rangeEnd });
+
+      daysInRange.forEach(day => {
+          newSlots.push({
+            id: `ts-${Date.now()}-${day.getTime()}`,
+            type: newSlotType,
+            day: format(day, "EEEE"),
+            date: format(day, "yyyy-MM-dd"),
+            startTime: newSlotType === "Vacation" ? "00:00" : newStartTime,
+            endTime: newSlotType === "Vacation" ? "23:59" : newEndTime,
+            isBooked: false
+          });
+      });
+      
+      updateClinicianAvailability(dialogClinicianId, [...clinician.availability, ...newSlots]);
       
       toast({
         title: newSlotType === "Vacation" ? "Vacation Added" : "Availability Added",
-        description: `Schedule updated for ${clinician.name}`,
+        description: `Schedule updated for ${clinician.name} (${newSlots.length} days)`,
       });
       setIsDialogOpen(false);
     }
@@ -192,9 +204,15 @@ export default function Availability() {
                                 </SelectContent>
                             </Select>
                         </div>
-                        <div className="grid gap-2">
-                            <Label>Date</Label>
-                            <Input type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)} />
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="grid gap-2">
+                                <Label>Start Date</Label>
+                                <Input type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)} />
+                            </div>
+                            <div className="grid gap-2">
+                                <Label>End Date</Label>
+                                <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+                            </div>
                         </div>
                         {newSlotType !== "Vacation" && (
                             <div className="grid grid-cols-2 gap-4">

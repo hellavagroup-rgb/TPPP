@@ -13,6 +13,7 @@ import Forms from "@/pages/forms";
 import FormBuilder from "@/pages/form-builder";
 import FormFill from "@/pages/form-fill";
 import Analytics from "@/pages/analytics";
+import Clinicians from "@/pages/clinicians";
 import Layout from "@/components/layout";
 import { DataProvider } from "@/lib/mockData";
 
@@ -34,6 +35,7 @@ function Router() {
         <Route path="/" component={Dashboard} />
         <Route path="/clients" component={Clients} />
         <Route path="/tasks" component={Tasks} />
+        <Route path="/clinicians" component={Clinicians} />
         <Route path="/waitlist" component={Waitlist} />
         <Route path="/settings" component={Settings} />
         <Route path="/availability" component={Availability} />

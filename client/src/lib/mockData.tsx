@@ -10,6 +10,7 @@ export interface Client {
   email: string; // Hidden from display
   phone?: string;
   referralSource?: string;
+  insurer?: string; // "Private", "Bupa", "Axa", etc.
   status: ClientStatus;
   intakeDate: string;
   assignedClinicianId?: string;
@@ -36,9 +37,16 @@ export interface Clinician {
   specialties: string[];
   capacity: number;
   currentLoad: number;
+  maxNewClients?: number;
   avatar: string;
   availability: TimeSlot[];
   lastUpdatedAvailability?: string;
+  bio?: string;
+  insurers?: string[]; // "Aviva", "Axa", "Bupa", "Cigna", "Vitality", "WPA", "Other"
+  location?: string;
+  nhsTrust?: string;
+  worksWithCouples?: boolean;
+  tier?: "Associate" | "Senior" | "Director";
 }
 
 export type TaskPriority = "High" | "Medium" | "Low";
@@ -326,6 +334,7 @@ const MOCK_CLINICIANS: Clinician[] = [
     specialties: ["Anxiety", "Depression", "CBT"],
     capacity: 25,
     currentLoad: 22,
+    maxNewClients: 2,
     avatar: "EC",
     availability: [
       { id: "ts1", type: "Recurring", day: "Monday", startTime: "10:00", endTime: "15:00", isBooked: true },
@@ -334,7 +343,13 @@ const MOCK_CLINICIANS: Clinician[] = [
       // Example Vacation
       { id: "v1", type: "Vacation", day: "", date: format(addDays(new Date(), 5), "yyyy-MM-dd"), startTime: "00:00", endTime: "23:59", isBooked: false }
     ],
-    lastUpdatedAvailability: format(subDays(new Date(), 2), "MMM d")
+    lastUpdatedAvailability: format(subDays(new Date(), 2), "MMM d"),
+    bio: "Dr. Chen is a clinical psychologist with over 10 years of experience in perinatal mental health. She specializes in CBT for anxiety and depression during pregnancy and postpartum.",
+    insurers: ["Aviva", "Axa", "Bupa", "Vitality"],
+    location: "North London",
+    nhsTrust: "Tavistock and Portman",
+    worksWithCouples: false,
+    tier: "Senior"
   },
   {
     id: "c2",
@@ -342,13 +357,20 @@ const MOCK_CLINICIANS: Clinician[] = [
     specialties: ["Couples", "Family Systems", "Trauma"],
     capacity: 20,
     currentLoad: 12,
+    maxNewClients: 5,
     avatar: "MW",
     availability: [
       { id: "ts4", type: "Recurring", day: "Tuesday", startTime: "13:00", endTime: "16:00", isBooked: false },
       { id: "ts5", type: "Recurring", day: "Thursday", startTime: "13:00", endTime: "16:00", isBooked: false },
       { id: "ts6", type: "Recurring", day: "Saturday", startTime: "10:00", endTime: "14:00", isBooked: false }
     ],
-    lastUpdatedAvailability: format(subDays(new Date(), 5), "MMM d")
+    lastUpdatedAvailability: format(subDays(new Date(), 5), "MMM d"),
+    bio: "Mark is a licensed marriage and family therapist. He focuses on helping couples navigate the transition to parenthood and resolving relationship conflicts.",
+    insurers: ["Cigna", "WPA"],
+    location: "West London",
+    nhsTrust: "Imperial College Healthcare",
+    worksWithCouples: true,
+    tier: "Associate"
   },
   {
     id: "c3",
@@ -356,12 +378,19 @@ const MOCK_CLINICIANS: Clinician[] = [
     specialties: ["Adolescents", "Eating Disorders"],
     capacity: 22,
     currentLoad: 20,
+    maxNewClients: 1,
     avatar: "SJ",
     availability: [
       { id: "ts7", type: "Recurring", day: "Monday", startTime: "09:00", endTime: "17:00", isBooked: true },
       { id: "ts8", type: "Recurring", day: "Tuesday", startTime: "09:00", endTime: "17:00", isBooked: true }
     ],
-    lastUpdatedAvailability: format(subDays(new Date(), 10), "MMM d") 
+    lastUpdatedAvailability: format(subDays(new Date(), 10), "MMM d"),
+    bio: "Sarah is a clinical social worker specializing in adolescent mental health and eating disorders. She has a warm, empathetic approach.",
+    insurers: ["Aviva", "Bupa", "WPA"],
+    location: "South London",
+    nhsTrust: "South London and Maudsley",
+    worksWithCouples: false,
+    tier: "Director"
   }
 ];
 
@@ -373,6 +402,7 @@ const MOCK_CLIENTS: Client[] = [
     status: "New",
     intakeDate: format(new Date(), "yyyy-MM-dd"),
     presentingIssues: ["Anxiety", "Work Stress"],
+    insurer: "Private",
     notes: "Requires evening slots."
   },
   {
@@ -382,6 +412,7 @@ const MOCK_CLIENTS: Client[] = [
     status: "Forms Sent",
     intakeDate: format(subDays(new Date(), 2), "yyyy-MM-dd"),
     presentingIssues: ["Depression"],
+    insurer: "Bupa",
     notes: "Waiting on insurance details."
   },
   {

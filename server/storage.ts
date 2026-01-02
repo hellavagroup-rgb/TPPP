@@ -1,38 +1,287 @@
-import { type User, type InsertUser } from "@shared/schema";
-import { randomUUID } from "crypto";
+import { 
+  users, clients, clinicians, timeSlots, formTemplates, formSubmissions, tasks, auditLogs,
+  type User, type InsertUser, type SafeUser,
+  type Client, type InsertClient,
+  type Clinician, type InsertClinician,
+  type TimeSlot, type InsertTimeSlot,
+  type FormTemplate, type InsertFormTemplate,
+  type FormSubmission, type InsertFormSubmission,
+  type Task, type InsertTask,
+  type AuditLog, type InsertAuditLog
+} from "@shared/schema";
+import { db } from "./db";
+import { eq, and, desc, sql } from "drizzle-orm";
 
-// modify the interface with any CRUD methods
-// you might need
-
+// Storage interface for all CRUD operations
 export interface IStorage {
+  // ============ USERS & AUTH ============
   getUser(id: string): Promise<User | undefined>;
-  getUserByUsername(username: string): Promise<User | undefined>;
+  getUserByEmail(email: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
+  updateUser(id: string, updates: Partial<InsertUser>): Promise<User | undefined>;
+  
+  // ============ CLINICIANS ============
+  getAllClinicians(): Promise<Clinician[]>;
+  getClinicianById(id: string): Promise<Clinician | undefined>;
+  getClinicianByUserId(userId: string): Promise<Clinician | undefined>;
+  createClinician(clinician: InsertClinician): Promise<Clinician>;
+  updateClinician(id: string, updates: Partial<InsertClinician>): Promise<Clinician | undefined>;
+  
+  // ============ TIME SLOTS ============
+  getTimeSlotsByClinicianId(clinicianId: string): Promise<TimeSlot[]>;
+  createTimeSlot(slot: InsertTimeSlot): Promise<TimeSlot>;
+  updateTimeSlot(id: string, updates: Partial<InsertTimeSlot>): Promise<TimeSlot | undefined>;
+  deleteTimeSlot(id: string): Promise<void>;
+  bulkUpdateTimeSlots(clinicianId: string, slots: TimeSlot[]): Promise<void>;
+  
+  // ============ CLIENTS ============
+  getAllClients(): Promise<Client[]>;
+  getClientById(id: string): Promise<Client | undefined>;
+  getClientByDisplayId(displayId: string): Promise<Client | undefined>;
+  createClient(client: InsertClient): Promise<Client>;
+  updateClient(id: string, updates: Partial<InsertClient>): Promise<Client | undefined>;
+  assignClinicianToClient(clientId: string, clinicianId: string, slotId: string): Promise<void>;
+  
+  // ============ FORMS ============
+  getAllFormTemplates(): Promise<FormTemplate[]>;
+  getFormTemplateById(id: string): Promise<FormTemplate | undefined>;
+  createFormTemplate(form: InsertFormTemplate): Promise<FormTemplate>;
+  updateFormTemplate(id: string, updates: Partial<InsertFormTemplate>): Promise<FormTemplate | undefined>;
+  deleteFormTemplate(id: string): Promise<void>;
+  
+  // ============ FORM SUBMISSIONS ============
+  getFormSubmissionsByClientId(clientId: string): Promise<FormSubmission[]>;
+  createFormSubmission(submission: InsertFormSubmission): Promise<FormSubmission>;
+  
+  // ============ TASKS ============
+  getAllTasks(): Promise<Task[]>;
+  getTaskById(id: string): Promise<Task | undefined>;
+  createTask(task: InsertTask): Promise<Task>;
+  updateTask(id: string, updates: Partial<InsertTask>): Promise<Task | undefined>;
+  
+  // ============ AUDIT LOGS (GDPR) ============
+  createAuditLog(log: InsertAuditLog): Promise<AuditLog>;
+  getAuditLogsByUserId(userId: string): Promise<AuditLog[]>;
 }
 
-export class MemStorage implements IStorage {
-  private users: Map<string, User>;
-
-  constructor() {
-    this.users = new Map();
-  }
-
+// Database implementation with PostgreSQL
+export class DatabaseStorage implements IStorage {
+  // ============ USERS & AUTH ============
   async getUser(id: string): Promise<User | undefined> {
-    return this.users.get(id);
+    const [user] = await db.select().from(users).where(eq(users.id, id));
+    return user || undefined;
   }
 
-  async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.username === username,
-    );
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.email, email));
+    return user || undefined;
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
-    const id = randomUUID();
-    const user: User = { ...insertUser, id };
-    this.users.set(id, user);
+    const [user] = await db.insert(users).values(insertUser).returning();
     return user;
+  }
+
+  async updateUser(id: string, updates: Partial<InsertUser>): Promise<User | undefined> {
+    const [user] = await db.update(users).set(updates).where(eq(users.id, id)).returning();
+    return user || undefined;
+  }
+
+  // ============ CLINICIANS ============
+  async getAllClinicians(): Promise<Clinician[]> {
+    return await db.select().from(clinicians).orderBy(clinicians.createdAt);
+  }
+
+  async getClinicianById(id: string): Promise<Clinician | undefined> {
+    const [clinician] = await db.select().from(clinicians).where(eq(clinicians.id, id));
+    return clinician || undefined;
+  }
+
+  async getClinicianByUserId(userId: string): Promise<Clinician | undefined> {
+    const [clinician] = await db.select().from(clinicians).where(eq(clinicians.userId, userId));
+    return clinician || undefined;
+  }
+
+  async createClinician(insertClinician: InsertClinician): Promise<Clinician> {
+    const [clinician] = await db.insert(clinicians).values(insertClinician).returning();
+    return clinician;
+  }
+
+  async updateClinician(id: string, updates: Partial<InsertClinician>): Promise<Clinician | undefined> {
+    const [clinician] = await db.update(clinicians).set({
+      ...updates,
+      lastUpdatedAvailability: new Date()
+    }).where(eq(clinicians.id, id)).returning();
+    return clinician || undefined;
+  }
+
+  // ============ TIME SLOTS ============
+  async getTimeSlotsByClinicianId(clinicianId: string): Promise<TimeSlot[]> {
+    return await db.select().from(timeSlots).where(eq(timeSlots.clinicianId, clinicianId));
+  }
+
+  async createTimeSlot(slot: InsertTimeSlot): Promise<TimeSlot> {
+    const [newSlot] = await db.insert(timeSlots).values(slot).returning();
+    return newSlot;
+  }
+
+  async updateTimeSlot(id: string, updates: Partial<InsertTimeSlot>): Promise<TimeSlot | undefined> {
+    const [slot] = await db.update(timeSlots).set(updates).where(eq(timeSlots.id, id)).returning();
+    return slot || undefined;
+  }
+
+  async deleteTimeSlot(id: string): Promise<void> {
+    await db.delete(timeSlots).where(eq(timeSlots.id, id));
+  }
+
+  async bulkUpdateTimeSlots(clinicianId: string, slots: TimeSlot[]): Promise<void> {
+    // Delete all existing slots for this clinician
+    await db.delete(timeSlots).where(eq(timeSlots.clinicianId, clinicianId));
+    
+    // Insert new slots
+    if (slots.length > 0) {
+      await db.insert(timeSlots).values(slots.map(slot => ({
+        ...slot,
+        clinicianId
+      })));
+    }
+    
+    // Update lastUpdatedAvailability
+    await db.update(clinicians).set({
+      lastUpdatedAvailability: new Date()
+    }).where(eq(clinicians.id, clinicianId));
+  }
+
+  // ============ CLIENTS ============
+  async getAllClients(): Promise<Client[]> {
+    return await db.select().from(clients).orderBy(desc(clients.intakeDate));
+  }
+
+  async getClientById(id: string): Promise<Client | undefined> {
+    const [client] = await db.select().from(clients).where(eq(clients.id, id));
+    return client || undefined;
+  }
+
+  async getClientByDisplayId(displayId: string): Promise<Client | undefined> {
+    const [client] = await db.select().from(clients).where(eq(clients.displayId, displayId));
+    return client || undefined;
+  }
+
+  async createClient(insertClient: InsertClient): Promise<Client> {
+    // Generate W-Number (W + 8 random digits)
+    const displayId = `W${Math.floor(10000000 + Math.random() * 90000000)}`;
+    
+    const [client] = await db.insert(clients).values({
+      ...insertClient,
+      displayId
+    }).returning();
+    return client;
+  }
+
+  async updateClient(id: string, updates: Partial<InsertClient>): Promise<Client | undefined> {
+    const [client] = await db.update(clients).set({
+      ...updates,
+      updatedAt: new Date()
+    }).where(eq(clients.id, id)).returning();
+    return client || undefined;
+  }
+
+  async assignClinicianToClient(clientId: string, clinicianId: string, slotId: string): Promise<void> {
+    // Get the slot details
+    const [slot] = await db.select().from(timeSlots).where(eq(timeSlots.id, slotId));
+    
+    if (!slot) throw new Error("Slot not found");
+
+    const slotString = `${slot.day} ${slot.startTime}`;
+
+    // Start transaction
+    await db.transaction(async (tx) => {
+      // Update client
+      await tx.update(clients).set({
+        status: "Assigned",
+        assignedClinicianId: clinicianId,
+        assignedSlot: slotString,
+        updatedAt: new Date()
+      }).where(eq(clients.id, clientId));
+
+      // Mark slot as booked
+      await tx.update(timeSlots).set({
+        isBooked: true
+      }).where(eq(timeSlots.id, slotId));
+
+      // Increment clinician load
+      await tx.update(clinicians).set({
+        currentLoad: sql`${clinicians.currentLoad} + 1`
+      }).where(eq(clinicians.id, clinicianId));
+    });
+  }
+
+  // ============ FORMS ============
+  async getAllFormTemplates(): Promise<FormTemplate[]> {
+    return await db.select().from(formTemplates).orderBy(formTemplates.createdAt);
+  }
+
+  async getFormTemplateById(id: string): Promise<FormTemplate | undefined> {
+    const [form] = await db.select().from(formTemplates).where(eq(formTemplates.id, id));
+    return form || undefined;
+  }
+
+  async createFormTemplate(insertForm: InsertFormTemplate): Promise<FormTemplate> {
+    const [form] = await db.insert(formTemplates).values(insertForm).returning();
+    return form;
+  }
+
+  async updateFormTemplate(id: string, updates: Partial<InsertFormTemplate>): Promise<FormTemplate | undefined> {
+    const [form] = await db.update(formTemplates).set({
+      ...updates,
+      updatedAt: new Date()
+    }).where(eq(formTemplates.id, id)).returning();
+    return form || undefined;
+  }
+
+  async deleteFormTemplate(id: string): Promise<void> {
+    await db.delete(formTemplates).where(eq(formTemplates.id, id));
+  }
+
+  // ============ FORM SUBMISSIONS ============
+  async getFormSubmissionsByClientId(clientId: string): Promise<FormSubmission[]> {
+    return await db.select().from(formSubmissions).where(eq(formSubmissions.clientId, clientId));
+  }
+
+  async createFormSubmission(submission: InsertFormSubmission): Promise<FormSubmission> {
+    const [newSubmission] = await db.insert(formSubmissions).values(submission).returning();
+    return newSubmission;
+  }
+
+  // ============ TASKS ============
+  async getAllTasks(): Promise<Task[]> {
+    return await db.select().from(tasks).orderBy(desc(tasks.dueDate));
+  }
+
+  async getTaskById(id: string): Promise<Task | undefined> {
+    const [task] = await db.select().from(tasks).where(eq(tasks.id, id));
+    return task || undefined;
+  }
+
+  async createTask(insertTask: InsertTask): Promise<Task> {
+    const [task] = await db.insert(tasks).values(insertTask).returning();
+    return task;
+  }
+
+  async updateTask(id: string, updates: Partial<InsertTask>): Promise<Task | undefined> {
+    const [task] = await db.update(tasks).set(updates).where(eq(tasks.id, id)).returning();
+    return task || undefined;
+  }
+
+  // ============ AUDIT LOGS (GDPR) ============
+  async createAuditLog(log: InsertAuditLog): Promise<AuditLog> {
+    const [auditLog] = await db.insert(auditLogs).values(log).returning();
+    return auditLog;
+  }
+
+  async getAuditLogsByUserId(userId: string): Promise<AuditLog[]> {
+    return await db.select().from(auditLogs).where(eq(auditLogs.userId, userId)).orderBy(desc(auditLogs.timestamp));
   }
 }
 
-export const storage = new MemStorage();
+export const storage = new DatabaseStorage();

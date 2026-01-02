@@ -1,16 +1,328 @@
-import type { Express } from "express";
+import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
+import { setupAuth, requireAuth, requireAdmin, requireClinician, hashPassword, auditLog } from "./auth";
+import passport from "passport";
+import { 
+  insertClientSchema, insertClinicianSchema, insertTimeSlotSchema, 
+  insertFormTemplateSchema, insertTaskSchema, insertUserSchema 
+} from "@shared/schema";
+import { z } from "zod";
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
-  // put application routes here
-  // prefix all routes with /api
+  // Setup authentication
+  setupAuth(app);
 
-  // use storage to perform CRUD operations on the storage interface
-  // e.g. storage.insertUser(user) or storage.getUserByUsername(username)
+  // ============ AUTH ROUTES ============
+  app.post("/api/auth/login", (req, res, next) => {
+    passport.authenticate("local", (err: any, user: any, info: any) => {
+      if (err) {
+        return res.status(500).json({ error: "Internal server error" });
+      }
+      if (!user) {
+        return res.status(401).json({ error: info?.message || "Invalid credentials" });
+      }
+      req.logIn(user, (err) => {
+        if (err) {
+          return res.status(500).json({ error: "Login failed" });
+        }
+        return res.json({ user });
+      });
+    })(req, res, next);
+  });
+
+  app.post("/api/auth/logout", (req, res) => {
+    req.logout((err) => {
+      if (err) {
+        return res.status(500).json({ error: "Logout failed" });
+      }
+      res.json({ success: true });
+    });
+  });
+
+  app.get("/api/auth/me", requireAuth, (req, res) => {
+    res.json({ user: req.user });
+  });
+
+  // ============ USER MANAGEMENT ============
+  app.post("/api/users", requireAdmin, async (req, res) => {
+    try {
+      const validated = insertUserSchema.parse(req.body);
+      
+      // Check if user already exists
+      const existing = await storage.getUserByEmail(validated.email.toLowerCase());
+      if (existing) {
+        return res.status(400).json({ error: "User already exists" });
+      }
+
+      // Hash password
+      const hashedPassword = await hashPassword(validated.password);
+      
+      const user = await storage.createUser({
+        ...validated,
+        email: validated.email.toLowerCase(),
+        password: hashedPassword
+      });
+
+      // Don't return password
+      const { password: _, ...safeUser } = user;
+      res.json(safeUser);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
+      res.status(500).json({ error: "Failed to create user" });
+    }
+  });
+
+  // ============ CLINICIAN ROUTES ============
+  app.get("/api/clinicians", requireAuth, async (req, res) => {
+    try {
+      const clinicians = await storage.getAllClinicians();
+      
+      // For each clinician, fetch their availability
+      const cliniciansWithAvailability = await Promise.all(
+        clinicians.map(async (clinician) => {
+          const availability = await storage.getTimeSlotsByClinicianId(clinician.id);
+          return { ...clinician, availability };
+        })
+      );
+      
+      res.json(cliniciansWithAvailability);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch clinicians" });
+    }
+  });
+
+  app.get("/api/clinicians/me", requireClinician, async (req, res) => {
+    try {
+      const clinician = await storage.getClinicianByUserId(req.user!.id);
+      if (!clinician) {
+        return res.status(404).json({ error: "Clinician profile not found" });
+      }
+      
+      const availability = await storage.getTimeSlotsByClinicianId(clinician.id);
+      res.json({ ...clinician, availability });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch clinician profile" });
+    }
+  });
+
+  app.patch("/api/clinicians/me", requireClinician, async (req, res) => {
+    try {
+      const clinician = await storage.getClinicianByUserId(req.user!.id);
+      if (!clinician) {
+        return res.status(404).json({ error: "Clinician profile not found" });
+      }
+
+      const updated = await storage.updateClinician(clinician.id, req.body);
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update clinician" });
+    }
+  });
+
+  app.post("/api/clinicians", requireAdmin, async (req, res) => {
+    try {
+      const validated = insertClinicianSchema.parse(req.body);
+      const clinician = await storage.createClinician(validated);
+      res.json(clinician);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
+      res.status(500).json({ error: "Failed to create clinician" });
+    }
+  });
+
+  // ============ AVAILABILITY / TIME SLOTS ============
+  app.get("/api/timeslots/:clinicianId", requireAuth, async (req, res) => {
+    try {
+      const slots = await storage.getTimeSlotsByClinicianId(req.params.clinicianId);
+      res.json(slots);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch time slots" });
+    }
+  });
+
+  app.put("/api/timeslots/:clinicianId", requireAuth, async (req, res) => {
+    try {
+      // Check authorization: Admin can edit any, Clinician can only edit their own
+      if (req.user!.role === "clinician") {
+        const clinician = await storage.getClinicianByUserId(req.user!.id);
+        if (!clinician || clinician.id !== req.params.clinicianId) {
+          return res.status(403).json({ error: "Forbidden" });
+        }
+      }
+
+      const slots = req.body; // Array of TimeSlot objects
+      await storage.bulkUpdateTimeSlots(req.params.clinicianId, slots);
+      
+      const updated = await storage.getTimeSlotsByClinicianId(req.params.clinicianId);
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update time slots" });
+    }
+  });
+
+  // ============ CLIENT ROUTES (GDPR Protected) ============
+  app.get("/api/clients", requireAdmin, auditLog("view", "client"), async (req, res) => {
+    try {
+      const clients = await storage.getAllClients();
+      res.json(clients);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch clients" });
+    }
+  });
+
+  app.get("/api/clients/:id", requireAdmin, auditLog("view", "client"), async (req, res) => {
+    try {
+      const client = await storage.getClientById(req.params.id);
+      if (!client) {
+        return res.status(404).json({ error: "Client not found" });
+      }
+      res.json(client);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch client" });
+    }
+  });
+
+  app.post("/api/clients", requireAdmin, auditLog("create", "client"), async (req, res) => {
+    try {
+      const validated = insertClientSchema.parse(req.body);
+      const client = await storage.createClient(validated);
+      res.json(client);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
+      res.status(500).json({ error: "Failed to create client" });
+    }
+  });
+
+  app.patch("/api/clients/:id", requireAdmin, auditLog("edit", "client"), async (req, res) => {
+    try {
+      const updated = await storage.updateClient(req.params.id, req.body);
+      if (!updated) {
+        return res.status(404).json({ error: "Client not found" });
+      }
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update client" });
+    }
+  });
+
+  app.post("/api/clients/:clientId/assign", requireAdmin, auditLog("assign", "client"), async (req, res) => {
+    try {
+      const { clinicianId, slotId } = req.body;
+      
+      if (!clinicianId || !slotId) {
+        return res.status(400).json({ error: "Missing clinicianId or slotId" });
+      }
+
+      await storage.assignClinicianToClient(req.params.clientId, clinicianId, slotId);
+      
+      const updated = await storage.getClientById(req.params.clientId);
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to assign clinician" });
+    }
+  });
+
+  // ============ FORM TEMPLATES ============
+  app.get("/api/forms", requireAuth, async (req, res) => {
+    try {
+      const forms = await storage.getAllFormTemplates();
+      res.json(forms);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch forms" });
+    }
+  });
+
+  app.get("/api/forms/:id", requireAuth, async (req, res) => {
+    try {
+      const form = await storage.getFormTemplateById(req.params.id);
+      if (!form) {
+        return res.status(404).json({ error: "Form not found" });
+      }
+      res.json(form);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch form" });
+    }
+  });
+
+  app.post("/api/forms", requireAdmin, async (req, res) => {
+    try {
+      const validated = insertFormTemplateSchema.parse(req.body);
+      const form = await storage.createFormTemplate(validated);
+      res.json(form);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
+      res.status(500).json({ error: "Failed to create form" });
+    }
+  });
+
+  app.patch("/api/forms/:id", requireAdmin, async (req, res) => {
+    try {
+      const validated = insertFormTemplateSchema.partial().parse(req.body);
+      const updated = await storage.updateFormTemplate(req.params.id, validated);
+      if (!updated) {
+        return res.status(404).json({ error: "Form not found" });
+      }
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update form" });
+    }
+  });
+
+  app.delete("/api/forms/:id", requireAdmin, async (req, res) => {
+    try {
+      await storage.deleteFormTemplate(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete form" });
+    }
+  });
+
+  // ============ TASKS ============
+  app.get("/api/tasks", requireAdmin, async (req, res) => {
+    try {
+      const tasks = await storage.getAllTasks();
+      res.json(tasks);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch tasks" });
+    }
+  });
+
+  app.post("/api/tasks", requireAdmin, async (req, res) => {
+    try {
+      const validated = insertTaskSchema.parse(req.body);
+      const task = await storage.createTask(validated);
+      res.json(task);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
+      res.status(500).json({ error: "Failed to create task" });
+    }
+  });
+
+  app.patch("/api/tasks/:id", requireAdmin, async (req, res) => {
+    try {
+      const updated = await storage.updateTask(req.params.id, req.body);
+      if (!updated) {
+        return res.status(404).json({ error: "Task not found" });
+      }
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update task" });
+    }
+  });
 
   return httpServer;
 }

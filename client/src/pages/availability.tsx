@@ -24,6 +24,15 @@ import { useToast } from "@/hooks/use-toast";
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
+// Generate 15-minute time slots from 07:00 to 20:00 (matching the grid)
+const TIME_OPTIONS = Array.from({ length: 13 * 4 + 1 }, (_, i) => {
+    const hour = Math.floor(i / 4) + 7;
+    const minute = (i % 4) * 15;
+    const date = new Date();
+    date.setHours(hour, minute);
+    return format(date, "HH:mm");
+});
+
 export default function Availability() {
   const { clinicians, updateClinicianAvailability, clients } = useData();
   const { user } = useAuth();
@@ -312,11 +321,29 @@ export default function Availability() {
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="grid gap-2">
                                     <Label>Start Time</Label>
-                                    <Input type="time" value={newStartTime} onChange={(e) => setNewStartTime(e.target.value)} />
+                                    <Select value={newStartTime} onValueChange={setNewStartTime}>
+                                        <SelectTrigger>
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent className="max-h-[200px]">
+                                            {TIME_OPTIONS.map(time => (
+                                                <SelectItem key={`start-${time}`} value={time}>{time}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
                                 </div>
                                 <div className="grid gap-2">
                                     <Label>End Time</Label>
-                                    <Input type="time" value={newEndTime} onChange={(e) => setNewEndTime(e.target.value)} />
+                                    <Select value={newEndTime} onValueChange={setNewEndTime}>
+                                        <SelectTrigger>
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent className="max-h-[200px]">
+                                            {TIME_OPTIONS.map(time => (
+                                                <SelectItem key={`end-${time}`} value={time}>{time}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
                                 </div>
                             </div>
                         )}

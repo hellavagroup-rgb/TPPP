@@ -1,6 +1,7 @@
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 import { useData } from "@/lib/mockData";
+import { useAuth } from "@/lib/auth";
 import { 
   LayoutDashboard, 
   Users, 
@@ -13,7 +14,8 @@ import {
   Menu,
   FileText,
   BarChart3,
-  Brain
+  Brain,
+  UserCircle
 } from "lucide-react";
 import logo from "@assets/xPerinatalPP-logo-large-digital.png.pagespeed.ic.wAjk_RUOnf_1766008188694.png";
 import { useState } from "react";
@@ -26,10 +28,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const { notifications } = useData();
+  const { user, logout } = useAuth();
   
   const unreadNotifications = notifications.filter(n => !n.read).length;
 
-  const navigation = [
+  // Determine navigation based on role
+  const adminNavigation = [
     { name: "Dashboard", href: "/", icon: LayoutDashboard },
     { name: "Clients", href: "/clients", icon: Users },
     { name: "Waitlist", href: "/waitlist", icon: CalendarClock },
@@ -41,24 +45,35 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     { name: "Settings", href: "/settings", icon: Settings },
   ];
 
+  const clinicianNavigation = [
+    { name: "Information", href: "/clinician-profile", icon: UserCircle },
+    { name: "Availability", href: "/availability", icon: CalendarClock },
+  ];
+
+  const navigation = user?.role === "clinician" ? clinicianNavigation : adminNavigation;
+
   const SidebarContent = () => (
     <div className="flex flex-col h-full bg-sidebar text-sidebar-foreground border-r border-sidebar-border">
       <div className="p-6 flex flex-col gap-4">
         <div className="w-full flex flex-col items-center py-2 gap-1">
              {/* Logo is wide, so we display it without a constraining circle */}
              <img src={logo} alt="The Perinatal Psychology Practice" className="w-full max-w-[200px] object-contain" />
-             <span className="text-[10px] uppercase tracking-widest text-sidebar-foreground/60 font-medium">client management portal</span>
+             <span className="text-[10px] uppercase tracking-widest text-sidebar-foreground/60 font-medium">
+                {user?.role === "clinician" ? "Clinician Portal" : "Client Management"}
+             </span>
         </div>
       </div>
 
       <div className="px-3 py-2">
-        <div className="relative">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-sidebar-foreground/50" />
-          <Input 
-            placeholder="Search clients..." 
-            className="pl-9 bg-sidebar-accent/50 border-sidebar-border text-sidebar-foreground placeholder:text-sidebar-foreground/50 focus-visible:ring-sidebar-ring"
-          />
-        </div>
+        {user?.role === "admin" && (
+            <div className="relative">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-sidebar-foreground/50" />
+            <Input 
+                placeholder="Search clients..." 
+                className="pl-9 bg-sidebar-accent/50 border-sidebar-border text-sidebar-foreground placeholder:text-sidebar-foreground/50 focus-visible:ring-sidebar-ring"
+            />
+            </div>
+        )}
       </div>
 
       <nav className="flex-1 px-3 py-4 space-y-1">
@@ -90,15 +105,14 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
       <div className="p-4 border-t border-sidebar-border">
         <div className="flex items-center gap-3">
-          <Avatar className="h-9 w-9 border border-sidebar-border">
-            <AvatarImage src="https://github.com/shadcn.png" />
-            <AvatarFallback>AD</AvatarFallback>
+          <Avatar className="h-9 w-9 border border-sidebar-border bg-sidebar-accent text-sidebar-accent-foreground">
+            <AvatarFallback>{user?.avatar || "U"}</AvatarFallback>
           </Avatar>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium truncate">Admin User</p>
-            <p className="text-xs text-sidebar-foreground/60 truncate">admin@perinatalpsych.com</p>
+            <p className="text-sm font-medium truncate">{user?.name || "Guest"}</p>
+            <p className="text-xs text-sidebar-foreground/60 truncate capitalize">{user?.role || "Visitor"}</p>
           </div>
-          <Button variant="ghost" size="icon" className="h-8 w-8 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent">
+          <Button variant="ghost" size="icon" className="h-8 w-8 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent" onClick={logout}>
             <LogOut className="h-4 w-4" />
           </Button>
         </div>

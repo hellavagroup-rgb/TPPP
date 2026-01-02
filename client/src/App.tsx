@@ -1,4 +1,4 @@
-import { Switch, Route, useRoute } from "wouter";
+import { Switch, Route, useLocation } from "wouter";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "./lib/queryClient";
 import { Toaster } from "@/components/ui/toaster";
@@ -16,12 +16,32 @@ import Analytics from "@/pages/analytics";
 import Clinicians from "@/pages/clinicians";
 import Layout from "@/components/layout";
 import { DataProvider } from "@/lib/mockData";
+import { AuthProvider, useAuth } from "@/lib/auth";
+import Login from "@/pages/login";
+import ClinicianProfile from "@/pages/clinician-profile";
+import { useEffect } from "react";
+
+function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
+  const { user, isLoading } = useAuth();
+  const [location, setLocation] = useLocation();
+
+  useEffect(() => {
+    if (!isLoading && !user) {
+      setLocation("/login");
+    }
+  }, [user, isLoading, setLocation]);
+
+  if (isLoading) return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
+  if (!user) return null;
+
+  return <Component />;
+}
 
 function Router() {
-  const [location] = useRoute("/fill/:clientId/:formId");
+  const [location] = useLocation();
   
-  // If we are on the fill page, don't use the main admin layout
-  if (location) {
+  // Public Routes (Login, Form Fill)
+  if (location.startsWith("/fill")) {
       return (
         <Switch>
             <Route path="/fill/:clientId/:formId" component={FormFill} />
@@ -29,19 +49,27 @@ function Router() {
       );
   }
 
+  if (location === "/login") {
+      return <Login />;
+  }
+
   return (
     <Layout>
       <Switch>
-        <Route path="/" component={Dashboard} />
-        <Route path="/clients" component={Clients} />
-        <Route path="/tasks" component={Tasks} />
-        <Route path="/clinicians" component={Clinicians} />
-        <Route path="/waitlist" component={Waitlist} />
-        <Route path="/settings" component={Settings} />
-        <Route path="/availability" component={Availability} />
-        <Route path="/forms" component={Forms} />
-        <Route path="/forms/:id" component={FormBuilder} />
-        <Route path="/analytics" component={Analytics} />
+        <Route path="/" component={() => <ProtectedRoute component={Dashboard} />} />
+        <Route path="/clients" component={() => <ProtectedRoute component={Clients} />} />
+        <Route path="/tasks" component={() => <ProtectedRoute component={Tasks} />} />
+        <Route path="/clinicians" component={() => <ProtectedRoute component={Clinicians} />} />
+        <Route path="/waitlist" component={() => <ProtectedRoute component={Waitlist} />} />
+        <Route path="/settings" component={() => <ProtectedRoute component={Settings} />} />
+        <Route path="/availability" component={() => <ProtectedRoute component={Availability} />} />
+        <Route path="/forms" component={() => <ProtectedRoute component={Forms} />} />
+        <Route path="/forms/:id" component={() => <ProtectedRoute component={FormBuilder} />} />
+        <Route path="/analytics" component={() => <ProtectedRoute component={Analytics} />} />
+        
+        {/* Clinician Routes */}
+        <Route path="/clinician-profile" component={() => <ProtectedRoute component={ClinicianProfile} />} />
+        
         <Route component={NotFound} />
       </Switch>
     </Layout>
@@ -52,8 +80,10 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <DataProvider>
-        <Router />
-        <Toaster />
+        <AuthProvider>
+            <Router />
+            <Toaster />
+        </AuthProvider>
       </DataProvider>
     </QueryClientProvider>
   );

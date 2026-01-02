@@ -8,7 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { MapPin, Building, Users, Shield, Edit, Briefcase, Star } from "lucide-react";
+import { MapPin, Building, Users, Shield, Edit, Briefcase, Star, Lock } from "lucide-react";
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -32,6 +32,15 @@ export default function Clinicians() {
         title: "Clinician Updated",
         description: "Clinician profile has been successfully updated.",
     });
+  };
+
+  const handleGenerateCredentials = (clinicianName: string) => {
+      const email = `${clinicianName.split(' ')[1].toLowerCase()}@perinatalpsych.com`;
+      // Mock API call
+      toast({
+          title: "Credentials Generated",
+          description: `Login details sent to ${email}`,
+      });
   };
 
   return (
@@ -113,15 +122,21 @@ export default function Clinicians() {
                 </div>
             </CardContent>
 
-            <CardFooter className="bg-slate-50/50 p-4 border-t border-slate-100 text-xs text-muted-foreground flex justify-between">
-                <div className="flex items-center gap-1.5" title="Max New Clients">
-                    <Users className="h-3.5 w-3.5" />
-                    <span>Cap: {clinician.maxNewClients || 0} New</span>
+            <CardFooter className="bg-slate-50/50 p-4 border-t border-slate-100 text-xs text-muted-foreground flex flex-col gap-3">
+                <div className="flex items-center justify-between w-full">
+                    <div className="flex items-center gap-1.5" title="Max New Clients">
+                        <Users className="h-3.5 w-3.5" />
+                        <span>Cap: {clinician.maxNewClients || 0} New</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                        <Briefcase className="h-3.5 w-3.5" />
+                        <span>Load: {clinician.currentLoad}/{clinician.capacity}</span>
+                    </div>
                 </div>
-                <div className="flex items-center gap-1.5">
-                    <Briefcase className="h-3.5 w-3.5" />
-                    <span>Load: {clinician.currentLoad}/{clinician.capacity}</span>
-                </div>
+                <Button variant="outline" size="sm" className="w-full text-xs h-7" onClick={() => handleGenerateCredentials(clinician.name)}>
+                    <Lock className="h-3 w-3 mr-2" />
+                    Generate Login
+                </Button>
             </CardFooter>
           </Card>
         ))}

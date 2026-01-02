@@ -1,9 +1,10 @@
 import { useData, TimeSlot, SlotType } from "@/lib/mockData";
+import { useAuth } from "@/lib/auth";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { useState, useEffect } from "react";
-import { Filter, ChevronLeft, ChevronRight, Calendar as CalendarIcon, Plus, AlertCircle } from "lucide-react";
+import { Filter, ChevronLeft, ChevronRight, Calendar as CalendarIcon, Plus, AlertCircle, Briefcase } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { format, addWeeks, subWeeks, startOfWeek, endOfWeek, eachDayOfInterval, isSameDay, parseISO } from "date-fns";
@@ -21,7 +22,8 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 
 export default function Availability() {
-  const { clinicians, updateClinicianAvailability } = useData();
+  const { clinicians, updateClinicianAvailability, clients } = useData();
+  const { user } = useAuth();
   const [selectedClinicianId, setSelectedClinicianId] = useState<string>("all");
   const [currentDate, setCurrentDate] = useState(new Date());
   const { toast } = useToast();
@@ -37,6 +39,14 @@ export default function Availability() {
   // Dialog: Which clinician is being added? (Admin control)
   const [dialogClinicianId, setDialogClinicianId] = useState<string>("");
 
+  // Lock view for Clinician role
+  useEffect(() => {
+    if (user?.role === "clinician") {
+        setSelectedClinicianId(user.id);
+        setDialogClinicianId(user.id);
+    }
+  }, [user]);
+
   const filteredClinicians = selectedClinicianId === "all" 
     ? clinicians 
     : clinicians.filter(c => c.id === selectedClinicianId);
@@ -48,14 +58,14 @@ export default function Availability() {
 
   // Update dialog clinician selection when main filter changes
   useEffect(() => {
-    if (isDialogOpen) {
+    if (isDialogOpen && user?.role !== "clinician") {
         if (selectedClinicianId !== "all") {
             setDialogClinicianId(selectedClinicianId);
         } else if (clinicians.length > 0 && !dialogClinicianId) {
             setDialogClinicianId(clinicians[0].id);
         }
     }
-  }, [isDialogOpen, selectedClinicianId, clinicians]);
+  }, [isDialogOpen, selectedClinicianId, clinicians, user, dialogClinicianId]);
 
   // Helper to parse "HH:MM" to decimal hours for calculations
   const parseTime = (time: string) => {
@@ -79,6 +89,21 @@ export default function Availability() {
       return slot.date === format(date, "yyyy-MM-dd");
     }
     return false;
+  };
+
+  // Helper to get client info for a booked slot
+  const getClientForSlot = (clinicianId: string, slotId: string) => {
+      // Find client who has this assignedClinicianId and assignedSlot matching
+      // Note: In a real app we'd match exact Slot ID. 
+      // In this mock, we don't strictly link slot ID to client, but we can fake it or try to match based on display logic.
+      // Or we can rely on the fact that if isBooked=true, we should show "Booked".
+      // Let's see if we can find a client.
+      const client = clients.find(c => c.assignedClinicianId === clinicianId && c.assignedSlot?.includes(slotId)); 
+      // Actually mockData just stores string "Monday 10:00".
+      
+      // Let's just return a placeholder or check if any client is assigned to this clinician
+      // For the prototype, if it's booked, we'll just show "Booked Client".
+      return "Client Booked";
   };
 
   const handleNextWeek = () => setCurrentDate(addWeeks(currentDate, 1));
@@ -131,11 +156,18 @@ export default function Availability() {
   };
 
   return (
-    <div className="space-y-6 h-[calc(100vh-8rem)] flex flex-col">
+    <div className="space-y-6 h-[calc(100vh-8rem)] flex flex-col animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 flex-shrink-0">
         <div>
-          <h2 className="text-3xl font-serif font-bold text-foreground">Master Schedule</h2>
-          <p className="text-muted-foreground mt-1">Weekly view of all clinician availability (7am - 7pm).</p>
+          <h2 className="text-3xl font-serif font-bold text-foreground">
+            {user?.role === "clinician" ? "My Availability" : "Master Schedule"}
+          </h2>
+          <p className="text-muted-foreground mt-1">
+            {user?.role === "clinician" 
+                ? "Manage your weekly shifts and view booked sessions." 
+                : "Weekly view of all clinician availability (7am - 7pm)."
+            }
+          </p>
         </div>
         
         <div className="flex items-center gap-2">
@@ -151,20 +183,22 @@ export default function Availability() {
                 </Button>
             </div>
 
-            <div className="flex items-center gap-2 bg-card p-1 rounded-lg border border-border shadow-sm ml-2">
-                <Filter className="h-4 w-4 text-muted-foreground ml-2" />
-                <Select value={selectedClinicianId} onValueChange={setSelectedClinicianId}>
-                    <SelectTrigger className="w-[180px] border-none shadow-none focus:ring-0">
-                        <SelectValue placeholder="Filter Clinician" />
-                    </SelectTrigger>
-                    <SelectContent>
-                        <SelectItem value="all">All Clinicians</SelectItem>
-                        {clinicians.map(c => (
-                            <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                        ))}
-                    </SelectContent>
-                </Select>
-            </div>
+            {user?.role !== "clinician" && (
+                <div className="flex items-center gap-2 bg-card p-1 rounded-lg border border-border shadow-sm ml-2">
+                    <Filter className="h-4 w-4 text-muted-foreground ml-2" />
+                    <Select value={selectedClinicianId} onValueChange={setSelectedClinicianId}>
+                        <SelectTrigger className="w-[180px] border-none shadow-none focus:ring-0">
+                            <SelectValue placeholder="Filter Clinician" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all">All Clinicians</SelectItem>
+                            {clinicians.map(c => (
+                                <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                </div>
+            )}
 
             <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
                 <DialogTrigger asChild>
@@ -178,19 +212,21 @@ export default function Availability() {
                         <DialogDescription>Add a specific shift or mark time off/vacation.</DialogDescription>
                     </DialogHeader>
                     <div className="grid gap-4 py-4">
-                        <div className="grid gap-2">
-                            <Label>Clinician</Label>
-                            <Select value={dialogClinicianId} onValueChange={setDialogClinicianId}>
-                                <SelectTrigger>
-                                    <SelectValue placeholder="Select Clinician" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {clinicians.map(c => (
-                                        <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
+                        {user?.role !== "clinician" && (
+                            <div className="grid gap-2">
+                                <Label>Clinician</Label>
+                                <Select value={dialogClinicianId} onValueChange={setDialogClinicianId}>
+                                    <SelectTrigger>
+                                        <SelectValue placeholder="Select Clinician" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {clinicians.map(c => (
+                                            <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                        )}
 
                         <div className="grid gap-2">
                             <Label>Type</Label>
@@ -276,21 +312,27 @@ export default function Availability() {
                                                 slot.type === "Vacation" 
                                                     ? "bg-slate-100 text-slate-500 border-slate-200 border-dashed h-full items-start"
                                                     : slot.isBooked 
-                                                        ? "bg-slate-100 text-slate-400 border-slate-200 line-through decoration-slate-400 opacity-60"
+                                                        ? "bg-indigo-50 text-indigo-700 border-indigo-200" // Highlight booked for clinician
                                                         : getClinicianColor(cIndex)
                                             )}
                                         >
                                             <div className={cn(
                                                 "h-5 w-5 rounded-full flex items-center justify-center font-bold text-[8px] flex-shrink-0 bg-white/50",
-                                                slot.type === "Vacation" || slot.isBooked ? "text-slate-400" : ""
+                                                slot.type === "Vacation" ? "text-slate-400" : ""
                                             )}>
                                                 {clinician.avatar}
                                             </div>
                                             <div className="overflow-hidden w-full">
                                                 <p className="font-semibold truncate leading-tight">{clinician.name.split(" ")[1] || clinician.name}</p>
-                                                <p className="opacity-80 truncate leading-tight">
+                                                <div className="opacity-80 truncate leading-tight flex items-center gap-1">
                                                     {slot.type === "Vacation" ? "NOT AVAILABLE" : `${slot.startTime} - ${slot.endTime}`}
-                                                </p>
+                                                </div>
+                                                {slot.isBooked && (
+                                                    <div className="flex items-center gap-1 mt-0.5 font-bold">
+                                                        <Briefcase className="h-3 w-3" />
+                                                        <span>Client Booked</span>
+                                                    </div>
+                                                )}
                                             </div>
                                         </div>
                                     ));

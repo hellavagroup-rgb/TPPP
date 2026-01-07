@@ -46,6 +46,7 @@ export interface Clinician {
   lastUpdatedAvailability?: string;
   bio?: string;
   insurers?: string[]; // "Aviva", "Axa", "Bupa", "Cigna", "Vitality", "WPA", "Other"
+  contactMethods?: string[]; // "Email", "Text", "WhatsApp"
   location?: string;
   nhsTrust?: string;
   worksWithCouples?: boolean;

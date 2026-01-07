@@ -8,11 +8,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { MapPin, Building, Users, Shield, Edit, Briefcase, Star, Lock } from "lucide-react";
+import { MapPin, Building, Users, Shield, Edit, Briefcase, Star, Lock, Mail, MessageSquare, Phone } from "lucide-react";
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 
 const INSURERS = ["Aviva", "Axa", "Bupa", "Cigna", "Vitality", "WPA", "Other"];
+const CONTACT_METHODS = ["Email", "Text", "WhatsApp"];
 
 export default function Clinicians() {
   const { clinicians } = useData(); // In a real app we'd need an updateClinician function
@@ -119,6 +120,26 @@ export default function Clinicians() {
                             </div>
                         </div>
                     </div>
+
+                    <div className="flex items-start gap-3 text-sm">
+                        <MessageSquare className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />
+                        <div>
+                            <span className="font-medium block text-slate-700">Contact Methods</span>
+                            <div className="flex flex-wrap gap-1 mt-1">
+                                {clinician.contactMethods?.map(method => (
+                                    <span key={method} className="text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded border border-blue-100 flex items-center gap-1">
+                                        {method === 'Email' && <Mail className="h-2.5 w-2.5" />}
+                                        {method === 'Text' && <Phone className="h-2.5 w-2.5" />}
+                                        {method === 'WhatsApp' && <MessageSquare className="h-2.5 w-2.5" />}
+                                        {method}
+                                    </span>
+                                ))}
+                                {(!clinician.contactMethods || clinician.contactMethods.length === 0) && (
+                                    <span className="text-slate-400 italic">Not specified</span>
+                                )}
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </CardContent>
 
@@ -194,6 +215,18 @@ export default function Clinicians() {
                                 <div key={insurer} className="flex items-center space-x-2">
                                     <Checkbox id={`ins-${insurer}`} defaultChecked={selectedClinician.insurers?.includes(insurer)} />
                                     <Label htmlFor={`ins-${insurer}`} className="font-normal cursor-pointer">{insurer}</Label>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="space-y-2">
+                        <Label>Preferred Contact Methods</Label>
+                        <div className="grid grid-cols-3 gap-2 border p-3 rounded-md bg-slate-50/50">
+                            {CONTACT_METHODS.map(method => (
+                                <div key={method} className="flex items-center space-x-2">
+                                    <Checkbox id={`contact-${method}`} defaultChecked={selectedClinician.contactMethods?.includes(method)} />
+                                    <Label htmlFor={`contact-${method}`} className="font-normal cursor-pointer">{method}</Label>
                                 </div>
                             ))}
                         </div>

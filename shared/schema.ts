@@ -32,6 +32,7 @@ export const clinicians = pgTable("clinicians", {
   maxNewClients: integer("max_new_clients"),
   bio: text("bio"),
   insurers: text("insurers").array().default(sql`ARRAY[]::text[]`),
+  contactMethods: text("contact_methods").array().default(sql`ARRAY[]::text[]`), // Email, Text, WhatsApp
   location: text("location"),
   nhsTrust: text("nhs_trust"),
   worksWithCouples: boolean("works_with_couples").default(false),

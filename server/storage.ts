@@ -88,8 +88,31 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ============ CLINICIANS ============
-  async getAllClinicians(): Promise<Clinician[]> {
-    return await db.select().from(clinicians).orderBy(clinicians.createdAt);
+  async getAllClinicians(): Promise<(Clinician & { name: string })[]> {
+    const result = await db
+      .select({
+        id: clinicians.id,
+        userId: clinicians.userId,
+        avatar: clinicians.avatar,
+        specialties: clinicians.specialties,
+        capacity: clinicians.capacity,
+        currentLoad: clinicians.currentLoad,
+        maxNewClients: clinicians.maxNewClients,
+        bio: clinicians.bio,
+        insurers: clinicians.insurers,
+        contactMethods: clinicians.contactMethods,
+        location: clinicians.location,
+        nhsTrust: clinicians.nhsTrust,
+        worksWithCouples: clinicians.worksWithCouples,
+        tier: clinicians.tier,
+        lastUpdatedAvailability: clinicians.lastUpdatedAvailability,
+        createdAt: clinicians.createdAt,
+        name: users.name,
+      })
+      .from(clinicians)
+      .leftJoin(users, eq(clinicians.userId, users.id))
+      .orderBy(clinicians.createdAt);
+    return result.map(r => ({ ...r, name: r.name || 'Unknown' }));
   }
 
   async getClinicianById(id: string): Promise<Clinician | undefined> {

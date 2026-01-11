@@ -20,7 +20,10 @@ export async function registerRoutes(
     res.status(200).json({ status: "ok" });
   });
 
-  // Admin endpoint to force reseed database
+  // Setup authentication
+  setupAuth(app);
+
+  // Admin endpoint to force reseed database (must be after auth setup)
   app.post("/api/admin/reseed", requireAdmin, async (req, res) => {
     try {
       console.log("=== ADMIN TRIGGERED FORCE RESEED ===");
@@ -31,9 +34,6 @@ export async function registerRoutes(
       res.status(500).json({ error: "Failed to reseed database" });
     }
   });
-
-  // Setup authentication
-  setupAuth(app);
 
   // ============ AUTH ROUTES ============
   app.post("/api/auth/login", (req, res, next) => {

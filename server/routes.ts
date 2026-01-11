@@ -157,6 +157,32 @@ export async function registerRoutes(
     }
   });
 
+  app.patch("/api/clinicians/:id", requireAdmin, async (req, res) => {
+    try {
+      const clinician = await storage.getClinicianById(req.params.id);
+      if (!clinician) {
+        return res.status(404).json({ error: "Clinician not found" });
+      }
+      const updated = await storage.updateClinician(req.params.id, req.body);
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update clinician" });
+    }
+  });
+
+  app.delete("/api/clinicians/:id", requireAdmin, async (req, res) => {
+    try {
+      const clinician = await storage.getClinicianById(req.params.id);
+      if (!clinician) {
+        return res.status(404).json({ error: "Clinician not found" });
+      }
+      await storage.deleteClinician(req.params.id);
+      res.json({ success: true, message: "Clinician permanently deleted" });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete clinician" });
+    }
+  });
+
   // ============ AVAILABILITY / TIME SLOTS ============
   app.get("/api/timeslots/:clinicianId", requireAuth, async (req, res) => {
     try {

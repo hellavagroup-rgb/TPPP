@@ -26,6 +26,7 @@ export interface IStorage {
   getClinicianByUserId(userId: string): Promise<Clinician | undefined>;
   createClinician(clinician: InsertClinician): Promise<Clinician>;
   updateClinician(id: string, updates: Partial<InsertClinician>): Promise<Clinician | undefined>;
+  deleteClinician(id: string): Promise<void>;
   
   // ============ TIME SLOTS ============
   getTimeSlotsByClinicianId(clinicianId: string): Promise<TimeSlot[]>;
@@ -105,6 +106,7 @@ export class DatabaseStorage implements IStorage {
         nhsTrust: clinicians.nhsTrust,
         worksWithCouples: clinicians.worksWithCouples,
         tier: clinicians.tier,
+        isActive: clinicians.isActive,
         lastUpdatedAvailability: clinicians.lastUpdatedAvailability,
         createdAt: clinicians.createdAt,
         name: users.name,
@@ -136,6 +138,11 @@ export class DatabaseStorage implements IStorage {
       lastUpdatedAvailability: new Date()
     }).where(eq(clinicians.id, id)).returning();
     return clinician || undefined;
+  }
+
+  async deleteClinician(id: string): Promise<void> {
+    await db.delete(timeSlots).where(eq(timeSlots.clinicianId, id));
+    await db.delete(clinicians).where(eq(clinicians.id, id));
   }
 
   // ============ TIME SLOTS ============

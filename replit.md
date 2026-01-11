@@ -90,6 +90,17 @@ Core entities:
 - TypeScript for type checking
 - Tailwind CSS v4 for styling
 
+### Email Service
+- **Provider**: Resend (transactional email)
+- **Features**: Form invitations, password reset emails, task reminders
+- **Templates**: HTML/text email templates in `server/email.ts`
+- **Endpoints**:
+  - `POST /api/email/send-form` - Send form link to client
+  - `POST /api/email/task-reminder` - Send task reminder
+  - `POST /api/auth/forgot-password` - Request password reset
+
 ### Environment Variables Required
 - `DATABASE_URL` - PostgreSQL connection string
 - `SESSION_SECRET` - Secret key for session encryption (defaults to insecure value in development)
+- `RESEND_API_KEY` - Resend API key for transactional emails
+- `FROM_EMAIL` (optional) - Sender email address (defaults to Resend sandbox)

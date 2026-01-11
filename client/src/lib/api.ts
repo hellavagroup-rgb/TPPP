@@ -156,3 +156,25 @@ export async function updateTask(id: string, updates: any) {
     body: JSON.stringify(updates),
   });
 }
+
+// ============ EMAIL API ============
+export async function sendFormToClient(clientId: string, formId: string) {
+  return fetchAPI("/api/email/send-form", {
+    method: "POST",
+    body: JSON.stringify({ clientId, formId }),
+  });
+}
+
+export async function sendTaskReminder(taskId: string, recipientEmail: string) {
+  return fetchAPI("/api/email/task-reminder", {
+    method: "POST",
+    body: JSON.stringify({ taskId, recipientEmail }),
+  });
+}
+
+export async function requestPasswordReset(email: string) {
+  return fetchAPI("/api/auth/forgot-password", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}

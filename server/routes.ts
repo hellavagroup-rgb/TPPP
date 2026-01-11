@@ -8,6 +8,7 @@ import {
   insertFormTemplateSchema, insertTaskSchema, insertUserSchema 
 } from "@shared/schema";
 import { z } from "zod";
+import { sendEmail, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail } from "./email";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -321,6 +322,132 @@ export async function registerRoutes(
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "Failed to update task" });
+    }
+  });
+
+  // ============ EMAIL ROUTES ============
+  
+  // Send form to client via email
+  app.post("/api/email/send-form", requireAdmin, async (req, res) => {
+    try {
+      const { clientId, formId } = req.body;
+      
+      if (!clientId || !formId) {
+        return res.status(400).json({ error: "Missing clientId or formId" });
+      }
+
+      // Get client and form details
+      const client = await storage.getClientById(clientId);
+      if (!client) {
+        return res.status(404).json({ error: "Client not found" });
+      }
+
+      const form = await storage.getFormTemplateById(formId);
+      if (!form) {
+        return res.status(404).json({ error: "Form not found" });
+      }
+
+      // Generate form URL - use client's displayId for security
+      const baseUrl = process.env.REPL_SLUG 
+        ? `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`
+        : 'http://localhost:5000';
+      const formUrl = `${baseUrl}/fill/${client.id}/${formId}`;
+
+      // Generate and send email
+      const emailOptions = generateFormInviteEmail(client.displayId, form.title, formUrl);
+      emailOptions.to = client.email;
+
+      const result = await sendEmail(emailOptions);
+      
+      if (!result.success) {
+        return res.status(500).json({ error: result.error || "Failed to send email" });
+      }
+
+      // Update client status to "Forms Sent"
+      await storage.updateClient(clientId, { status: "Forms Sent" });
+
+      res.json({ success: true, message: "Form sent successfully" });
+    } catch (error) {
+      console.error("Send form email error:", error);
+      res.status(500).json({ error: "Failed to send form email" });
+    }
+  });
+
+  // Send task reminder email
+  app.post("/api/email/task-reminder", requireAdmin, async (req, res) => {
+    try {
+      const { taskId, recipientEmail } = req.body;
+      
+      if (!taskId || !recipientEmail) {
+        return res.status(400).json({ error: "Missing taskId or recipientEmail" });
+      }
+
+      const task = await storage.getTaskById(taskId);
+      if (!task) {
+        return res.status(404).json({ error: "Task not found" });
+      }
+
+      const emailOptions = generateTaskReminderEmail(
+        task.assignee,
+        task.title,
+        task.description || '',
+        task.dueDate instanceof Date ? task.dueDate.toLocaleDateString() : task.dueDate
+      );
+      emailOptions.to = recipientEmail;
+
+      const result = await sendEmail(emailOptions);
+      
+      if (!result.success) {
+        return res.status(500).json({ error: result.error || "Failed to send reminder" });
+      }
+
+      res.json({ success: true, message: "Reminder sent successfully" });
+    } catch (error) {
+      console.error("Send task reminder error:", error);
+      res.status(500).json({ error: "Failed to send task reminder" });
+    }
+  });
+
+  // Request password reset
+  app.post("/api/auth/forgot-password", async (req, res) => {
+    try {
+      const { email } = req.body;
+      
+      if (!email) {
+        return res.status(400).json({ error: "Email is required" });
+      }
+
+      const user = await storage.getUserByEmail(email.toLowerCase());
+      
+      // Always return success to prevent email enumeration
+      if (!user) {
+        return res.json({ success: true, message: "If the email exists, a reset link will be sent" });
+      }
+
+      // Generate reset token (in production, store this with expiry)
+      const resetToken = require('crypto').randomBytes(32).toString('hex');
+      
+      // For now, we'll log the token - in production, store it in DB with expiry
+      console.log(`Password reset token for ${email}: ${resetToken}`);
+
+      const baseUrl = process.env.REPL_SLUG 
+        ? `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`
+        : 'http://localhost:5000';
+      const resetUrl = `${baseUrl}/reset-password?token=${resetToken}`;
+
+      const emailOptions = generatePasswordResetEmail(user.name, resetUrl);
+      emailOptions.to = user.email;
+
+      const result = await sendEmail(emailOptions);
+      
+      if (!result.success) {
+        console.error("Password reset email failed:", result.error);
+      }
+
+      res.json({ success: true, message: "If the email exists, a reset link will be sent" });
+    } catch (error) {
+      console.error("Forgot password error:", error);
+      res.status(500).json({ error: "Failed to process request" });
     }
   });
 

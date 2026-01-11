@@ -47,3 +47,8 @@ waitForPort = 5000
 [agent]
 mockupState = "FULLSTACK"
 integrations = ["javascript_database:1.0.0"]
+
+[userenv]
+
+[userenv.shared]
+FROM_EMAIL = "The Perinatal Psychology Practice <noreply@notifications.unboundly.io>"

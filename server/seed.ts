@@ -65,14 +65,15 @@ const seedData = {
 
 export async function seedDatabaseIfEmpty() {
   try {
-    const [existingAdmin] = await db.select().from(users).where(eq(users.email, "admin@perinatalpsych.com"));
+    // Check if clinicians exist (more reliable than just checking admin)
+    const existingClinicians = await db.select().from(clinicians);
     
-    if (existingAdmin) {
-      console.log("Database already seeded, skipping...");
+    if (existingClinicians.length >= 20) {
+      console.log("Database already seeded with clinicians, skipping...");
       return;
     }
 
-    console.log("Database is empty, seeding with initial data...");
+    console.log("Seeding database with initial data...");
 
     for (const user of seedData.users) {
       await db.insert(users).values(user).onConflictDoNothing();

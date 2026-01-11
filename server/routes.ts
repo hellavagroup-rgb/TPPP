@@ -8,7 +8,7 @@ import {
   insertFormTemplateSchema, insertTaskSchema, insertUserSchema 
 } from "@shared/schema";
 import { z } from "zod";
-import { sendEmail, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail } from "./email";
+import { sendEmail, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail } from "./email";
 import { forceReseedDatabase } from "./seed";
 
 export async function registerRoutes(
@@ -423,6 +423,61 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Send task reminder error:", error);
       res.status(500).json({ error: "Failed to send task reminder" });
+    }
+  });
+
+  // Send availability reminders to all clinicians
+  app.post("/api/email/availability-reminders", requireAdmin, async (req, res) => {
+    try {
+      const clinicians = await storage.getAllClinicians();
+      
+      // Get the login URL
+      const baseUrl = req.headers.host?.includes('replit.app')
+        ? `https://${req.headers.host}`
+        : 'http://localhost:5000';
+      const loginUrl = `${baseUrl}/login`;
+
+      let sentCount = 0;
+      let failedCount = 0;
+      const errors: string[] = [];
+
+      for (const clinician of clinicians) {
+        // Get the user associated with this clinician to get their email
+        if (!clinician.userId) {
+          failedCount++;
+          errors.push(`No userId for clinician ${clinician.id}`);
+          continue;
+        }
+        const user = await storage.getUser(clinician.userId);
+        if (!user || !user.email) {
+          failedCount++;
+          errors.push(`No email for clinician ${clinician.id}`);
+          continue;
+        }
+
+        const emailOptions = generateAvailabilityReminderEmail(user.name, loginUrl);
+        emailOptions.to = user.email;
+
+        const result = await sendEmail(emailOptions);
+        
+        if (result.success) {
+          sentCount++;
+        } else {
+          failedCount++;
+          errors.push(`Failed to send to ${user.email}: ${result.error}`);
+        }
+      }
+
+      res.json({ 
+        success: true, 
+        message: `Sent ${sentCount} reminders, ${failedCount} failed`,
+        sentCount,
+        failedCount,
+        errors: errors.length > 0 ? errors : undefined
+      });
+    } catch (error) {
+      console.error("Send availability reminders error:", error);
+      res.status(500).json({ error: "Failed to send availability reminders" });
     }
   });
 

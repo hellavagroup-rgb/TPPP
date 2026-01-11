@@ -175,3 +175,49 @@ export function generateTaskReminderEmail(assigneeName: string, taskTitle: strin
     text: `Hello ${assigneeName},\n\nThis is a reminder about an upcoming task:\n\nTask: ${taskTitle}\nDescription: ${taskDescription}\nDue: ${dueDate}\n\nPlease log in to complete this task.\n\nThe Perinatal Psychology Practice`,
   };
 }
+
+export function generateAvailabilityReminderEmail(clinicianName: string, loginUrl: string): EmailOptions {
+  return {
+    to: '',
+    subject: `Please Update Your Availability - The Perinatal Psychology Practice`,
+    html: `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8">
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+            .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+            .content { background: #f8f9fa; padding: 30px; border-radius: 0 0 8px 8px; }
+            .button { display: inline-block; background: #667eea; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 20px 0; }
+            .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1>Availability Update Request</h1>
+            </div>
+            <div class="content">
+              <p>Hello ${clinicianName},</p>
+              <p>This is a friendly reminder to update your availability in the practice management system.</p>
+              <p>Keeping your availability current helps us efficiently allocate new clients and ensures accurate capacity planning.</p>
+              <p style="text-align: center;">
+                <a href="${loginUrl}" class="button">Update My Availability</a>
+              </p>
+              <p>If the button doesn't work, copy and paste this link into your browser:</p>
+              <p style="word-break: break-all; font-size: 12px; color: #666;">${loginUrl}</p>
+              <p>Thank you for your cooperation!</p>
+              <p>Best regards,<br>The Perinatal Psychology Practice</p>
+            </div>
+            <div class="footer">
+              <p>The Perinatal Psychology Practice</p>
+            </div>
+          </div>
+        </body>
+      </html>
+    `,
+    text: `Hello ${clinicianName},\n\nThis is a friendly reminder to update your availability in the practice management system.\n\nPlease log in at: ${loginUrl}\n\nKeeping your availability current helps us efficiently allocate new clients.\n\nThank you!\nThe Perinatal Psychology Practice`,
+  };
+}

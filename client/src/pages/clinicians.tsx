@@ -84,8 +84,17 @@ export default function Clinicians() {
 
   const handleSave = () => {
     if (!selectedClinician) return;
+    
+    // Get email value from the form
+    const emailInput = document.getElementById('clinician-email') as HTMLInputElement;
+    const email = emailInput?.value;
+    
+    updateClinicianMutation.mutate({
+      id: selectedClinician.id,
+      updates: { email }
+    });
+    
     setIsEditOpen(false);
-    toast({ title: "Clinician Updated", description: "Profile has been saved." });
   };
 
   const handleConfirmDelete = () => {
@@ -281,18 +290,29 @@ export default function Clinicians() {
                   <Input defaultValue={selectedClinician.name} />
                 </div>
                 <div className="space-y-2">
-                  <Label>Tier</Label>
-                  <Select defaultValue={selectedClinician.tier || "Associate"}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="Associate">Associate</SelectItem>
-                      <SelectItem value="Senior">Senior</SelectItem>
-                      <SelectItem value="Director">Director</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Label>Email Address</Label>
+                  <Input 
+                    type="email"
+                    id="clinician-email"
+                    defaultValue={(selectedClinician as any).email || ""} 
+                    placeholder="clinician@example.com"
+                  />
+                  <p className="text-[10px] text-muted-foreground">Used for login and reminders</p>
                 </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Tier</Label>
+                <Select defaultValue={selectedClinician.tier || "Associate"}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Associate">Associate</SelectItem>
+                    <SelectItem value="Senior">Senior</SelectItem>
+                    <SelectItem value="Director">Director</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
 
               <div className="space-y-2">

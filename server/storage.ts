@@ -110,6 +110,7 @@ export class DatabaseStorage implements IStorage {
         lastUpdatedAvailability: clinicians.lastUpdatedAvailability,
         createdAt: clinicians.createdAt,
         name: users.name,
+        email: users.email,
       })
       .from(clinicians)
       .leftJoin(users, eq(clinicians.userId, users.id))

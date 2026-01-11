@@ -169,7 +169,14 @@ export async function registerRoutes(
       if (!clinician) {
         return res.status(404).json({ error: "Clinician not found" });
       }
-      const updated = await storage.updateClinician(req.params.id, req.body);
+
+      // Handle email update separately (stored on user record)
+      const { email, ...clinicianUpdates } = req.body;
+      if (email && clinician.userId) {
+        await storage.updateUser(clinician.userId, { email });
+      }
+
+      const updated = await storage.updateClinician(req.params.id, clinicianUpdates);
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "Failed to update clinician" });

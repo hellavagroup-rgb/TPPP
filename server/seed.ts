@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { users, clinicians, formTemplates } from "../shared/schema";
+import { users, clinicians, formTemplates, clients, tasks, formSubmissions, timeSlots, auditLogs } from "../shared/schema";
 import { eq } from "drizzle-orm";
 
 const seedData = {
@@ -65,16 +65,29 @@ const seedData = {
 
 export async function seedDatabaseIfEmpty() {
   try {
-    // Check if clinicians exist (more reliable than just checking admin)
+    // Check if we have all 20 clinicians with correct IDs
     const existingClinicians = await db.select().from(clinicians);
+    const expectedClinicianIds = new Set(seedData.clinicians.map(c => c.id));
+    const hasAllClinicians = existingClinicians.length >= 20 && 
+      existingClinicians.every(c => expectedClinicianIds.has(c.id));
     
-    if (existingClinicians.length >= 20) {
-      console.log("Database already seeded with clinicians, skipping...");
+    if (hasAllClinicians) {
+      console.log("Database already seeded with all clinicians, skipping...");
       return;
     }
 
     console.log("Seeding database with initial data...");
 
+    // Clear any stale test/analytics data first
+    console.log("Clearing stale data...");
+    await db.delete(formSubmissions);
+    await db.delete(timeSlots);
+    await db.delete(tasks);
+    await db.delete(auditLogs);
+    await db.delete(clients);
+    console.log("Stale data cleared");
+
+    // Insert core data using upserts
     for (const user of seedData.users) {
       await db.insert(users).values(user).onConflictDoNothing();
     }

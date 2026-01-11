@@ -20,23 +20,20 @@ export async function registerRoutes(
     res.status(200).json({ status: "ok" });
   });
 
-  // One-time setup endpoint - only works when database needs seeding
-  app.post("/api/setup/init", async (_req, res) => {
+  // Diagnostic endpoint to check database state
+  app.get("/api/debug/status", async (_req, res) => {
     try {
       const clinicians = await storage.getAllClinicians();
       const forms = await storage.getAllFormTemplates();
-      
-      // Only allow if database is missing essential data
-      if (clinicians.length >= 20 && forms.length >= 1) {
-        return res.status(403).json({ error: "Database already initialized" });
-      }
-      
-      console.log("=== ONE-TIME SETUP TRIGGERED ===");
-      await forceReseedDatabase();
-      res.json({ success: true, message: "Database initialized successfully" });
+      const allClients = await storage.getAllClients();
+      res.json({ 
+        clinicianCount: clinicians.length, 
+        formCount: forms.length,
+        clientCount: allClients.length,
+        message: "Database status check"
+      });
     } catch (error) {
-      console.error("Setup failed:", error);
-      res.status(500).json({ error: "Failed to initialize database" });
+      res.status(500).json({ error: "Failed to check database" });
     }
   });
 

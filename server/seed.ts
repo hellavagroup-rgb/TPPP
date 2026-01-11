@@ -65,16 +65,28 @@ const seedData = {
 
 export async function seedDatabaseIfEmpty() {
   try {
+    console.log("=== SEED CHECK STARTING ===");
+    
     // Check if we have all 20 clinicians with correct IDs
     const existingClinicians = await db.select().from(clinicians);
+    const existingClients = await db.select().from(clients);
+    const existingForms = await db.select().from(formTemplates);
+    
+    console.log(`Found ${existingClinicians.length} clinicians, ${existingClients.length} clients, ${existingForms.length} forms`);
+    
     const expectedClinicianIds = new Set(seedData.clinicians.map(c => c.id));
     const hasAllClinicians = existingClinicians.length >= 20 && 
       existingClinicians.every(c => expectedClinicianIds.has(c.id));
     
-    if (hasAllClinicians) {
-      console.log("Database already seeded with all clinicians, skipping...");
+    // If there are old clients (test data) OR missing clinicians/forms, we need to reseed
+    const needsReseed = existingClients.length > 0 || !hasAllClinicians || existingForms.length === 0;
+    
+    if (!needsReseed) {
+      console.log("Database already properly seeded, skipping...");
       return;
     }
+    
+    console.log(`Needs reseed: clients=${existingClients.length}, hasAllClinicians=${hasAllClinicians}, forms=${existingForms.length}`);
 
     console.log("Seeding database with initial data...");
 
@@ -107,4 +119,38 @@ export async function seedDatabaseIfEmpty() {
   } catch (error) {
     console.error("Error seeding database:", error);
   }
+}
+
+export async function forceReseedDatabase() {
+  console.log("=== FORCE RESEED STARTING ===");
+  
+  // Clear ALL existing data
+  console.log("Clearing all existing data...");
+  await db.delete(formSubmissions);
+  await db.delete(timeSlots);
+  await db.delete(tasks);
+  await db.delete(auditLogs);
+  await db.delete(clients);
+  await db.delete(clinicians);
+  await db.delete(formTemplates);
+  // Don't delete users - keep the admin account
+  console.log("All data cleared (except users)");
+
+  // Insert fresh seed data
+  for (const user of seedData.users) {
+    await db.insert(users).values(user).onConflictDoNothing();
+  }
+  console.log(`Inserted ${seedData.users.length} users`);
+
+  for (const clinician of seedData.clinicians) {
+    await db.insert(clinicians).values(clinician as any).onConflictDoNothing();
+  }
+  console.log(`Inserted ${seedData.clinicians.length} clinicians`);
+
+  for (const form of seedData.formTemplates) {
+    await db.insert(formTemplates).values(form).onConflictDoNothing();
+  }
+  console.log(`Inserted ${seedData.formTemplates.length} form templates`);
+
+  console.log("=== FORCE RESEED COMPLETED ===");
 }

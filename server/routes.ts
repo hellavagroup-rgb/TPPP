@@ -9,6 +9,7 @@ import {
 } from "@shared/schema";
 import { z } from "zod";
 import { sendEmail, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail } from "./email";
+import { forceReseedDatabase } from "./seed";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -17,6 +18,18 @@ export async function registerRoutes(
   // Health check endpoint for deployment
   app.get("/api/health", (_req, res) => {
     res.status(200).json({ status: "ok" });
+  });
+
+  // Admin endpoint to force reseed database
+  app.post("/api/admin/reseed", requireAdmin, async (req, res) => {
+    try {
+      console.log("=== ADMIN TRIGGERED FORCE RESEED ===");
+      await forceReseedDatabase();
+      res.json({ success: true, message: "Database reseeded successfully" });
+    } catch (error) {
+      console.error("Force reseed failed:", error);
+      res.status(500).json({ error: "Failed to reseed database" });
+    }
   });
 
   // Setup authentication

@@ -37,7 +37,7 @@ export async function sendEmail(options: EmailOptions): Promise<{ success: boole
 
 // ============ EMAIL TEMPLATES ============
 
-export function generateFormInviteEmail(clientDisplayId: string, formName: string, formUrl: string): EmailOptions {
+export function generateFormInviteEmail(formName: string, formUrl: string): EmailOptions {
   return {
     to: '', // Will be set by caller
     subject: `Please Complete: ${formName} - The Perinatal Psychology Practice`,
@@ -61,7 +61,7 @@ export function generateFormInviteEmail(clientDisplayId: string, formName: strin
               <h1>The Perinatal Psychology Practice</h1>
             </div>
             <div class="content">
-              <p>Dear Client (Ref: ${clientDisplayId}),</p>
+              <p>Dear Client,</p>
               <p>We have a form for you to complete as part of your intake process:</p>
               <p><strong>${formName}</strong></p>
               <p>Please click the button below to access and complete the form:</p>
@@ -80,7 +80,7 @@ export function generateFormInviteEmail(clientDisplayId: string, formName: strin
         </body>
       </html>
     `,
-    text: `Dear Client (Ref: ${clientDisplayId}),\n\nPlease complete the following form: ${formName}\n\nAccess it here: ${formUrl}\n\nBest regards,\nThe Perinatal Psychology Practice Team`,
+    text: `Dear Client,\n\nPlease complete the following form: ${formName}\n\nAccess it here: ${formUrl}\n\nBest regards,\nThe Perinatal Psychology Practice Team`,
   };
 }
 

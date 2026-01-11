@@ -354,7 +354,7 @@ export async function registerRoutes(
       const formUrl = `${baseUrl}/fill/${client.id}/${formId}`;
 
       // Generate and send email
-      const emailOptions = generateFormInviteEmail(client.displayId, form.title, formUrl);
+      const emailOptions = generateFormInviteEmail(form.title, formUrl);
       emailOptions.to = client.email;
 
       const result = await sendEmail(emailOptions);

@@ -5,6 +5,11 @@ import { createServer } from "http";
 import { seedDatabaseIfEmpty } from "./seed";
 
 const app = express();
+
+// Trust proxy for production (Replit runs behind HTTPS proxy)
+// This is required for secure cookies to work properly
+app.set("trust proxy", 1);
+
 const httpServer = createServer(app);
 
 declare module "http" {

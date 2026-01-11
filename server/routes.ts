@@ -20,23 +20,6 @@ export async function registerRoutes(
     res.status(200).json({ status: "ok" });
   });
 
-  // Diagnostic endpoint to check database state
-  app.get("/api/debug/status", async (_req, res) => {
-    try {
-      const clinicians = await storage.getAllClinicians();
-      const forms = await storage.getAllFormTemplates();
-      const allClients = await storage.getAllClients();
-      res.json({ 
-        clinicianCount: clinicians.length, 
-        formCount: forms.length,
-        clientCount: allClients.length,
-        message: "Database status check"
-      });
-    } catch (error) {
-      res.status(500).json({ error: "Failed to check database" });
-    }
-  });
-
   // Setup authentication
   setupAuth(app);
 

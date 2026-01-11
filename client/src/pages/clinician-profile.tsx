@@ -67,6 +67,7 @@ export default function ClinicianProfile() {
       insurers: formData.insurers,
       maxNewClients: formData.maxNewClients,
       worksWithCouples: formData.worksWithCouples,
+      email: formData.email,
     });
   };
 
@@ -197,15 +198,26 @@ export default function ClinicianProfile() {
                 </div>
               </div>
 
+              <div className="space-y-2">
+                <Label>Email Address</Label>
+                <Input 
+                  type="email"
+                  value={formData.email || user?.email || ""} 
+                  onChange={(e) => setFormData({...formData, email: e.target.value})}
+                  placeholder="your.email@example.com"
+                />
+                <p className="text-xs text-muted-foreground">Used for login and receiving availability reminders.</p>
+              </div>
+
               <div className="grid md:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label>Max New Clients (Monthly)</Label>
+                  <Label>Max New Clients</Label>
                   <Input 
                     type="number" 
                     value={formData.maxNewClients || 0} 
                     onChange={(e) => setFormData({...formData, maxNewClients: parseInt(e.target.value) || 0})}
                   />
-                  <p className="text-xs text-muted-foreground">Stop allocating after this many new clients per month.</p>
+                  <p className="text-xs text-muted-foreground">Stop allocating after this many new clients.</p>
                 </div>
                 <div className="space-y-2 flex flex-col justify-center">
                   <div className="flex items-center space-x-2">

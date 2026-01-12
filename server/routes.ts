@@ -167,7 +167,7 @@ export async function registerRoutes(
   // Create clinician with associated user account
   app.post("/api/clinicians/with-user", requireAdmin, async (req, res) => {
     try {
-      const { name, email, tier, bio, location, nhsTrust, capacity, maxNewClients, worksWithCouples, insurers, contactMethods } = req.body;
+      const { name, email, tier, bio, location, nhsTrust, capacity, maxNewClients, worksWithCouples, insurers, contactMethods, specialties } = req.body;
       
       if (!name || !email) {
         return res.status(400).json({ error: "Name and email are required" });
@@ -204,6 +204,7 @@ export async function registerRoutes(
         worksWithCouples: worksWithCouples ?? false,
         insurers: insurers || [],
         contactMethods: contactMethods || [],
+        specialties: specialties || [],
       });
 
       // Send welcome email with credentials

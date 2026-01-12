@@ -34,7 +34,7 @@ export default function Clinicians() {
   const [newClinician, setNewClinician] = useState({
     name: "",
     email: "",
-    tier: "Associate" as "Associate" | "Senior" | "Director",
+    tier: "Mid" as "High" | "Mid" | "Low",
     bio: "",
     location: "",
     nhsTrust: "",
@@ -94,7 +94,7 @@ export default function Clinicians() {
       toast({ title: "Clinician Added", description: emailMessage });
       setIsAddOpen(false);
       setNewClinician({
-        name: "", email: "", tier: "Associate", bio: "", location: "", nhsTrust: "",
+        name: "", email: "", tier: "Mid", bio: "", location: "", nhsTrust: "",
         capacity: 15, maxNewClients: 3, worksWithCouples: false, insurers: [], contactMethods: [],
       });
     },
@@ -106,7 +106,8 @@ export default function Clinicians() {
   const handleEditClick = (clinician: ClinicianWithName) => {
     setSelectedClinician(clinician);
     setEditedClinician({
-      tier: clinician.tier,
+      name: clinician.name,
+      tier: clinician.tier || "Mid",
       bio: clinician.bio || "",
       location: clinician.location || "",
       nhsTrust: clinician.nhsTrust || "",
@@ -136,6 +137,7 @@ export default function Clinicians() {
     if (!selectedClinician) return;
     
     const updates: Record<string, unknown> = {};
+    if (editedClinician.name !== undefined) updates.name = editedClinician.name;
     if (editedClinician.tier !== undefined) updates.tier = editedClinician.tier;
     if (editedClinician.bio !== undefined) updates.bio = editedClinician.bio;
     if (editedClinician.location !== undefined) updates.location = editedClinician.location;
@@ -202,7 +204,7 @@ export default function Clinicians() {
                     <CardTitle className="text-lg font-serif">{clinician.name}</CardTitle>
                     <div className="flex items-center gap-2 mt-1">
                       <Badge variant="outline" className="text-[10px] font-normal border-slate-200">
-                        {clinician.tier || "Associate"}
+                        {clinician.tier || "Mid"}
                       </Badge>
                       {clinician.worksWithCouples && (
                         <Badge variant="secondary" className="text-[10px] font-normal bg-indigo-50 text-indigo-700 hover:bg-indigo-100">
@@ -358,7 +360,11 @@ export default function Clinicians() {
               <div className="grid md:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Full Name</Label>
-                  <Input value={selectedClinician.name} disabled className="bg-slate-50" />
+                  <Input 
+                    value={editedClinician.name || selectedClinician.name} 
+                    onChange={(e) => setEditedClinician({...editedClinician, name: e.target.value})}
+                    placeholder="e.g. Dr Smith, Jane"
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Email Address</Label>
@@ -374,14 +380,14 @@ export default function Clinicians() {
 
               <div className="space-y-2">
                 <Label>Tier</Label>
-                <Select value={editedClinician.tier || "Associate"} onValueChange={(v) => setEditedClinician({...editedClinician, tier: v as any})}>
+                <Select value={editedClinician.tier || "Mid"} onValueChange={(v) => setEditedClinician({...editedClinician, tier: v as any})}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="Associate">Associate</SelectItem>
-                    <SelectItem value="Senior">Senior</SelectItem>
-                    <SelectItem value="Director">Director</SelectItem>
+                    <SelectItem value="High">High</SelectItem>
+                    <SelectItem value="Mid">Mid</SelectItem>
+                    <SelectItem value="Low">Low</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -572,14 +578,14 @@ export default function Clinicians() {
 
             <div className="space-y-2">
               <Label>Tier</Label>
-              <Select value={newClinician.tier} onValueChange={(v: "Associate" | "Senior" | "Director") => setNewClinician({...newClinician, tier: v})}>
+              <Select value={newClinician.tier} onValueChange={(v: "High" | "Mid" | "Low") => setNewClinician({...newClinician, tier: v})}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="Associate">Associate</SelectItem>
-                  <SelectItem value="Senior">Senior</SelectItem>
-                  <SelectItem value="Director">Director</SelectItem>
+                  <SelectItem value="High">High</SelectItem>
+                  <SelectItem value="Mid">Mid</SelectItem>
+                  <SelectItem value="Low">Low</SelectItem>
                 </SelectContent>
               </Select>
             </div>

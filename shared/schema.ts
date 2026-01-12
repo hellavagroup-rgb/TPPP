@@ -37,7 +37,7 @@ export const clinicians = pgTable("clinicians", {
   nhsTrust: text("nhs_trust"),
   worksWithCouples: boolean("works_with_couples").default(false),
   allocateForBupa: boolean("allocate_for_bupa").default(false),
-  tier: text("tier", { enum: ["Associate", "Senior", "Director"] }),
+  tier: text("tier", { enum: ["High", "Mid", "Low"] }),
   isActive: boolean("is_active").default(true).notNull(),
   lastUpdatedAvailability: timestamp("last_updated_availability"),
   createdAt: timestamp("created_at").defaultNow().notNull(),

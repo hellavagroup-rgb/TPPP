@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
+import crypto from "crypto";
 import { storage } from "./storage";
 import { setupAuth, requireAuth, requireAdmin, requireClinician, hashPassword, auditLog } from "./auth";
 import passport from "passport";
@@ -178,8 +179,8 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Email already in use" });
       }
 
-      // Generate temporary password
-      const tempPassword = `Welcome${Math.random().toString(36).slice(-6)}!`;
+      // Generate cryptographically secure temporary password
+      const tempPassword = `Welcome${crypto.randomBytes(8).toString('base64url')}!`;
       const hashedPassword = await hashPassword(tempPassword);
 
       // Create user account
@@ -205,7 +206,28 @@ export async function registerRoutes(
         contactMethods: contactMethods || [],
       });
 
-      res.json({ clinician, temporaryPassword: tempPassword });
+      // Send welcome email with credentials
+      const emailResult = await sendEmail({
+        to: email,
+        subject: "Welcome to The Perinatal Psychology Practice",
+        html: `
+          <h1>Welcome to The Perinatal Psychology Practice</h1>
+          <p>Hello ${name},</p>
+          <p>Your clinician account has been created. Here are your login credentials:</p>
+          <p><strong>Email:</strong> ${email}</p>
+          <p><strong>Temporary Password:</strong> ${tempPassword}</p>
+          <p>Please log in and change your password as soon as possible.</p>
+          <p>Best regards,<br>The Perinatal Psychology Practice Team</p>
+        `,
+        text: `Welcome to The Perinatal Psychology Practice\n\nHello ${name},\n\nYour clinician account has been created.\n\nEmail: ${email}\nTemporary Password: ${tempPassword}\n\nPlease log in and change your password as soon as possible.`,
+      });
+
+      if (!emailResult.success) {
+        console.error("Failed to send welcome email:", emailResult.error);
+      }
+
+      // Return clinician without exposing password
+      res.json({ clinician, emailSent: emailResult.success });
     } catch (error) {
       console.error("Failed to create clinician with user:", error);
       res.status(500).json({ error: "Failed to create clinician" });

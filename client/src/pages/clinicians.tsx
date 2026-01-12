@@ -19,13 +19,14 @@ import { apiRequest } from "@/lib/queryClient";
 const INSURERS = ["Aviva", "Axa", "Bupa", "Cigna", "Vitality", "WPA", "Other"];
 const CONTACT_METHODS = ["Email", "Text", "WhatsApp"];
 
-type ClinicianWithName = Clinician & { name: string };
+type ClinicianWithName = Clinician & { name: string; email?: string | null };
 
 export default function Clinicians() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   
   const [selectedClinician, setSelectedClinician] = useState<ClinicianWithName | null>(null);
+  const [editedClinician, setEditedClinician] = useState<Partial<ClinicianWithName & { email?: string }>>({});
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -49,7 +50,7 @@ export default function Clinicians() {
   });
 
   const updateClinicianMutation = useMutation({
-    mutationFn: async ({ id, updates }: { id: string; updates: Partial<Clinician> }) => {
+    mutationFn: async ({ id, updates }: { id: string; updates: Partial<Clinician> & { email?: string } }) => {
       const response = await apiRequest("PATCH", `/api/clinicians/${id}`, updates);
       return response.json();
     },
@@ -84,9 +85,12 @@ export default function Clinicians() {
       const response = await apiRequest("POST", "/api/clinicians/with-user", data);
       return response.json();
     },
-    onSuccess: () => {
+    onSuccess: (data: { clinician: Clinician; emailSent: boolean }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/clinicians"] });
-      toast({ title: "Clinician Added", description: "New clinician has been created successfully." });
+      const emailMessage = data.emailSent 
+        ? "Login credentials have been sent to their email." 
+        : "Account created but email could not be sent.";
+      toast({ title: "Clinician Added", description: emailMessage });
       setIsAddOpen(false);
       setNewClinician({
         name: "", email: "", tier: "Associate", bio: "", location: "", nhsTrust: "",
@@ -100,6 +104,18 @@ export default function Clinicians() {
 
   const handleEditClick = (clinician: ClinicianWithName) => {
     setSelectedClinician(clinician);
+    setEditedClinician({
+      tier: clinician.tier,
+      bio: clinician.bio || "",
+      location: clinician.location || "",
+      nhsTrust: clinician.nhsTrust || "",
+      maxNewClients: clinician.maxNewClients ?? 0,
+      worksWithCouples: clinician.worksWithCouples || false,
+      insurers: clinician.insurers || [],
+      contactMethods: clinician.contactMethods || [],
+      isActive: clinician.isActive !== false,
+      email: clinician.email || "",
+    });
     setIsEditOpen(true);
   };
 
@@ -118,16 +134,22 @@ export default function Clinicians() {
   const handleSave = () => {
     if (!selectedClinician) return;
     
-    // Get email value from the form
-    const emailInput = document.getElementById('clinician-email') as HTMLInputElement;
-    const email = emailInput?.value;
+    const updates: Record<string, unknown> = {};
+    if (editedClinician.tier !== undefined) updates.tier = editedClinician.tier;
+    if (editedClinician.bio !== undefined) updates.bio = editedClinician.bio;
+    if (editedClinician.location !== undefined) updates.location = editedClinician.location;
+    if (editedClinician.nhsTrust !== undefined) updates.nhsTrust = editedClinician.nhsTrust;
+    if (editedClinician.maxNewClients !== undefined) updates.maxNewClients = editedClinician.maxNewClients;
+    if (editedClinician.worksWithCouples !== undefined) updates.worksWithCouples = editedClinician.worksWithCouples;
+    if (editedClinician.insurers !== undefined) updates.insurers = editedClinician.insurers;
+    if (editedClinician.contactMethods !== undefined) updates.contactMethods = editedClinician.contactMethods;
+    if (editedClinician.isActive !== undefined) updates.isActive = editedClinician.isActive;
+    if (editedClinician.email !== undefined) updates.email = editedClinician.email;
     
     updateClinicianMutation.mutate({
       id: selectedClinician.id,
-      updates: { email }
+      updates: updates as Partial<Clinician> & { email?: string }
     });
-    
-    setIsEditOpen(false);
   };
 
   const handleConfirmDelete = () => {
@@ -334,14 +356,14 @@ export default function Clinicians() {
               <div className="grid md:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Full Name</Label>
-                  <Input defaultValue={selectedClinician.name} />
+                  <Input value={selectedClinician.name} disabled className="bg-slate-50" />
                 </div>
                 <div className="space-y-2">
                   <Label>Email Address</Label>
                   <Input 
                     type="email"
-                    id="clinician-email"
-                    defaultValue={(selectedClinician as any).email || ""} 
+                    value={editedClinician.email || ""}
+                    onChange={(e) => setEditedClinician({...editedClinician, email: e.target.value})}
                     placeholder="clinician@example.com"
                   />
                   <p className="text-[10px] text-muted-foreground">Used for login and reminders</p>
@@ -350,7 +372,7 @@ export default function Clinicians() {
 
               <div className="space-y-2">
                 <Label>Tier</Label>
-                <Select defaultValue={selectedClinician.tier || "Associate"}>
+                <Select value={editedClinician.tier || "Associate"} onValueChange={(v) => setEditedClinician({...editedClinician, tier: v as any})}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -364,17 +386,29 @@ export default function Clinicians() {
 
               <div className="space-y-2">
                 <Label>Bio</Label>
-                <Textarea className="min-h-[100px]" defaultValue={selectedClinician.bio || ""} />
+                <Textarea 
+                  className="min-h-[100px]" 
+                  value={editedClinician.bio || ""} 
+                  onChange={(e) => setEditedClinician({...editedClinician, bio: e.target.value})}
+                />
               </div>
 
               <div className="grid md:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Geographical Location</Label>
-                  <Input defaultValue={selectedClinician.location || ""} placeholder="e.g. North London" />
+                  <Input 
+                    value={editedClinician.location || ""} 
+                    onChange={(e) => setEditedClinician({...editedClinician, location: e.target.value})}
+                    placeholder="e.g. North London" 
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>NHS Trust</Label>
-                  <Input defaultValue={selectedClinician.nhsTrust || ""} placeholder="e.g. Tavistock" />
+                  <Input 
+                    value={editedClinician.nhsTrust || ""} 
+                    onChange={(e) => setEditedClinician({...editedClinician, nhsTrust: e.target.value})}
+                    placeholder="e.g. Tavistock" 
+                  />
                 </div>
               </div>
 
@@ -383,7 +417,17 @@ export default function Clinicians() {
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 border p-3 rounded-md bg-slate-50/50">
                   {INSURERS.map(insurer => (
                     <div key={insurer} className="flex items-center space-x-2">
-                      <Checkbox id={`ins-${insurer}`} defaultChecked={selectedClinician.insurers?.includes(insurer)} />
+                      <Checkbox 
+                        id={`ins-${insurer}`} 
+                        checked={editedClinician.insurers?.includes(insurer) || false}
+                        onCheckedChange={(checked) => {
+                          const current = editedClinician.insurers || [];
+                          setEditedClinician({
+                            ...editedClinician, 
+                            insurers: checked ? [...current, insurer] : current.filter(i => i !== insurer)
+                          });
+                        }}
+                      />
                       <Label htmlFor={`ins-${insurer}`} className="font-normal cursor-pointer">{insurer}</Label>
                     </div>
                   ))}
@@ -395,7 +439,17 @@ export default function Clinicians() {
                 <div className="grid grid-cols-3 gap-2 border p-3 rounded-md bg-slate-50/50">
                   {CONTACT_METHODS.map(method => (
                     <div key={method} className="flex items-center space-x-2">
-                      <Checkbox id={`contact-${method}`} defaultChecked={selectedClinician.contactMethods?.includes(method)} />
+                      <Checkbox 
+                        id={`contact-${method}`} 
+                        checked={editedClinician.contactMethods?.includes(method) || false}
+                        onCheckedChange={(checked) => {
+                          const current = editedClinician.contactMethods || [];
+                          setEditedClinician({
+                            ...editedClinician, 
+                            contactMethods: checked ? [...current, method] : current.filter(m => m !== method)
+                          });
+                        }}
+                      />
                       <Label htmlFor={`contact-${method}`} className="font-normal cursor-pointer">{method}</Label>
                     </div>
                   ))}
@@ -408,19 +462,23 @@ export default function Clinicians() {
                     <Label>New Client Capacity</Label>
                     <span className="text-xs text-muted-foreground">Monthly Cap</span>
                   </div>
-                  <Input type="number" defaultValue={selectedClinician.maxNewClients || 0} />
+                  <Input 
+                    type="number" 
+                    value={editedClinician.maxNewClients ?? 0}
+                    onChange={(e) => setEditedClinician({...editedClinician, maxNewClients: parseInt(e.target.value) || 0})}
+                  />
                   <p className="text-[10px] text-muted-foreground pt-1">
                     Stop allocating after this many new clients.
                   </p>
                 </div>
                 <div className="space-y-2 border p-3 rounded-md flex flex-col justify-center">
                   <div className="flex items-center space-x-2">
-                    <Checkbox id="couples" defaultChecked={selectedClinician.worksWithCouples || false} />
+                    <Checkbox 
+                      id="couples" 
+                      checked={editedClinician.worksWithCouples || false}
+                      onCheckedChange={(checked) => setEditedClinician({...editedClinician, worksWithCouples: !!checked})}
+                    />
                     <Label htmlFor="couples" className="font-medium cursor-pointer">Works with Couples</Label>
-                  </div>
-                  <div className="flex items-center space-x-2 mt-3">
-                    <Checkbox id="bupa-prio" defaultChecked={selectedClinician.insurers?.includes("Bupa")} />
-                    <Label htmlFor="bupa-prio" className="font-medium cursor-pointer">Allocate for Bupa</Label>
                   </div>
                 </div>
               </div>
@@ -431,15 +489,10 @@ export default function Clinicians() {
                   <p className="text-xs text-muted-foreground">Inactive clinicians won't receive new client allocations.</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-sm text-muted-foreground">{selectedClinician.isActive !== false ? "Active" : "Inactive"}</span>
+                  <span className="text-sm text-muted-foreground">{editedClinician.isActive !== false ? "Active" : "Inactive"}</span>
                   <Switch 
-                    checked={selectedClinician.isActive !== false} 
-                    onCheckedChange={(checked) => {
-                      updateClinicianMutation.mutate({
-                        id: selectedClinician.id,
-                        updates: { isActive: checked }
-                      });
-                    }}
+                    checked={editedClinician.isActive !== false} 
+                    onCheckedChange={(checked) => setEditedClinician({...editedClinician, isActive: checked})}
                   />
                 </div>
               </div>

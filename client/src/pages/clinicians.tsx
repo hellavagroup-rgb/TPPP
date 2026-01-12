@@ -84,6 +84,10 @@ export default function Clinicians() {
   const createClinicianMutation = useMutation({
     mutationFn: async (data: typeof newClinician) => {
       const response = await apiRequest("POST", "/api/clinicians/with-user", data);
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to create clinician");
+      }
       return response.json();
     },
     onSuccess: (data: { clinician: Clinician; emailSent: boolean }) => {
@@ -95,11 +99,11 @@ export default function Clinicians() {
       setIsAddOpen(false);
       setNewClinician({
         name: "", email: "", tier: "Mid", bio: "", location: "", nhsTrust: "",
-        capacity: 15, maxNewClients: 3, worksWithCouples: false, insurers: [], contactMethods: [],
+        capacity: 15, maxNewClients: 3, worksWithCouples: false, allocateForBupa: false, insurers: [], contactMethods: [],
       });
     },
-    onError: () => {
-      toast({ title: "Error", description: "Failed to create clinician.", variant: "destructive" });
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
     },
   });
 

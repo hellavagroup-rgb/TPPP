@@ -10,6 +10,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CalendarIcon, Eye } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -132,6 +133,28 @@ export function FormPreview({ form }: FormPreviewProps) {
                                                 />
                                             </PopoverContent>
                                         </Popover>
+                                    </div>
+                                );
+                            case "select":
+                                return (
+                                    <div key={field.id} className="grid gap-2">
+                                        <Label>
+                                            {field.label}
+                                            {field.required && <span className="text-red-500 ml-1">*</span>}
+                                        </Label>
+                                        <Select 
+                                            value={formState[field.id]} 
+                                            onValueChange={(val) => handleValueChange(field.id, val)}
+                                        >
+                                            <SelectTrigger>
+                                                <SelectValue placeholder="Select an option" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {field.options?.map((option) => (
+                                                    <SelectItem key={option} value={option}>{option}</SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
                                     </div>
                                 );
                             case "radio":

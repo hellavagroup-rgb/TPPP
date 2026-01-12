@@ -39,7 +39,8 @@ import {
   Eye,
   CheckCircle2,
   XCircle,
-  Briefcase
+  Briefcase,
+  Edit
 } from "lucide-react";
 import { useState } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -141,6 +142,19 @@ export default function Clients() {
     notes: ""
   });
 
+  // Edit Client State
+  const [isEditClientOpen, setIsEditClientOpen] = useState(false);
+  const [editingClient, setEditingClient] = useState<ClientType | null>(null);
+  const [editClientData, setEditClientData] = useState({
+    email: "",
+    phone: "",
+    insurer: "",
+    referralSource: "",
+    presentingIssues: [] as string[],
+    notes: "",
+    status: "New" as ClientType["status"]
+  });
+
   const filteredClients = clients.filter(client => {
     // Search now works on ID instead of Name
     const matchesSearch = client.displayId.toLowerCase().includes(searchTerm.toLowerCase());
@@ -168,6 +182,45 @@ export default function Clients() {
         slotId 
       });
     }
+  };
+
+  const handleOpenEditClient = (client: ClientType) => {
+    setEditingClient(client);
+    setEditClientData({
+      email: client.email,
+      phone: client.phone || "",
+      insurer: client.insurer || "Private",
+      referralSource: client.referralSource || "",
+      presentingIssues: client.presentingIssues || [],
+      notes: client.notes || "",
+      status: client.status
+    });
+    setIsEditClientOpen(true);
+  };
+
+  const handleSaveEditClient = () => {
+    if (!editingClient) return;
+    updateClientMutation.mutate({
+      id: editingClient.id,
+      updates: {
+        email: editClientData.email,
+        phone: editClientData.phone || null,
+        insurer: editClientData.insurer,
+        referralSource: editClientData.referralSource,
+        presentingIssues: editClientData.presentingIssues,
+        notes: editClientData.notes || null,
+        status: editClientData.status
+      }
+    }, {
+      onSuccess: () => {
+        toast({ title: "Client Updated", description: "Changes saved successfully." });
+        setIsEditClientOpen(false);
+        setEditingClient(null);
+      },
+      onError: () => {
+        toast({ title: "Error", description: "Failed to update client.", variant: "destructive" });
+      }
+    });
   };
 
   const hasVacationConflict = (clinician: typeof clinicians[0]) => {
@@ -628,12 +681,9 @@ export default function Clients() {
                         </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => {
-                            toast({
-                                title: "Client Details",
-                                description: `${client.displayId} - Email: ${client.email}${client.phone ? `, Phone: ${client.phone}` : ""}`,
-                            });
-                        }}>View Details</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => handleOpenEditClient(client)}>
+                            <Edit className="h-4 w-4 mr-2" /> Edit Details
+                        </DropdownMenuItem>
                         <DropdownMenuSeparator />
                         <DropdownMenuItem className="text-destructive" onClick={() => {
                             toast({
@@ -711,6 +761,107 @@ export default function Clients() {
             onOpenChange={setIsPreviewOpen} 
         />
       )}
+
+      {/* Edit Client Dialog */}
+      <Dialog open={isEditClientOpen} onOpenChange={setIsEditClientOpen}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Edit Client: {editingClient?.displayId}</DialogTitle>
+            <DialogDescription>
+              Update client information. Changes will be saved immediately.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-2">
+                <Label>Email</Label>
+                <Input 
+                  type="email"
+                  value={editClientData.email}
+                  onChange={e => setEditClientData({...editClientData, email: e.target.value})}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label>Phone</Label>
+                <Input 
+                  value={editClientData.phone}
+                  onChange={e => setEditClientData({...editClientData, phone: e.target.value})}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-2">
+                <Label>Insurer</Label>
+                <Select 
+                  value={editClientData.insurer} 
+                  onValueChange={v => setEditClientData({...editClientData, insurer: v})}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Private">Private / Self-Pay</SelectItem>
+                    <SelectItem value="Bupa">Bupa</SelectItem>
+                    <SelectItem value="Axa">Axa</SelectItem>
+                    <SelectItem value="Aviva">Aviva</SelectItem>
+                    <SelectItem value="Cigna">Cigna</SelectItem>
+                    <SelectItem value="Vitality">Vitality</SelectItem>
+                    <SelectItem value="WPA">WPA</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label>Status</Label>
+                <Select 
+                  value={editClientData.status} 
+                  onValueChange={(v: ClientType["status"]) => setEditClientData({...editClientData, status: v})}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="New">New</SelectItem>
+                    <SelectItem value="Forms Sent">Forms Sent</SelectItem>
+                    <SelectItem value="Forms Completed">Forms Completed</SelectItem>
+                    <SelectItem value="Assigned">Assigned</SelectItem>
+                    <SelectItem value="Scheduled">Scheduled</SelectItem>
+                    <SelectItem value="Waitlist">Waitlist</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid gap-2">
+              <Label>Referral Source</Label>
+              <Input 
+                value={editClientData.referralSource}
+                onChange={e => setEditClientData({...editClientData, referralSource: e.target.value})}
+              />
+            </div>
+
+            <div className="grid gap-2">
+              <Label>Presenting Issues (comma separated)</Label>
+              <Input 
+                value={editClientData.presentingIssues.join(", ")}
+                onChange={e => setEditClientData({
+                  ...editClientData, 
+                  presentingIssues: e.target.value.split(",").map(s => s.trim()).filter(Boolean)
+                })}
+              />
+            </div>
+
+            <div className="grid gap-2">
+              <Label>Notes</Label>
+              <Textarea 
+                value={editClientData.notes}
+                onChange={e => setEditClientData({...editClientData, notes: e.target.value})}
+                rows={3}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsEditClientOpen(false)}>Cancel</Button>
+            <Button onClick={handleSaveEditClient}>Save Changes</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

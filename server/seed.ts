@@ -101,16 +101,15 @@ export async function seedDatabaseIfEmpty() {
   try {
     console.log("=== SEED CHECK STARTING ===");
     
-    // Check if we have all 20 clinicians with correct IDs
+    // Check what exists in the database
+    const existingUsers = await db.select().from(users);
     const existingClinicians = await db.select().from(clinicians);
-    const existingClients = await db.select().from(clients);
     const existingForms = await db.select().from(formTemplates);
     
-    console.log(`Found ${existingClinicians.length} clinicians, ${existingClients.length} clients, ${existingForms.length} forms`);
+    console.log(`Found ${existingUsers.length} users, ${existingClinicians.length} clinicians, ${existingForms.length} forms`);
     
-    const expectedClinicianIds = new Set(seedData.clinicians.map(c => c.id));
-    const hasAllClinicians = existingClinicians.length >= 20 && 
-      existingClinicians.every(c => expectedClinicianIds.has(c.id));
+    // Only seed if the database is truly empty (no admin user exists)
+    const hasAdminUser = existingUsers.some(u => u.email === "admin@perinatalpsych.com");
     
     // Check if form templates need updating (compare field counts)
     const expectedFormId = seedData.formTemplates[0]?.id;
@@ -118,9 +117,6 @@ export async function seedDatabaseIfEmpty() {
     const expectedFieldCount = (seedData.formTemplates[0]?.fields as any[])?.length || 0;
     const existingFieldCount = existingForm ? (existingForm.fields as any[])?.length || 0 : 0;
     const formNeedsUpdate = existingForm && existingFieldCount < expectedFieldCount;
-    
-    // If there are old clients (test data) OR missing clinicians/forms, we need to reseed
-    const needsReseed = existingClients.length > 0 || !hasAllClinicians || existingForms.length === 0;
     
     // Always update form templates if they're outdated
     if (formNeedsUpdate) {
@@ -133,12 +129,13 @@ export async function seedDatabaseIfEmpty() {
       }
     }
     
-    if (!needsReseed) {
-      console.log("Database already properly seeded, skipping...");
+    // Only seed if the database is truly empty (no admin user)
+    if (hasAdminUser) {
+      console.log("Database already initialized, skipping seed...");
       return;
     }
     
-    console.log(`Needs reseed: clients=${existingClients.length}, hasAllClinicians=${hasAllClinicians}, forms=${existingForms.length}`);
+    console.log("Empty database detected, running initial seed...");
 
     console.log("Seeding database with initial data...");
 

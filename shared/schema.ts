@@ -103,6 +103,8 @@ export const clients = pgTable("clients", {
   assignedClinicianId: varchar("assigned_clinician_id").references(() => clinicians.id),
   assignedSlot: text("assigned_slot"),
   allocationMethod: text("allocation_method", { enum: ["form", "manual"] }), // How client was allocated
+  isArchived: boolean("is_archived").default(false).notNull(), // Soft delete - archived clients are hidden
+  archivedAt: timestamp("archived_at"), // When the client was archived
   // Timestamps
   intakeDate: timestamp("intake_date").defaultNow().notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),

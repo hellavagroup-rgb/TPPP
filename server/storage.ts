@@ -41,7 +41,8 @@ export interface IStorage {
   getClientByDisplayId(displayId: string): Promise<Client | undefined>;
   createClient(client: InsertClient): Promise<Client>;
   updateClient(id: string, updates: Partial<InsertClient>): Promise<Client | undefined>;
-  assignClinicianToClient(clientId: string, clinicianId: string, slotId: string): Promise<void>;
+  archiveClient(id: string): Promise<Client | undefined>;
+  assignClinicianToClient(clientId: string, clinicianId: string, slotId: string, allocationMethod?: "form" | "manual"): Promise<void>;
   
   // ============ FORMS ============
   getAllFormTemplates(): Promise<FormTemplate[]>;
@@ -186,7 +187,18 @@ export class DatabaseStorage implements IStorage {
 
   // ============ CLIENTS ============
   async getAllClients(): Promise<Client[]> {
-    return await db.select().from(clients).orderBy(desc(clients.intakeDate));
+    return await db.select().from(clients)
+      .where(eq(clients.isArchived, false))
+      .orderBy(desc(clients.intakeDate));
+  }
+
+  async archiveClient(id: string): Promise<Client | undefined> {
+    const [client] = await db.update(clients).set({
+      isArchived: true,
+      archivedAt: new Date(),
+      updatedAt: new Date()
+    }).where(eq(clients.id, id)).returning();
+    return client || undefined;
   }
 
   async getClientById(id: string): Promise<Client | undefined> {

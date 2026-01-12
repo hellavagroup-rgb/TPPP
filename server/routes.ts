@@ -361,6 +361,18 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/clients/:id/archive", requireAdmin, auditLog("archive", "client"), async (req, res) => {
+    try {
+      const archived = await storage.archiveClient(req.params.id);
+      if (!archived) {
+        return res.status(404).json({ error: "Client not found" });
+      }
+      res.json(archived);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to archive client" });
+    }
+  });
+
   // ============ PUBLIC FORM FILL ENDPOINTS ============
   // These endpoints are used by clients to fill out forms (no auth required)
   // Security: Only expose minimal data needed for form filling

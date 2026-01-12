@@ -148,6 +148,37 @@ export default function Clients() {
   const [isManualAllocateOpen, setIsManualAllocateOpen] = useState(false);
   const [manualAllocateClient, setManualAllocateClient] = useState<ClientType | null>(null);
 
+  // Archive Client State
+  const [isArchiveDialogOpen, setIsArchiveDialogOpen] = useState(false);
+  const [clientToArchive, setClientToArchive] = useState<ClientType | null>(null);
+
+  const archiveClientMutation = useMutation({
+    mutationFn: async (clientId: string) => {
+      const response = await apiRequest("POST", `/api/clients/${clientId}/archive`, {});
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      toast({ title: "Client Archived", description: "This client record has been permanently archived." });
+      setIsArchiveDialogOpen(false);
+      setClientToArchive(null);
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to archive client.", variant: "destructive" });
+    },
+  });
+
+  const handleOpenArchiveDialog = (client: ClientType) => {
+    setClientToArchive(client);
+    setIsArchiveDialogOpen(true);
+  };
+
+  const handleConfirmArchive = () => {
+    if (clientToArchive) {
+      archiveClientMutation.mutate(clientToArchive.id);
+    }
+  };
+
   // Edit Client State
   const [isEditClientOpen, setIsEditClientOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<ClientType | null>(null);
@@ -703,12 +734,9 @@ export default function Clients() {
                           </DropdownMenuItem>
                         )}
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem className="text-destructive" onClick={() => {
-                            toast({
-                                title: "Archive",
-                                description: "Archive functionality coming soon.",
-                            });
-                        }}>Archive</DropdownMenuItem>
+                        <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>
+                            Archive
+                        </DropdownMenuItem>
                         </DropdownMenuContent>
                     </DropdownMenu>
                 </div>
@@ -989,6 +1017,45 @@ export default function Clients() {
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Archive Confirmation Dialog */}
+      <Dialog open={isArchiveDialogOpen} onOpenChange={setIsArchiveDialogOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="h-5 w-5" />
+              Archive Client
+            </DialogTitle>
+            <DialogDescription>
+              Are you sure you want to archive client <strong>{clientToArchive?.displayId}</strong>?
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="py-4">
+            <div className="p-4 bg-destructive/10 border border-destructive/30 rounded-lg">
+              <p className="text-sm font-medium text-destructive mb-2">Warning: This action cannot be undone</p>
+              <p className="text-sm text-muted-foreground">
+                Once archived, this client record will be permanently removed from the active client list
+                and cannot be retrieved. All associated data will remain in the system for audit purposes
+                but will no longer be accessible through the interface.
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setIsArchiveDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button 
+              variant="destructive" 
+              onClick={handleConfirmArchive}
+              disabled={archiveClientMutation.isPending}
+            >
+              {archiveClientMutation.isPending ? "Archiving..." : "Yes, Archive Client"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

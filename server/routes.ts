@@ -195,7 +195,7 @@ export async function registerRoutes(
       const clinician = await storage.createClinician({
         userId: user.id,
         avatar: name.substring(0, 2).toUpperCase(),
-        tier: tier || "Associate",
+        tier: tier || "Mid",
         bio: bio || "",
         location: location || "",
         nhsTrust: nhsTrust || "",

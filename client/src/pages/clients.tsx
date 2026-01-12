@@ -1,4 +1,5 @@
 import { useData, Client, ClientStatus, FormTemplate } from "@/lib/mockData";
+import { formatDateUK } from "@/lib/dateUtils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -391,7 +392,7 @@ export default function Clients() {
                     </Badge>
                   </div>
                   <p className="text-sm text-muted-foreground flex items-center gap-2">
-                    <Clock className="h-3 w-3" /> Intake: {client.intakeDate}
+                    <Clock className="h-3 w-3" /> Intake: {formatDateUK(client.intakeDate)}
                     {client.referralSource && (
                         <>
                             <span className="text-border mx-1">|</span>

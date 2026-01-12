@@ -3,6 +3,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CalendarClock, Mail, ArrowRight } from "lucide-react";
+import { formatDateUK } from "@/lib/dateUtils";
 
 export default function Waitlist() {
   const { clients } = useData();
@@ -37,7 +38,7 @@ export default function Waitlist() {
                             </Badge>
                         </div>
                         <p className="text-sm text-muted-foreground">
-                            Waiting since: <span className="font-medium text-foreground">{client.intakeDate}</span>
+                            Waiting since: <span className="font-medium text-foreground">{formatDateUK(client.intakeDate)}</span>
                         </p>
                         <p className="text-sm mt-2 italic text-muted-foreground/80">
                             "{client.notes}"

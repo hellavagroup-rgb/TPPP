@@ -113,7 +113,7 @@ export function FormPreview({ form }: FormPreviewProps) {
                                                     )}
                                                 >
                                                     {formState[field.id] ? (
-                                                        format(formState[field.id], "PPP")
+                                                        format(formState[field.id], "dd/MM/yyyy")
                                                     ) : (
                                                         <span>Pick a date</span>
                                                     )}

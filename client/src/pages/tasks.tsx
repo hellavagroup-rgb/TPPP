@@ -12,6 +12,7 @@ import { CheckCircle2, Clock, AlertTriangle, Plus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { Task } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
+import { formatDateUK } from "@/lib/dateUtils";
 
 export default function Tasks() {
   const queryClient = useQueryClient();
@@ -125,7 +126,7 @@ export default function Tasks() {
                         </div>
                         <span>{task.assignee}</span>
                       </div>
-                      <span>Due: {task.dueDate}</span>
+                      <span>Due: {formatDateUK(task.dueDate)}</span>
                     </div>
 
                     {status !== "Completed" && (

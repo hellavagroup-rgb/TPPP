@@ -212,7 +212,7 @@ export class DatabaseStorage implements IStorage {
     return client || undefined;
   }
 
-  async assignClinicianToClient(clientId: string, clinicianId: string, slotId: string): Promise<void> {
+  async assignClinicianToClient(clientId: string, clinicianId: string, slotId: string, allocationMethod: "form" | "manual" = "form"): Promise<void> {
     // Get the slot details
     const [slot] = await db.select().from(timeSlots).where(eq(timeSlots.id, slotId));
     
@@ -227,6 +227,7 @@ export class DatabaseStorage implements IStorage {
         status: "Assigned",
         assignedClinicianId: clinicianId,
         assignedSlot: slotString,
+        allocationMethod: allocationMethod,
         updatedAt: new Date()
       }).where(eq(clients.id, clientId));
 

@@ -102,6 +102,7 @@ export const clients = pgTable("clients", {
   // Assignment
   assignedClinicianId: varchar("assigned_clinician_id").references(() => clinicians.id),
   assignedSlot: text("assigned_slot"),
+  allocationMethod: text("allocation_method", { enum: ["form", "manual"] }), // How client was allocated
   // Timestamps
   intakeDate: timestamp("intake_date").defaultNow().notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),

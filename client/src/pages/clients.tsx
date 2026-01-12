@@ -40,7 +40,8 @@ import {
   CheckCircle2,
   XCircle,
   Briefcase,
-  Edit
+  Edit,
+  Phone
 } from "lucide-react";
 import { useState } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -107,14 +108,15 @@ export default function Clients() {
   });
 
   const assignClientMutation = useMutation({
-    mutationFn: async ({ clientId, clinicianId, slotId }: { clientId: string; clinicianId: string; slotId: string }) => {
-      const response = await apiRequest("POST", `/api/clients/${clientId}/assign`, { clinicianId, slotId });
+    mutationFn: async ({ clientId, clinicianId, slotId, allocationMethod = "form" }: { clientId: string; clinicianId: string; slotId: string; allocationMethod?: "form" | "manual" }) => {
+      const response = await apiRequest("POST", `/api/clients/${clientId}/assign`, { clinicianId, slotId, allocationMethod });
       return response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
       toast({ title: "Client Assigned", description: "Client has been allocated a slot." });
       setSelectedClient(null);
+      setIsManualAllocateOpen(false);
     },
     onError: () => {
       toast({ title: "Error", description: "Failed to assign client.", variant: "destructive" });
@@ -141,6 +143,10 @@ export default function Clients() {
     presentingIssue: "",
     notes: ""
   });
+
+  // Manual Allocation State (for phone intake flow)
+  const [isManualAllocateOpen, setIsManualAllocateOpen] = useState(false);
+  const [manualAllocateClient, setManualAllocateClient] = useState<ClientType | null>(null);
 
   // Edit Client State
   const [isEditClientOpen, setIsEditClientOpen] = useState(false);
@@ -174,14 +180,21 @@ export default function Clients() {
     }
   };
 
-  const handleAssign = (clinicianId: string, slotId: string) => {
-    if (selectedClient) {
+  const handleAssign = (clinicianId: string, slotId: string, allocationMethod: "form" | "manual" = "form") => {
+    const clientToAssign = allocationMethod === "manual" ? manualAllocateClient : selectedClient;
+    if (clientToAssign) {
       assignClientMutation.mutate({ 
-        clientId: selectedClient.id, 
+        clientId: clientToAssign.id, 
         clinicianId, 
-        slotId 
+        slotId,
+        allocationMethod
       });
     }
+  };
+
+  const handleOpenManualAllocate = (client: ClientType) => {
+    setManualAllocateClient(client);
+    setIsManualAllocateOpen(true);
   };
 
   const handleOpenEditClient = (client: ClientType) => {
@@ -684,6 +697,11 @@ export default function Clients() {
                         <DropdownMenuItem onClick={() => handleOpenEditClient(client)}>
                             <Edit className="h-4 w-4 mr-2" /> Edit Details
                         </DropdownMenuItem>
+                        {client.status !== "Assigned" && client.status !== "Scheduled" && (
+                          <DropdownMenuItem onClick={() => handleOpenManualAllocate(client)}>
+                            <Phone className="h-4 w-4 mr-2" /> Allocate (Phone Intake)
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuSeparator />
                         <DropdownMenuItem className="text-destructive" onClick={() => {
                             toast({
@@ -860,6 +878,117 @@ export default function Clients() {
             <Button variant="outline" onClick={() => setIsEditClientOpen(false)}>Cancel</Button>
             <Button onClick={handleSaveEditClient}>Save Changes</Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Manual Allocation Dialog (Phone Intake Flow) */}
+      <Dialog open={isManualAllocateOpen} onOpenChange={setIsManualAllocateOpen}>
+        <DialogContent className="sm:max-w-[600px] max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Phone className="h-5 w-5" />
+              Manual Allocation (Phone Intake)
+            </DialogTitle>
+            <DialogDescription>
+              Assign {manualAllocateClient?.displayId} to an available time slot after phone intake.
+              This bypasses the standard form submission workflow.
+            </DialogDescription>
+          </DialogHeader>
+          
+          {manualAllocateClient && (
+            <div className="grid gap-6 py-4">
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-md">
+                <p className="text-sm text-amber-800 font-medium flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4" />
+                  Manual allocation - Forms not completed
+                </p>
+                <p className="text-xs text-amber-700 mt-1">
+                  This client has not completed intake forms. Ensure all necessary information has been gathered during the phone call.
+                </p>
+              </div>
+
+              <div className="p-3 bg-muted/30 rounded border border-border space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-muted-foreground font-medium">CLIENT PROFILE</p>
+                  <Badge variant={(manualAllocateClient.insurer || "Private") === "Private" ? "outline" : "default"} className="text-[10px]">
+                    {manualAllocateClient.insurer || "Private"}
+                  </Badge>
+                </div>
+                <div className="flex gap-2">
+                  {(manualAllocateClient.presentingIssues || []).map(i => <Badge key={i} variant="secondary">{i}</Badge>)}
+                  {(manualAllocateClient.presentingIssues || []).length === 0 && (
+                    <span className="text-xs text-muted-foreground italic">No presenting issues recorded</span>
+                  )}
+                </div>
+                {manualAllocateClient.notes && (
+                  <p className="text-sm italic">"{manualAllocateClient.notes}"</p>
+                )}
+              </div>
+
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-medium text-muted-foreground">AVAILABLE SLOTS</p>
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="override-mode-manual" className="text-xs text-muted-foreground cursor-pointer">Admin Override</Label>
+                    <Switch id="override-mode-manual" checked={showAllClinicians} onCheckedChange={setShowAllClinicians} />
+                  </div>
+                </div>
+
+                {getCliniciansForAllocation(manualAllocateClient).length === 0 && (
+                  <div className="text-center py-8 text-muted-foreground border rounded-md bg-slate-50">
+                    <AlertTriangle className="h-8 w-8 mx-auto mb-2 text-amber-500" />
+                    <p>No matching clinicians found.</p>
+                    <p className="text-xs mt-1">Try enabling "Admin Override" to see all schedules.</p>
+                  </div>
+                )}
+
+                {getCliniciansForAllocation(manualAllocateClient).map(clinician => {
+                  const isMatch = isClinicianMatch(clinician, manualAllocateClient);
+                  return (
+                    <div key={clinician.id} className={`p-4 border rounded-lg ${isMatch ? "border-green-300 bg-green-50/30" : "border-border"}`}>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{clinician.name.split(",")[0]}</span>
+                          {isMatch && <Badge className="bg-green-100 text-green-700 hover:bg-green-100">Match</Badge>}
+                        </div>
+                        <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                          <span className="flex items-center gap-1">
+                            <Briefcase className="h-3 w-3" />
+                            {clinician.currentLoad}/{clinician.capacity}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        {clinician.availability.filter(s => s.type !== "Vacation").map(slot => (
+                          <Button
+                            key={slot.id}
+                            variant="outline"
+                            size="sm"
+                            disabled={slot.isBooked}
+                            className={`justify-start h-auto py-2 px-3 text-xs ${
+                              slot.isBooked ? "opacity-50 line-through decoration-destructive" : "hover:border-primary hover:bg-primary/5"
+                            }`}
+                            onClick={() => handleAssign(clinician.id, slot.id, "manual")}
+                          >
+                            <CalendarCheck className="h-3 w-3 mr-2" />
+                            <div className="text-left">
+                              <div className="font-medium">{slot.day || format(parseISO(slot.date!), "EEE")}</div>
+                              <div className="text-[10px] text-muted-foreground">{slot.startTime} - {slot.endTime}</div>
+                            </div>
+                          </Button>
+                        ))}
+                        {clinician.availability.filter(s => s.type !== "Vacation").length === 0 && (
+                          <div className="col-span-3 text-xs text-muted-foreground italic p-2 border border-dashed rounded bg-slate-50/50 text-center">
+                            No availability set.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

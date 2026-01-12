@@ -185,6 +185,7 @@ export async function registerRoutes(
       // Create user account
       const user = await storage.createUser({
         email,
+        name,
         password: hashedPassword,
         role: "clinician",
       });
@@ -192,20 +193,17 @@ export async function registerRoutes(
       // Create clinician profile
       const clinician = await storage.createClinician({
         userId: user.id,
-        name,
+        avatar: name.substring(0, 2).toUpperCase(),
         tier: tier || "Associate",
         bio: bio || "",
         location: location || "",
         nhsTrust: nhsTrust || "",
         capacity: capacity || 15,
-        maxNewClients: maxNewClients || 3,
-        worksWithCouples: worksWithCouples || false,
+        maxNewClients: maxNewClients ?? 3,
+        worksWithCouples: worksWithCouples ?? false,
         insurers: insurers || [],
         contactMethods: contactMethods || [],
       });
-
-      // Log admin action
-      await auditLog((req.user as any)?.id || "system", "CREATE_CLINICIAN", { clinicianId: clinician.id, name });
 
       res.json({ clinician, temporaryPassword: tempPassword });
     } catch (error) {
@@ -341,6 +339,75 @@ export async function registerRoutes(
     }
   });
 
+  // ============ PUBLIC FORM FILL ENDPOINTS ============
+  // These endpoints are used by clients to fill out forms (no auth required)
+  // Security: Only expose minimal data needed for form filling
+  app.get("/api/clients/public/:id", async (req, res) => {
+    try {
+      const client = await storage.getClientById(req.params.id);
+      if (!client) {
+        return res.status(404).json({ error: "Client not found" });
+      }
+      // Only return minimal info needed for form filling - no PII
+      res.json({
+        id: client.id,
+        displayId: client.displayId,
+        status: client.status,
+      });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch client" });
+    }
+  });
+
+  // Public form submission endpoint with validation
+  app.post("/api/form-submissions", async (req, res) => {
+    try {
+      const { formId, clientId, data } = req.body;
+      
+      // Validate required fields
+      if (!formId || !clientId || !data || typeof data !== "object") {
+        return res.status(400).json({ error: "Missing or invalid required fields" });
+      }
+
+      // Verify client exists
+      const client = await storage.getClientById(clientId);
+      if (!client) {
+        return res.status(404).json({ error: "Client not found" });
+      }
+      
+      // Prevent duplicate submissions
+      if (client.status === "Forms Completed") {
+        return res.status(400).json({ error: "Form already submitted" });
+      }
+
+      // Verify form exists
+      const form = await storage.getFormTemplateById(formId);
+      if (!form) {
+        return res.status(404).json({ error: "Form not found" });
+      }
+
+      // Verify client is in a state that allows form submission (Forms Sent)
+      if (client.status !== "Forms Sent" && client.status !== "New") {
+        return res.status(400).json({ error: "Form submission not allowed for this client status" });
+      }
+
+      // Create submission
+      const submission = await storage.createFormSubmission({
+        formTemplateId: formId,
+        clientId,
+        responses: data,
+      });
+
+      // Update client status to "Forms Completed"
+      await storage.updateClient(clientId, { status: "Forms Completed" });
+
+      res.json({ success: true, submissionId: submission.id });
+    } catch (error) {
+      console.error("Form submission error:", error);
+      res.status(500).json({ error: "Failed to submit form" });
+    }
+  });
+
   // ============ FORM TEMPLATES ============
   app.get("/api/forms", requireAuth, async (req, res) => {
     try {
@@ -351,13 +418,20 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/forms/:id", requireAuth, async (req, res) => {
+  // Public form access for clients filling out forms - returns sanitized form
+  app.get("/api/forms/:id", async (req, res) => {
     try {
       const form = await storage.getFormTemplateById(req.params.id);
       if (!form) {
         return res.status(404).json({ error: "Form not found" });
       }
-      res.json(form);
+      // Return only fields needed for public form filling
+      res.json({
+        id: form.id,
+        title: form.title,
+        description: form.description,
+        fields: form.fields,
+      });
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch form" });
     }

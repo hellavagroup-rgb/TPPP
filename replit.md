@@ -1,5 +1,12 @@
 # The Perinatal Psychology Practice - Client Management System
 
+## Recent Changes (January 2026)
+- Added comprehensive Therapy Enquiry Form matching WriteUpp form with 35+ fields including safety/risk assessment, therapy history, and neurodiversity accommodations
+- Added "Add Clinician" feature with automatic user account creation
+- Added "Add Task" feature with priority levels and due dates
+- Updated form-fill page to use real API endpoints with proper conditional field logic (showWhen support)
+- Added public form submission endpoint that updates client status automatically
+
 ## Overview
 
 This is a practice management and client onboarding system for The Perinatal Psychology Practice. It enables staff to manage client intake workflows, clinician scheduling, form creation/distribution, task assignment, and waitlist management. The system supports two user roles: administrators (full access) and clinicians (limited to their own profile and availability).

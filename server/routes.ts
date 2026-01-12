@@ -506,7 +506,12 @@ export async function registerRoutes(
 
   app.post("/api/tasks", requireAdmin, async (req, res) => {
     try {
-      const validated = insertTaskSchema.parse(req.body);
+      // Parse dueDate string to Date object if it's a string
+      const body = { ...req.body };
+      if (typeof body.dueDate === 'string') {
+        body.dueDate = new Date(body.dueDate);
+      }
+      const validated = insertTaskSchema.parse(body);
       const task = await storage.createTask(validated);
       res.json(task);
     } catch (error) {

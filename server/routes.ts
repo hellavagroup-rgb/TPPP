@@ -163,6 +163,57 @@ export async function registerRoutes(
     }
   });
 
+  // Create clinician with associated user account
+  app.post("/api/clinicians/with-user", requireAdmin, async (req, res) => {
+    try {
+      const { name, email, tier, bio, location, nhsTrust, capacity, maxNewClients, worksWithCouples, insurers, contactMethods } = req.body;
+      
+      if (!name || !email) {
+        return res.status(400).json({ error: "Name and email are required" });
+      }
+
+      // Check if email already exists
+      const existingUser = await storage.getUserByEmail(email);
+      if (existingUser) {
+        return res.status(400).json({ error: "Email already in use" });
+      }
+
+      // Generate temporary password
+      const tempPassword = `Welcome${Math.random().toString(36).slice(-6)}!`;
+      const hashedPassword = await hashPassword(tempPassword);
+
+      // Create user account
+      const user = await storage.createUser({
+        email,
+        password: hashedPassword,
+        role: "clinician",
+      });
+
+      // Create clinician profile
+      const clinician = await storage.createClinician({
+        userId: user.id,
+        name,
+        tier: tier || "Associate",
+        bio: bio || "",
+        location: location || "",
+        nhsTrust: nhsTrust || "",
+        capacity: capacity || 15,
+        maxNewClients: maxNewClients || 3,
+        worksWithCouples: worksWithCouples || false,
+        insurers: insurers || [],
+        contactMethods: contactMethods || [],
+      });
+
+      // Log admin action
+      await auditLog((req.user as any)?.id || "system", "CREATE_CLINICIAN", { clinicianId: clinician.id, name });
+
+      res.json({ clinician, temporaryPassword: tempPassword });
+    } catch (error) {
+      console.error("Failed to create clinician with user:", error);
+      res.status(500).json({ error: "Failed to create clinician" });
+    }
+  });
+
   app.patch("/api/clinicians/:id", requireAdmin, async (req, res) => {
     try {
       const clinician = await storage.getClinicianById(req.params.id);

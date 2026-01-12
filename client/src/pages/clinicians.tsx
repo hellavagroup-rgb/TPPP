@@ -11,7 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { MapPin, Building, Users, Shield, Edit, Briefcase, Lock, Mail, MessageSquare, Phone, Trash2, UserX } from "lucide-react";
+import { MapPin, Building, Users, Shield, Edit, Briefcase, Lock, Mail, MessageSquare, Phone, Trash2, UserX, Plus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { Clinician } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
@@ -27,8 +27,22 @@ export default function Clinicians() {
   
   const [selectedClinician, setSelectedClinician] = useState<ClinicianWithName | null>(null);
   const [isEditOpen, setIsEditOpen] = useState(false);
+  const [isAddOpen, setIsAddOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [clinicianToDelete, setClinicianToDelete] = useState<ClinicianWithName | null>(null);
+  const [newClinician, setNewClinician] = useState({
+    name: "",
+    email: "",
+    tier: "Associate" as "Associate" | "Senior" | "Director",
+    bio: "",
+    location: "",
+    nhsTrust: "",
+    capacity: 15,
+    maxNewClients: 3,
+    worksWithCouples: false,
+    insurers: [] as string[],
+    contactMethods: [] as string[],
+  });
 
   const { data: clinicians = [] } = useQuery<ClinicianWithName[]>({
     queryKey: ["/api/clinicians"],
@@ -62,6 +76,25 @@ export default function Clinicians() {
     },
     onError: () => {
       toast({ title: "Error", description: "Failed to delete clinician.", variant: "destructive" });
+    },
+  });
+
+  const createClinicianMutation = useMutation({
+    mutationFn: async (data: typeof newClinician) => {
+      const response = await apiRequest("POST", "/api/clinicians/with-user", data);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clinicians"] });
+      toast({ title: "Clinician Added", description: "New clinician has been created successfully." });
+      setIsAddOpen(false);
+      setNewClinician({
+        name: "", email: "", tier: "Associate", bio: "", location: "", nhsTrust: "",
+        capacity: 15, maxNewClients: 3, worksWithCouples: false, insurers: [], contactMethods: [],
+      });
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to create clinician.", variant: "destructive" });
     },
   });
 
@@ -111,11 +144,25 @@ export default function Clinicians() {
   const activeClinicians = clinicians.filter(c => c.isActive !== false);
   const inactiveClinicians = clinicians.filter(c => c.isActive === false);
 
+  const handleAddClinician = () => {
+    if (!newClinician.name || !newClinician.email) {
+      toast({ title: "Missing fields", description: "Please provide name and email.", variant: "destructive" });
+      return;
+    }
+    createClinicianMutation.mutate(newClinician);
+  };
+
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div>
-        <h1 className="text-3xl font-serif font-bold text-slate-900">Clinician Directory</h1>
-        <p className="text-muted-foreground mt-1">Manage clinician profiles, insurance panels, and practice tiers.</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-serif font-bold text-slate-900">Clinician Directory</h1>
+          <p className="text-muted-foreground mt-1">Manage clinician profiles, insurance panels, and practice tiers.</p>
+        </div>
+        <Button onClick={() => setIsAddOpen(true)} data-testid="button-add-clinician">
+          <Plus className="h-4 w-4 mr-2" />
+          Add Clinician
+        </Button>
       </div>
 
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
@@ -428,6 +475,140 @@ export default function Clinicians() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Add New Clinician</DialogTitle>
+            <DialogDescription>Create a new clinician profile. A login account will be created automatically.</DialogDescription>
+          </DialogHeader>
+          
+          <div className="grid gap-6 py-4">
+            <div className="grid md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Full Name *</Label>
+                <Input 
+                  value={newClinician.name}
+                  onChange={(e) => setNewClinician({...newClinician, name: e.target.value})}
+                  placeholder="Dr. Jane Smith"
+                  data-testid="input-new-clinician-name"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Email Address *</Label>
+                <Input 
+                  type="email"
+                  value={newClinician.email}
+                  onChange={(e) => setNewClinician({...newClinician, email: e.target.value})}
+                  placeholder="jane@perinatalpsych.com"
+                  data-testid="input-new-clinician-email"
+                />
+                <p className="text-[10px] text-muted-foreground">Used for login and reminders</p>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Tier</Label>
+              <Select value={newClinician.tier} onValueChange={(v: "Associate" | "Senior" | "Director") => setNewClinician({...newClinician, tier: v})}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Associate">Associate</SelectItem>
+                  <SelectItem value="Senior">Senior</SelectItem>
+                  <SelectItem value="Director">Director</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Bio</Label>
+              <Textarea 
+                className="min-h-[100px]" 
+                value={newClinician.bio}
+                onChange={(e) => setNewClinician({...newClinician, bio: e.target.value})}
+                placeholder="Professional background, specialties, and approach..."
+              />
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Location</Label>
+                <Input 
+                  value={newClinician.location}
+                  onChange={(e) => setNewClinician({...newClinician, location: e.target.value})}
+                  placeholder="e.g. North London"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>NHS Trust</Label>
+                <Input 
+                  value={newClinician.nhsTrust}
+                  onChange={(e) => setNewClinician({...newClinician, nhsTrust: e.target.value})}
+                  placeholder="e.g. Tavistock"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Insurers Accepted</Label>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 border p-3 rounded-md bg-slate-50/50">
+                {INSURERS.map(insurer => (
+                  <div key={insurer} className="flex items-center space-x-2">
+                    <Checkbox 
+                      id={`new-ins-${insurer}`} 
+                      checked={newClinician.insurers.includes(insurer)}
+                      onCheckedChange={(checked) => {
+                        if (checked) {
+                          setNewClinician({...newClinician, insurers: [...newClinician.insurers, insurer]});
+                        } else {
+                          setNewClinician({...newClinician, insurers: newClinician.insurers.filter(i => i !== insurer)});
+                        }
+                      }}
+                    />
+                    <Label htmlFor={`new-ins-${insurer}`} className="font-normal cursor-pointer">{insurer}</Label>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Client Capacity</Label>
+                <Input 
+                  type="number" 
+                  value={newClinician.capacity}
+                  onChange={(e) => setNewClinician({...newClinician, capacity: parseInt(e.target.value) || 15})}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Max New Clients</Label>
+                <Input 
+                  type="number" 
+                  value={newClinician.maxNewClients}
+                  onChange={(e) => setNewClinician({...newClinician, maxNewClients: parseInt(e.target.value) || 0})}
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center space-x-2">
+              <Checkbox 
+                id="new-couples" 
+                checked={newClinician.worksWithCouples}
+                onCheckedChange={(checked) => setNewClinician({...newClinician, worksWithCouples: !!checked})}
+              />
+              <Label htmlFor="new-couples" className="font-medium cursor-pointer">Works with Couples</Label>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsAddOpen(false)}>Cancel</Button>
+            <Button onClick={handleAddClinician} disabled={createClinicianMutation.isPending} data-testid="button-submit-clinician">
+              {createClinicianMutation.isPending ? "Creating..." : "Add Clinician"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

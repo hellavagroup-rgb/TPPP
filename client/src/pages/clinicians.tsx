@@ -41,6 +41,7 @@ export default function Clinicians() {
     capacity: 15,
     maxNewClients: 3,
     worksWithCouples: false,
+    allocateForBupa: false,
     insurers: [] as string[],
     contactMethods: [] as string[],
   });
@@ -141,6 +142,7 @@ export default function Clinicians() {
     if (editedClinician.nhsTrust !== undefined) updates.nhsTrust = editedClinician.nhsTrust;
     if (editedClinician.maxNewClients !== undefined) updates.maxNewClients = editedClinician.maxNewClients;
     if (editedClinician.worksWithCouples !== undefined) updates.worksWithCouples = editedClinician.worksWithCouples;
+    if (editedClinician.allocateForBupa !== undefined) updates.allocateForBupa = editedClinician.allocateForBupa;
     if (editedClinician.insurers !== undefined) updates.insurers = editedClinician.insurers;
     if (editedClinician.contactMethods !== undefined) updates.contactMethods = editedClinician.contactMethods;
     if (editedClinician.isActive !== undefined) updates.isActive = editedClinician.isActive;
@@ -471,7 +473,7 @@ export default function Clinicians() {
                     Stop allocating after this many new clients.
                   </p>
                 </div>
-                <div className="space-y-2 border p-3 rounded-md flex flex-col justify-center">
+                <div className="space-y-3 border p-3 rounded-md flex flex-col justify-center">
                   <div className="flex items-center space-x-2">
                     <Checkbox 
                       id="couples" 
@@ -479,6 +481,14 @@ export default function Clinicians() {
                       onCheckedChange={(checked) => setEditedClinician({...editedClinician, worksWithCouples: !!checked})}
                     />
                     <Label htmlFor="couples" className="font-medium cursor-pointer">Works with Couples</Label>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <Checkbox 
+                      id="bupa" 
+                      checked={editedClinician.allocateForBupa || false}
+                      onCheckedChange={(checked) => setEditedClinician({...editedClinician, allocateForBupa: !!checked})}
+                    />
+                    <Label htmlFor="bupa" className="font-medium cursor-pointer">Allocate for Bupa</Label>
                   </div>
                 </div>
               </div>
@@ -651,6 +661,14 @@ export default function Clinicians() {
                 onCheckedChange={(checked) => setNewClinician({...newClinician, worksWithCouples: !!checked})}
               />
               <Label htmlFor="new-couples" className="font-medium cursor-pointer">Works with Couples</Label>
+            </div>
+            <div className="flex items-center space-x-2">
+              <Checkbox 
+                id="new-bupa" 
+                checked={newClinician.allocateForBupa}
+                onCheckedChange={(checked) => setNewClinician({...newClinician, allocateForBupa: !!checked})}
+              />
+              <Label htmlFor="new-bupa" className="font-medium cursor-pointer">Allocate for Bupa</Label>
             </div>
           </div>
 

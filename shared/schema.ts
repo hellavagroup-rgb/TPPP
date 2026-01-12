@@ -116,7 +116,9 @@ export const clientsRelations = relations(clients, ({ one, many }) => ({
   formSubmissions: many(formSubmissions),
 }));
 
-export const insertClientSchema = createInsertSchema(clients).omit({ 
+export const insertClientSchema = createInsertSchema(clients, {
+  intakeDate: z.coerce.date().optional(),
+}).omit({ 
   id: true, 
   createdAt: true, 
   updatedAt: true

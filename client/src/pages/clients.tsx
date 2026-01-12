@@ -1,4 +1,5 @@
-import { useData, Client, ClientStatus, FormTemplate } from "@/lib/mockData";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Client, ClientStatus, FormTemplate } from "@/lib/mockData";
 import { formatDateUK } from "@/lib/dateUtils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -45,21 +46,87 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { format, parseISO, isSameDay } from "date-fns";
+import { apiRequest } from "@/lib/queryClient";
+import type { Client as ClientType, Clinician, FormTemplate as FormTemplateType } from "@shared/schema";
 
 export default function Clients() {
-  const { clients, clinicians, forms, updateClientStatus, assignClinician, addClient } = useData();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [searchTerm, setSearchTerm] = useState("");
   const [filterStatus, setFilterStatus] = useState<string>("All");
-  const [selectedClient, setSelectedClient] = useState<Client | null>(null);
-  const { toast } = useToast();
+  const [selectedClient, setSelectedClient] = useState<ClientType | null>(null);
+
+  // Fetch data from API
+  const { data: clients = [] } = useQuery<ClientType[]>({
+    queryKey: ["/api/clients"],
+  });
+
+  const { data: clinicians = [] } = useQuery<(Clinician & { name: string; availability: any[] })[]>({
+    queryKey: ["/api/clinicians"],
+  });
+
+  const { data: forms = [] } = useQuery<FormTemplateType[]>({
+    queryKey: ["/api/forms"],
+  });
+
+  // Mutations
+  const createClientMutation = useMutation({
+    mutationFn: async (clientData: any) => {
+      const response = await apiRequest("POST", "/api/clients", clientData);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      toast({ title: "Client Created", description: "New referral added successfully." });
+      setIsNewClientOpen(false);
+      setNewClientData({
+        wNumber: "",
+        email: "",
+        phone: "",
+        insurer: "Private",
+        referralSource: "Web Form",
+        referralSourceDetails: "",
+        presentingIssue: "",
+        notes: ""
+      });
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to create client.", variant: "destructive" });
+    },
+  });
+
+  const updateClientMutation = useMutation({
+    mutationFn: async ({ id, updates }: { id: string; updates: any }) => {
+      const response = await apiRequest("PATCH", `/api/clients/${id}`, updates);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+    },
+  });
+
+  const assignClientMutation = useMutation({
+    mutationFn: async ({ clientId, clinicianId, slotId }: { clientId: string; clinicianId: string; slotId: string }) => {
+      const response = await apiRequest("POST", `/api/clients/${clientId}/assign`, { clinicianId, slotId });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      toast({ title: "Client Assigned", description: "Client has been allocated a slot." });
+      setSelectedClient(null);
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to assign client.", variant: "destructive" });
+    },
+  });
 
   // Send Forms State
   const [isSendFormsOpen, setIsSendFormsOpen] = useState(false);
-  const [clientToSendForms, setClientToSendForms] = useState<Client | null>(null);
-  const [selectedForms, setSelectedForms] = useState<string[]>([]);
-  const [previewForm, setPreviewForm] = useState<FormTemplate | null>(null);
+  const [clientToSendForms, setClientToSendForms] = useState<ClientType | null>(null);
+  const [selectedFormIds, setSelectedForms] = useState<string[]>([]);
+  const [previewForm, setPreviewForm] = useState<FormTemplateType | null>(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
-  const [showAllClinicians, setShowAllClinicians] = useState(false); // Admin override toggle
+  const [showAllClinicians, setShowAllClinicians] = useState(false);
 
   // New Client Form State
   const [isNewClientOpen, setIsNewClientOpen] = useState(false);
@@ -95,12 +162,11 @@ export default function Clients() {
 
   const handleAssign = (clinicianId: string, slotId: string) => {
     if (selectedClient) {
-      assignClinician(selectedClient.id, clinicianId, slotId);
-      toast({
-        title: "Client Assigned",
-        description: `${selectedClient.displayId} has been allocated a slot.`,
+      assignClientMutation.mutate({ 
+        clientId: selectedClient.id, 
+        clinicianId, 
+        slotId 
       });
-      setSelectedClient(null);
     }
   };
 
@@ -108,35 +174,50 @@ export default function Clients() {
     return clinician.availability.some(s => s.type === "Vacation" && new Date(s.date!) >= new Date());
   };
 
-  const handleOpenSendForms = (client: Client) => {
+  const handleOpenSendForms = (client: ClientType) => {
       setClientToSendForms(client);
       setSelectedForms([]); // Reset selection
       setIsSendFormsOpen(true);
   };
 
-  const handleSendForms = () => {
-      if (clientToSendForms && selectedForms.length > 0) {
-          updateClientStatus(clientToSendForms.id, "Forms Sent");
-          setIsSendFormsOpen(false);
-          setClientToSendForms(null);
-          toast({
-              title: "Forms Sent",
-              description: `${selectedForms.length} form(s) sent to ${clientToSendForms.email}.`,
-          });
-          
-          // Simulate generating a unique link for the prototype
-          const uniqueLink = `${window.location.origin}/fill/${clientToSendForms.id}/${selectedForms[0]}`;
-          console.log("Client Form Link:", uniqueLink);
-          
-          setTimeout(() => {
-             toast({
-                 title: "Client Email Simulation",
-                 description: "Click here to simulate the client view.",
-                 action: <Button size="sm" variant="outline" onClick={() => window.open(uniqueLink, '_blank')}>Open Link</Button>,
-                 duration: 10000
-             });
-          }, 1000);
-
+  const handleSendForms = async () => {
+      if (clientToSendForms && selectedFormIds.length > 0) {
+          try {
+            // Send form via email API
+            for (const formId of selectedFormIds) {
+              await apiRequest("POST", "/api/email/send-form", {
+                clientId: clientToSendForms.id,
+                formId
+              });
+            }
+            queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+            
+            // Generate unique link for the form
+            const uniqueLink = `${window.location.origin}/fill/${clientToSendForms.id}/${selectedFormIds[0]}`;
+            console.log("Client Form Link:", uniqueLink);
+            
+            setIsSendFormsOpen(false);
+            setClientToSendForms(null);
+            toast({
+                title: "Forms Sent",
+                description: `${selectedFormIds.length} form(s) sent to ${clientToSendForms.email}.`,
+            });
+            
+            setTimeout(() => {
+               toast({
+                   title: "Client Email Simulation",
+                   description: "Click here to simulate the client view.",
+                   action: <Button size="sm" variant="outline" onClick={() => window.open(uniqueLink, '_blank')}>Open Link</Button>,
+                   duration: 10000
+               });
+            }, 1000);
+          } catch (error) {
+            toast({
+              title: "Error",
+              description: "Failed to send forms.",
+              variant: "destructive"
+            });
+          }
       } else {
            toast({
               title: "Selection Required",
@@ -164,9 +245,8 @@ export default function Clients() {
         return;
     }
 
-    const newClient: Client = {
-        id: `cl-${Date.now()}`,
-        displayId: newClientData.wNumber.toUpperCase().startsWith("W") ? newClientData.wNumber : `W${newClientData.wNumber}`,
+    const clientData = {
+        displayId: newClientData.wNumber.toUpperCase().startsWith("W") ? newClientData.wNumber.toUpperCase() : `W${newClientData.wNumber.toUpperCase()}`,
         email: newClientData.email,
         phone: newClientData.phone,
         insurer: newClientData.insurer,
@@ -174,32 +254,16 @@ export default function Clients() {
             ? `Other: ${newClientData.referralSourceDetails}`
             : newClientData.referralSource,
         status: "New",
-        intakeDate: format(new Date(), "yyyy-MM-dd"),
-        presentingIssues: [newClientData.presentingIssue],
-        notes: newClientData.notes
+        intakeDate: new Date(),
+        presentingIssues: newClientData.presentingIssue ? [newClientData.presentingIssue] : [],
+        notes: newClientData.notes || null
     };
 
-    addClient(newClient);
-    setIsNewClientOpen(false);
-    setNewClientData({
-        wNumber: "",
-        email: "",
-        phone: "",
-        insurer: "Private",
-        referralSource: "Web Form",
-        referralSourceDetails: "",
-        presentingIssue: "",
-        notes: ""
-    });
-    
-    toast({
-        title: "Client Created",
-        description: "New referral added successfully. Ready for form sending.",
-    });
+    createClientMutation.mutate(clientData);
   };
 
   // Helper to determine if a clinician matches the client's needs
-  const isClinicianMatch = (clinician: typeof clinicians[0], client: Client) => {
+  const isClinicianMatch = (clinician: typeof clinicians[0], client: ClientType) => {
       // 1. Check Capacity (Load vs New Client Cap)
       const hasSpace = (clinician.maxNewClients || 999) > (clinician.currentLoad % 5); // Mock logic for "new client" load
       
@@ -210,7 +274,7 @@ export default function Clients() {
       return hasSpace && acceptsInsurer;
   };
 
-  const getCliniciansForAllocation = (client: Client) => {
+  const getCliniciansForAllocation = (client: ClientType) => {
       if (showAllClinicians) return clinicians;
       // Filter by match logic
       return clinicians.filter(c => isClinicianMatch(c, client));
@@ -404,7 +468,7 @@ export default function Clients() {
 
                 {/* Presenting Issues */}
                 <div className="hidden md:flex gap-2">
-                    {client.presentingIssues.map(issue => (
+                    {(client.presentingIssues || []).map(issue => (
                         <Badge key={issue} variant="outline" className="text-xs font-normal">
                             {issue}
                         </Badge>
@@ -455,7 +519,7 @@ export default function Clients() {
                                             </Badge>
                                         </div>
                                         <div className="flex gap-2">
-                                            {client.presentingIssues.map(i => <Badge key={i} variant="secondary">{i}</Badge>)}
+                                            {(client.presentingIssues || []).map(i => <Badge key={i} variant="secondary">{i}</Badge>)}
                                         </div>
                                         <p className="text-sm italic">"{client.notes}"</p>
                                     </div>
@@ -577,12 +641,12 @@ export default function Clients() {
                     <div key={form.id} className="flex items-start space-x-3 p-3 rounded border hover:bg-muted/50 transition-colors">
                         <Checkbox 
                             id={`form-${form.id}`} 
-                            checked={selectedForms.includes(form.id)}
+                            checked={selectedFormIds.includes(form.id)}
                             onCheckedChange={(checked) => {
                                 if (checked) {
-                                    setSelectedForms([...selectedForms, form.id]);
+                                    setSelectedForms([...selectedFormIds, form.id]);
                                 } else {
-                                    setSelectedForms(selectedForms.filter(id => id !== form.id));
+                                    setSelectedForms(selectedFormIds.filter((id: string) => id !== form.id));
                                 }
                             }}
                         />
@@ -605,8 +669,8 @@ export default function Clients() {
             </div>
             <DialogFooter>
                 <Button variant="outline" onClick={() => setIsSendFormsOpen(false)}>Cancel</Button>
-                <Button onClick={handleSendForms} disabled={selectedForms.length === 0}>
-                    <Mail className="h-4 w-4 mr-2" /> Send {selectedForms.length > 0 ? `(${selectedForms.length})` : ""}
+                <Button onClick={handleSendForms} disabled={selectedFormIds.length === 0}>
+                    <Mail className="h-4 w-4 mr-2" /> Send {selectedFormIds.length > 0 ? `(${selectedFormIds.length})` : ""}
                 </Button>
             </DialogFooter>
         </DialogContent>

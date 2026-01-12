@@ -200,13 +200,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createClient(insertClient: InsertClient): Promise<Client> {
-    // Generate W-Number (W + 8 random digits)
-    const displayId = `W${Math.floor(10000000 + Math.random() * 90000000)}`;
-    
-    const [client] = await db.insert(clients).values({
-      ...insertClient,
-      displayId
-    }).returning();
+    const [client] = await db.insert(clients).values(insertClient).returning();
     return client;
   }
 

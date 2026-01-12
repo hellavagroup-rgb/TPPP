@@ -628,9 +628,19 @@ export default function Clients() {
                         </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                        <DropdownMenuItem>View Details</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => {
+                            toast({
+                                title: "Client Details",
+                                description: `${client.displayId} - Email: ${client.email}${client.phone ? `, Phone: ${client.phone}` : ""}`,
+                            });
+                        }}>View Details</DropdownMenuItem>
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem className="text-destructive">Archive</DropdownMenuItem>
+                        <DropdownMenuItem className="text-destructive" onClick={() => {
+                            toast({
+                                title: "Archive",
+                                description: "Archive functionality coming soon.",
+                            });
+                        }}>Archive</DropdownMenuItem>
                         </DropdownMenuContent>
                     </DropdownMenu>
                 </div>

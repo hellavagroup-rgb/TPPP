@@ -84,11 +84,6 @@ export default function Login() {
                 </Button>
             </form>
 
-            <div className="text-center text-sm text-muted-foreground mt-2">
-                <p>Demo Credentials:</p>
-                <p className="font-mono text-xs mt-1">admin@perinatalpsych.com / admin123</p>
-                <p className="font-mono text-xs">emily@perinatalpsych.com / clinician123</p>
-            </div>
         </CardContent>
         <CardFooter className="flex justify-center text-xs text-muted-foreground">
             Protected Client Management System

@@ -220,7 +220,7 @@ export default function ClinicianProfile() {
                   />
                   <p className="text-xs text-muted-foreground">Stop allocating after this many new clients.</p>
                 </div>
-                <div className="space-y-3 flex flex-col justify-center">
+                <div className="space-y-2 flex flex-col justify-center">
                   <div className="flex items-center space-x-2">
                     <Checkbox 
                       id="couples" 
@@ -228,14 +228,6 @@ export default function ClinicianProfile() {
                       onCheckedChange={(checked) => setFormData({...formData, worksWithCouples: !!checked})}
                     />
                     <Label htmlFor="couples" className="font-medium cursor-pointer">Works with Couples</Label>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <Checkbox 
-                      id="bupa" 
-                      checked={formData.allocateForBupa || false}
-                      onCheckedChange={(checked) => setFormData({...formData, allocateForBupa: !!checked})}
-                    />
-                    <Label htmlFor="bupa" className="font-medium cursor-pointer">Allocate for Bupa</Label>
                   </div>
                 </div>
               </div>

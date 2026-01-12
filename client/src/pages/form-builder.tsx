@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { useRoute, useLocation } from "wouter";
-import { useData, FormTemplate, FormField } from "@/lib/mockData";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { FormTemplate, FormField } from "@/lib/mockData";
+import { apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -177,7 +179,7 @@ function SortableField({
 export default function FormBuilder() {
   const [, params] = useRoute("/forms/:id");
   const [, setLocation] = useLocation();
-  const { forms, addForm, updateForm } = useData();
+  const queryClient = useQueryClient();
   const { toast } = useToast();
   
   const isNew = params?.id === "new";
@@ -188,6 +190,45 @@ export default function FormBuilder() {
   const [description, setDescription] = useState("");
   const [fields, setFields] = useState<FormField[]>([]);
   const [selectedFieldId, setSelectedFieldId] = useState<string | null>(null);
+
+  // Fetch existing form data from API
+  const { data: existingForm } = useQuery<FormTemplate>({
+    queryKey: [`/api/forms/${params?.id}`],
+    enabled: !isNew && !!params?.id,
+  });
+
+  // Mutation for creating new forms
+  const createFormMutation = useMutation({
+    mutationFn: async (formData: { title: string; description: string; fields: FormField[] }) => {
+      const response = await apiRequest("POST", "/api/forms", formData);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/forms"] });
+      toast({ title: "Form Created", description: "New form template saved successfully." });
+      setLocation("/forms");
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to create form.", variant: "destructive" });
+    },
+  });
+
+  // Mutation for updating existing forms
+  const updateFormMutation = useMutation({
+    mutationFn: async ({ id, formData }: { id: string; formData: { title: string; description: string; fields: FormField[] } }) => {
+      const response = await apiRequest("PATCH", `/api/forms/${id}`, formData);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/forms"] });
+      queryClient.invalidateQueries({ queryKey: [`/api/forms/${params?.id}`] });
+      toast({ title: "Form Updated", description: "Form template changes saved." });
+      setLocation("/forms");
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to update form.", variant: "destructive" });
+    },
+  });
 
   // DnD Sensors
   const sensors = useSensors(
@@ -212,15 +253,12 @@ export default function FormBuilder() {
 
   // Load existing form data
   useEffect(() => {
-    if (!isNew && params?.id) {
-      const existingForm = forms.find(f => f.id === params.id);
-      if (existingForm) {
-        setTitle(existingForm.title);
-        setDescription(existingForm.description);
-        setFields(JSON.parse(JSON.stringify(existingForm.fields))); // Deep copy
-      }
+    if (!isNew && existingForm) {
+      setTitle(existingForm.title);
+      setDescription(existingForm.description);
+      setFields(JSON.parse(JSON.stringify(existingForm.fields))); // Deep copy
     }
-  }, [isNew, params?.id, forms]);
+  }, [isNew, existingForm]);
 
   const handleSave = () => {
     if (!title.trim()) {
@@ -232,22 +270,13 @@ export default function FormBuilder() {
       return;
     }
 
-    const formData: FormTemplate = {
-      id: isNew ? `f-${Date.now()}` : params!.id!,
-      title,
-      description,
-      fields
-    };
+    const formData = { title, description, fields };
 
     if (isNew) {
-      addForm(formData);
-      toast({ title: "Form Created", description: "New form template saved successfully." });
+      createFormMutation.mutate(formData);
     } else {
-      updateForm(formData.id, formData);
-      toast({ title: "Form Updated", description: "Form template changes saved." });
+      updateFormMutation.mutate({ id: params!.id!, formData });
     }
-    
-    setLocation("/forms");
   };
 
   const addField = (type: FormField["type"]) => {

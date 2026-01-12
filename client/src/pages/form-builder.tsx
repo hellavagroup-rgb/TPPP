@@ -362,6 +362,36 @@ export default function FormBuilder() {
                     ))}
                     </CardContent>
                 </Card>
+
+                <Card className="border-amber-200 bg-amber-50/50">
+                    <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium text-amber-800">Debug: All Fields ({fields.length})</CardTitle>
+                    <p className="text-xs text-amber-600">Use this to find and remove hidden/corrupted fields</p>
+                    </CardHeader>
+                    <CardContent className="space-y-2 max-h-64 overflow-y-auto">
+                    {fields.map((field, index) => (
+                        <div key={field.id} className="text-xs p-2 bg-white rounded border flex items-start justify-between gap-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="font-mono text-amber-700">#{index + 1}</div>
+                            <div className="truncate"><strong>Type:</strong> {field.type || "MISSING"}</div>
+                            <div className="truncate"><strong>Label:</strong> {field.label || "(empty)"}</div>
+                            <div className="truncate text-muted-foreground"><strong>ID:</strong> {field.id}</div>
+                          </div>
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            className="h-6 w-6 text-destructive hover:bg-destructive/10 shrink-0"
+                            onClick={() => removeField(field.id)}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        </div>
+                    ))}
+                    {fields.length === 0 && (
+                        <p className="text-xs text-muted-foreground text-center py-2">No fields</p>
+                    )}
+                    </CardContent>
+                </Card>
                 </div>
 
                 {/* Center Canvas */}

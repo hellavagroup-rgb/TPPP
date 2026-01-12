@@ -112,8 +112,26 @@ export async function seedDatabaseIfEmpty() {
     const hasAllClinicians = existingClinicians.length >= 20 && 
       existingClinicians.every(c => expectedClinicianIds.has(c.id));
     
+    // Check if form templates need updating (compare field counts)
+    const expectedFormId = seedData.formTemplates[0]?.id;
+    const existingForm = existingForms.find(f => f.id === expectedFormId);
+    const expectedFieldCount = (seedData.formTemplates[0]?.fields as any[])?.length || 0;
+    const existingFieldCount = existingForm ? (existingForm.fields as any[])?.length || 0 : 0;
+    const formNeedsUpdate = existingForm && existingFieldCount < expectedFieldCount;
+    
     // If there are old clients (test data) OR missing clinicians/forms, we need to reseed
     const needsReseed = existingClients.length > 0 || !hasAllClinicians || existingForms.length === 0;
+    
+    // Always update form templates if they're outdated
+    if (formNeedsUpdate) {
+      console.log(`Form template needs update: ${existingFieldCount} fields -> ${expectedFieldCount} fields`);
+      for (const form of seedData.formTemplates) {
+        await db.update(formTemplates)
+          .set({ fields: form.fields, title: form.title, description: form.description, updatedAt: new Date() })
+          .where(eq(formTemplates.id, form.id));
+        console.log(`Updated form template: ${form.title}`);
+      }
+    }
     
     if (!needsReseed) {
       console.log("Database already properly seeded, skipping...");
@@ -144,10 +162,20 @@ export async function seedDatabaseIfEmpty() {
     }
     console.log(`Inserted ${seedData.clinicians.length} clinicians`);
 
+    // Always update form templates to latest version (in case structure changed)
     for (const form of seedData.formTemplates) {
-      await db.insert(formTemplates).values(form).onConflictDoNothing();
+      const existingForm = existingForms.find(f => f.id === form.id);
+      if (existingForm) {
+        // Update to latest version
+        await db.update(formTemplates)
+          .set({ fields: form.fields, title: form.title, description: form.description, updatedAt: new Date() })
+          .where(eq(formTemplates.id, form.id));
+        console.log(`Updated form template: ${form.title}`);
+      } else {
+        await db.insert(formTemplates).values(form).onConflictDoNothing();
+        console.log(`Inserted form template: ${form.title}`);
+      }
     }
-    console.log(`Inserted ${seedData.formTemplates.length} form templates`);
 
     console.log("Database seeding completed!");
   } catch (error) {

@@ -8,22 +8,38 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { CheckCircle2, Clock, AlertTriangle, Plus } from "lucide-react";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
+import { CheckCircle2, Clock, AlertTriangle, Plus, Pencil, Trash2, Calendar as CalendarIcon } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { Task } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
 import { formatDateUK } from "@/lib/dateUtils";
+import { format, parse } from "date-fns";
+import { cn } from "@/lib/utils";
 
 export default function Tasks() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [isAddOpen, setIsAddOpen] = useState(false);
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [newTask, setNewTask] = useState({
     title: "",
     description: "",
     assignee: "",
     priority: "Medium" as "High" | "Medium" | "Low",
-    dueDate: "",
+    dueDate: undefined as Date | undefined,
+  });
+  const [editTask, setEditTask] = useState({
+    title: "",
+    description: "",
+    assignee: "",
+    priority: "Medium" as "High" | "Medium" | "Low",
+    dueDate: undefined as Date | undefined,
+    status: "Pending" as string,
   });
 
   const { data: tasks = [] } = useQuery<Task[]>({
@@ -37,7 +53,7 @@ export default function Tasks() {
         description: task.description || "",
         assignee: task.assignee,
         priority: task.priority,
-        dueDate: task.dueDate ? new Date(task.dueDate).toISOString() : new Date().toISOString(),
+        dueDate: task.dueDate ? task.dueDate.toISOString() : new Date().toISOString(),
         status: "Pending",
       });
       return response.json();
@@ -46,7 +62,7 @@ export default function Tasks() {
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
       toast({ title: "Task Created", description: "New task has been added." });
       setIsAddOpen(false);
-      setNewTask({ title: "", description: "", assignee: "", priority: "Medium", dueDate: "" });
+      setNewTask({ title: "", description: "", assignee: "", priority: "Medium", dueDate: undefined });
     },
     onError: () => {
       toast({ title: "Error", description: "Failed to create task.", variant: "destructive" });
@@ -54,12 +70,34 @@ export default function Tasks() {
   });
 
   const updateTaskMutation = useMutation({
-    mutationFn: async ({ id, status }: { id: string; status: string }) => {
-      const response = await apiRequest("PATCH", `/api/tasks/${id}`, { status });
+    mutationFn: async ({ id, updates }: { id: string; updates: Record<string, unknown> }) => {
+      const response = await apiRequest("PATCH", `/api/tasks/${id}`, updates);
       return response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      toast({ title: "Task Updated", description: "Task has been updated." });
+      setIsEditOpen(false);
+      setSelectedTask(null);
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to update task.", variant: "destructive" });
+    },
+  });
+
+  const deleteTaskMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const response = await apiRequest("DELETE", `/api/tasks/${id}`);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      toast({ title: "Task Deleted", description: "Task has been removed." });
+      setIsDeleteOpen(false);
+      setSelectedTask(null);
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to delete task.", variant: "destructive" });
     },
   });
 
@@ -78,6 +116,48 @@ export default function Tasks() {
       return;
     }
     createTaskMutation.mutate(newTask);
+  };
+
+  const handleEditClick = (task: Task) => {
+    setSelectedTask(task);
+    setEditTask({
+      title: task.title,
+      description: task.description || "",
+      assignee: task.assignee,
+      priority: task.priority as "High" | "Medium" | "Low",
+      dueDate: task.dueDate ? new Date(task.dueDate) : undefined,
+      status: task.status,
+    });
+    setIsEditOpen(true);
+  };
+
+  const handleDeleteClick = (task: Task) => {
+    setSelectedTask(task);
+    setIsDeleteOpen(true);
+  };
+
+  const handleSaveEdit = () => {
+    if (!selectedTask) return;
+    if (!editTask.title || !editTask.assignee) {
+      toast({ title: "Missing fields", description: "Please fill in title and assignee.", variant: "destructive" });
+      return;
+    }
+    updateTaskMutation.mutate({
+      id: selectedTask.id,
+      updates: {
+        title: editTask.title,
+        description: editTask.description,
+        assignee: editTask.assignee,
+        priority: editTask.priority,
+        dueDate: editTask.dueDate?.toISOString(),
+        status: editTask.status,
+      },
+    });
+  };
+
+  const handleConfirmDelete = () => {
+    if (!selectedTask) return;
+    deleteTaskMutation.mutate(selectedTask.id);
   };
 
   return (
@@ -129,22 +209,40 @@ export default function Tasks() {
                       <span>Due: {formatDateUK(task.dueDate)}</span>
                     </div>
 
-                    {status !== "Completed" && (
-                      <div className="pt-2 flex gap-2">
+                    <div className="pt-2 flex gap-2">
+                      {status !== "Completed" && (
                         <Button 
                           variant="ghost" 
                           size="sm" 
-                          className="h-7 text-xs w-full bg-secondary/50 hover:bg-secondary"
+                          className="h-7 text-xs flex-1 bg-secondary/50 hover:bg-secondary"
                           onClick={() => updateTaskMutation.mutate({ 
                             id: task.id, 
-                            status: status === "Pending" ? "In Progress" : "Completed" 
+                            updates: { status: status === "Pending" ? "In Progress" : "Completed" }
                           })}
                           data-testid={`button-update-task-${task.id}`}
                         >
                           {status === "Pending" ? "Start" : "Complete"}
                         </Button>
-                      </div>
-                    )}
+                      )}
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className="h-7 w-7 p-0"
+                        onClick={() => handleEditClick(task)}
+                        data-testid={`button-edit-task-${task.id}`}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                        onClick={() => handleDeleteClick(task)}
+                        data-testid={`button-delete-task-${task.id}`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
                   </CardContent>
                 </Card>
               ))}
@@ -159,6 +257,7 @@ export default function Tasks() {
         ))}
       </div>
 
+      {/* Add Task Dialog */}
       <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
         <DialogContent>
           <DialogHeader>
@@ -219,12 +318,29 @@ export default function Tasks() {
 
             <div className="space-y-2">
               <Label>Due Date</Label>
-              <Input 
-                type="date"
-                value={newTask.dueDate}
-                onChange={(e) => setNewTask({...newTask, dueDate: e.target.value})}
-                data-testid="input-task-duedate"
-              />
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className={cn(
+                      "w-full justify-start text-left font-normal",
+                      !newTask.dueDate && "text-muted-foreground"
+                    )}
+                    data-testid="input-task-duedate"
+                  >
+                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    {newTask.dueDate ? format(newTask.dueDate, "dd/MM/yyyy") : "Select date"}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar
+                    mode="single"
+                    selected={newTask.dueDate}
+                    onSelect={(date) => setNewTask({...newTask, dueDate: date})}
+                    initialFocus
+                  />
+                </PopoverContent>
+              </Popover>
             </div>
           </div>
 
@@ -236,6 +352,140 @@ export default function Tasks() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Edit Task Dialog */}
+      <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Task</DialogTitle>
+            <DialogDescription>Update task details.</DialogDescription>
+          </DialogHeader>
+          
+          <div className="grid gap-4 py-4">
+            <div className="space-y-2">
+              <Label>Task Title</Label>
+              <Input 
+                value={editTask.title}
+                onChange={(e) => setEditTask({...editTask, title: e.target.value})}
+                placeholder="e.g., Follow up with client W12345"
+                data-testid="input-edit-task-title"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Description (optional)</Label>
+              <Textarea 
+                value={editTask.description}
+                onChange={(e) => setEditTask({...editTask, description: e.target.value})}
+                placeholder="Additional details..."
+                data-testid="input-edit-task-description"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Assignee</Label>
+                <Select value={editTask.assignee} onValueChange={(v) => setEditTask({...editTask, assignee: v})}>
+                  <SelectTrigger data-testid="select-edit-task-assignee">
+                    <SelectValue placeholder="Select assignee" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Sarah">Sarah</SelectItem>
+                    <SelectItem value="Rosie">Rosie</SelectItem>
+                    <SelectItem value="Suzanne">Suzanne</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Priority</Label>
+                <Select value={editTask.priority} onValueChange={(v: "High" | "Medium" | "Low") => setEditTask({...editTask, priority: v})}>
+                  <SelectTrigger data-testid="select-edit-task-priority">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="High">High</SelectItem>
+                    <SelectItem value="Medium">Medium</SelectItem>
+                    <SelectItem value="Low">Low</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Status</Label>
+                <Select value={editTask.status} onValueChange={(v) => setEditTask({...editTask, status: v})}>
+                  <SelectTrigger data-testid="select-edit-task-status">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Pending">Pending</SelectItem>
+                    <SelectItem value="In Progress">In Progress</SelectItem>
+                    <SelectItem value="Completed">Completed</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Due Date</Label>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className={cn(
+                        "w-full justify-start text-left font-normal",
+                        !editTask.dueDate && "text-muted-foreground"
+                      )}
+                      data-testid="input-edit-task-duedate"
+                    >
+                      <CalendarIcon className="mr-2 h-4 w-4" />
+                      {editTask.dueDate ? format(editTask.dueDate, "dd/MM/yyyy") : "Select date"}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="start">
+                    <Calendar
+                      mode="single"
+                      selected={editTask.dueDate}
+                      onSelect={(date) => setEditTask({...editTask, dueDate: date})}
+                      initialFocus
+                    />
+                  </PopoverContent>
+                </Popover>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsEditOpen(false)}>Cancel</Button>
+            <Button onClick={handleSaveEdit} disabled={updateTaskMutation.isPending} data-testid="button-save-edit-task">
+              {updateTaskMutation.isPending ? "Saving..." : "Save Changes"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={isDeleteOpen} onOpenChange={setIsDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Task</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete "{selectedTask?.title}"? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={handleConfirmDelete} 
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-delete-task"
+            >
+              {deleteTaskMutation.isPending ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

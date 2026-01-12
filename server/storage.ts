@@ -59,6 +59,7 @@ export interface IStorage {
   getTaskById(id: string): Promise<Task | undefined>;
   createTask(task: InsertTask): Promise<Task>;
   updateTask(id: string, updates: Partial<InsertTask>): Promise<Task | undefined>;
+  deleteTask(id: string): Promise<void>;
   
   // ============ AUDIT LOGS (GDPR) ============
   createAuditLog(log: InsertAuditLog): Promise<AuditLog>;
@@ -302,6 +303,10 @@ export class DatabaseStorage implements IStorage {
   async updateTask(id: string, updates: Partial<InsertTask>): Promise<Task | undefined> {
     const [task] = await db.update(tasks).set(updates).where(eq(tasks.id, id)).returning();
     return task || undefined;
+  }
+
+  async deleteTask(id: string): Promise<void> {
+    await db.delete(tasks).where(eq(tasks.id, id));
   }
 
   // ============ AUDIT LOGS (GDPR) ============

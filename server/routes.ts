@@ -524,13 +524,27 @@ export async function registerRoutes(
 
   app.patch("/api/tasks/:id", requireAdmin, async (req, res) => {
     try {
-      const updated = await storage.updateTask(req.params.id, req.body);
+      // Parse dueDate string to Date object if present
+      const body = { ...req.body };
+      if (typeof body.dueDate === 'string') {
+        body.dueDate = new Date(body.dueDate);
+      }
+      const updated = await storage.updateTask(req.params.id, body);
       if (!updated) {
         return res.status(404).json({ error: "Task not found" });
       }
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "Failed to update task" });
+    }
+  });
+
+  app.delete("/api/tasks/:id", requireAdmin, async (req, res) => {
+    try {
+      await storage.deleteTask(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete task" });
     }
   });
 

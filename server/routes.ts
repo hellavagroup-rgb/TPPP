@@ -164,7 +164,7 @@ export async function registerRoutes(
     }
   });
 
-  // Create clinician with associated user account
+  // Create clinician with associated user account (no email sent)
   app.post("/api/clinicians/with-user", requireAdmin, async (req, res) => {
     try {
       const { name, email, tier, bio, location, nhsTrust, capacity, maxNewClients, worksWithCouples, insurers, contactMethods, specialties } = req.body;
@@ -179,15 +179,13 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Email already in use" });
       }
 
-      // Generate cryptographically secure temporary password
-      const tempPassword = `Welcome${crypto.randomBytes(8).toString('base64url')}!`;
-      const hashedPassword = await hashPassword(tempPassword);
-
-      // Create user account
+      // Create user account with placeholder password (login disabled until Generate Login is clicked)
+      // Using a random unguessable hash that can't be used for login
+      const placeholderPassword = `DISABLED_${crypto.randomBytes(32).toString('hex')}`;
       const user = await storage.createUser({
         email,
         name,
-        password: hashedPassword,
+        password: placeholderPassword,
         role: "clinician",
       });
 
@@ -207,31 +205,63 @@ export async function registerRoutes(
         specialties: specialties || [],
       });
 
+      res.json({ clinician });
+    } catch (error) {
+      console.error("Failed to create clinician with user:", error);
+      res.status(500).json({ error: "Failed to create clinician" });
+    }
+  });
+
+  // Generate login credentials and send email to clinician
+  app.post("/api/clinicians/:id/generate-login", requireAdmin, async (req, res) => {
+    try {
+      const clinician = await storage.getClinicianById(req.params.id);
+      if (!clinician) {
+        return res.status(404).json({ error: "Clinician not found" });
+      }
+
+      if (!clinician.userId) {
+        return res.status(400).json({ error: "Clinician has no associated user account" });
+      }
+
+      // Get user to find email
+      const user = await storage.getUser(clinician.userId);
+      if (!user) {
+        return res.status(404).json({ error: "User account not found" });
+      }
+
+      // Generate new temporary password
+      const tempPassword = `Welcome${crypto.randomBytes(8).toString('base64url')}!`;
+      const hashedPassword = await hashPassword(tempPassword);
+
+      // Update user with new password
+      await storage.updateUser(clinician.userId, { password: hashedPassword });
+
       // Send welcome email with credentials
       const emailResult = await sendEmail({
-        to: email,
-        subject: "Welcome to The Perinatal Psychology Practice",
+        to: user.email,
+        subject: "Your Login Credentials - The Perinatal Psychology Practice",
         html: `
           <h1>Welcome to The Perinatal Psychology Practice</h1>
-          <p>Hello ${name},</p>
-          <p>Your clinician account has been created. Here are your login credentials:</p>
-          <p><strong>Email:</strong> ${email}</p>
+          <p>Hello ${user.name},</p>
+          <p>Your login credentials have been generated. Here are your details:</p>
+          <p><strong>Email:</strong> ${user.email}</p>
           <p><strong>Temporary Password:</strong> ${tempPassword}</p>
           <p>Please log in and change your password as soon as possible.</p>
           <p>Best regards,<br>The Perinatal Psychology Practice Team</p>
         `,
-        text: `Welcome to The Perinatal Psychology Practice\n\nHello ${name},\n\nYour clinician account has been created.\n\nEmail: ${email}\nTemporary Password: ${tempPassword}\n\nPlease log in and change your password as soon as possible.`,
+        text: `Welcome to The Perinatal Psychology Practice\n\nHello ${user.name},\n\nYour login credentials have been generated.\n\nEmail: ${user.email}\nTemporary Password: ${tempPassword}\n\nPlease log in and change your password as soon as possible.`,
       });
 
       if (!emailResult.success) {
-        console.error("Failed to send welcome email:", emailResult.error);
+        console.error("Failed to send login email:", emailResult.error);
+        return res.status(500).json({ error: "Failed to send email" });
       }
 
-      // Return clinician without exposing password
-      res.json({ clinician, emailSent: emailResult.success });
+      res.json({ success: true, message: "Login credentials sent to clinician's email" });
     } catch (error) {
-      console.error("Failed to create clinician with user:", error);
-      res.status(500).json({ error: "Failed to create clinician" });
+      console.error("Failed to generate login:", error);
+      res.status(500).json({ error: "Failed to generate login" });
     }
   });
 

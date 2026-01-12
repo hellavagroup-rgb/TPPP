@@ -90,17 +90,31 @@ export default function Clinicians() {
       }
       return response.json();
     },
-    onSuccess: (data: { clinician: Clinician; emailSent: boolean }) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/clinicians"] });
-      const emailMessage = data.emailSent 
-        ? "Login credentials have been sent to their email." 
-        : "Account created but email could not be sent.";
-      toast({ title: "Clinician Added", description: emailMessage });
+      toast({ title: "Clinician Added", description: "Profile created. Use 'Generate Login' to send them credentials." });
       setIsAddOpen(false);
       setNewClinician({
         name: "", email: "", tier: "Mid", bio: "", location: "", nhsTrust: "",
         capacity: 15, maxNewClients: 3, worksWithCouples: false, allocateForBupa: false, insurers: [], contactMethods: [],
       });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const generateLoginMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const response = await apiRequest("POST", `/api/clinicians/${id}/generate-login`);
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to generate login");
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Login Sent", description: "Login credentials have been emailed to the clinician." });
     },
     onError: (error: Error) => {
       toast({ title: "Error", description: error.message, variant: "destructive" });
@@ -166,9 +180,8 @@ export default function Clinicians() {
     }
   };
 
-  const handleGenerateCredentials = (clinicianName: string) => {
-    const email = `${clinicianName.split(' ')[1]?.toLowerCase() || 'user'}@perinatalpsych.com`;
-    toast({ title: "Credentials Generated", description: `Login details sent to ${email}` });
+  const handleGenerateCredentials = (clinicianId: string) => {
+    generateLoginMutation.mutate(clinicianId);
   };
 
   const activeClinicians = clinicians.filter(c => c.isActive !== false);
@@ -301,7 +314,7 @@ export default function Clinicians() {
                 </div>
               </div>
               <div className="flex gap-2 w-full">
-                <Button variant="outline" size="sm" className="flex-1 text-xs h-7" onClick={() => handleGenerateCredentials(clinician.name)} data-testid={`button-credentials-${clinician.id}`}>
+                <Button variant="outline" size="sm" className="flex-1 text-xs h-7" onClick={() => handleGenerateCredentials(clinician.id)} disabled={generateLoginMutation.isPending} data-testid={`button-credentials-${clinician.id}`}>
                   <Lock className="h-3 w-3 mr-2" />
                   Generate Login
                 </Button>

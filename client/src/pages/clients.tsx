@@ -550,10 +550,28 @@ export default function Clients() {
                                                         <div className="h-6 w-6 rounded-full bg-secondary flex items-center justify-center text-[10px] font-bold">
                                                             {clinician.avatar}
                                                         </div>
-                                                        <p className="font-medium text-sm">
-                                                            {clinician.name}
-                                                            {!isMatch && <span className="text-xs text-muted-foreground ml-2 font-normal italic">(Override)</span>}
-                                                        </p>
+                                                        <div>
+                                                            <p className="font-medium text-sm">
+                                                                {clinician.name}
+                                                                {!isMatch && <span className="text-xs text-muted-foreground ml-2 font-normal italic">(Override)</span>}
+                                                            </p>
+                                                            {clinician.insurers && clinician.insurers.length > 0 && (
+                                                                <div className="flex flex-wrap gap-1 mt-0.5">
+                                                                    {clinician.insurers.map(ins => (
+                                                                        <span 
+                                                                            key={ins} 
+                                                                            className={`text-[9px] px-1.5 py-0.5 rounded ${
+                                                                                ins === (client.insurer || "Private") 
+                                                                                    ? "bg-green-100 text-green-700 font-medium" 
+                                                                                    : "bg-muted text-muted-foreground"
+                                                                            }`}
+                                                                        >
+                                                                            {ins}
+                                                                        </span>
+                                                                    ))}
+                                                                </div>
+                                                            )}
+                                                        </div>
                                                     </div>
                                                     <div className="flex items-center gap-2">
                                                         {(clinician.maxNewClients || 0) <= (clinician.currentLoad % 5) && (

@@ -32,7 +32,11 @@ export default function Tasks() {
   const createTaskMutation = useMutation({
     mutationFn: async (task: typeof newTask) => {
       const response = await apiRequest("POST", "/api/tasks", {
-        ...task,
+        title: task.title,
+        description: task.description || "",
+        assignee: task.assignee,
+        priority: task.priority,
+        dueDate: task.dueDate ? new Date(task.dueDate).toISOString() : new Date().toISOString(),
         status: "Pending",
       });
       return response.json();

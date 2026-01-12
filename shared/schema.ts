@@ -119,8 +119,7 @@ export const clientsRelations = relations(clients, ({ one, many }) => ({
 export const insertClientSchema = createInsertSchema(clients).omit({ 
   id: true, 
   createdAt: true, 
-  updatedAt: true,
-  displayId: true // Auto-generated
+  updatedAt: true
 });
 export const selectClientSchema = createSelectSchema(clients);
 

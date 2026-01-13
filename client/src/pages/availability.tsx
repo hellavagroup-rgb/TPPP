@@ -602,44 +602,44 @@ export default function Availability() {
           </Button>
         </div>
 
-        <div className="flex-1 overflow-auto" ref={scrollContainerRef}>
-          <div className="min-w-[1200px]">
-            <div className="grid sticky top-0 z-20 bg-card border-b" style={{ gridTemplateColumns: `200px repeat(${daysInMonth}, minmax(80px, 1fr))` }}>
-              <div className="p-3 font-semibold text-sm bg-muted/20 border-r sticky left-0 z-30 bg-card">
-                Clinician
-              </div>
-              {visibleDates.map(date => (
-                <div key={date.toString()} className="p-2 text-center border-r bg-muted/20">
-                  <div className="font-semibold text-sm">{format(date, "EEE")}</div>
-                  <div className="text-xs text-muted-foreground">{format(date, "d MMM")}</div>
-                </div>
-              ))}
-            </div>
+        <div className="flex-1 overflow-x-auto overflow-y-auto" ref={scrollContainerRef}>
+          <table className="border-collapse" style={{ minWidth: `${200 + daysInMonth * 80}px` }}>
+            <thead className="sticky top-0 z-20">
+              <tr className="bg-muted/30">
+                <th className="p-3 font-semibold text-sm text-left border-b border-r bg-muted/30 sticky left-0 z-30 min-w-[200px] w-[200px]">
+                  Clinician
+                </th>
+                {visibleDates.map(date => (
+                  <th key={date.toString()} className="p-2 text-center border-b border-r bg-muted/30 min-w-[80px]">
+                    <div className="font-semibold text-sm">{format(date, "EEE")}</div>
+                    <div className="text-xs text-muted-foreground font-normal">{format(date, "d")}</div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {allCliniciansData.map((clinician, clinicianIndex) => (
+                <tr key={clinician.id} className="border-b last:border-b-0">
+                  <td className="p-3 border-r sticky left-0 bg-card z-10 min-w-[200px] w-[200px] align-top">
+                    <div className="flex items-start gap-2">
+                      <div className={cn(
+                        "h-8 w-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0",
+                        getClinicianColor(clinicianIndex)
+                      )}>
+                        {clinician.avatar}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-medium text-sm truncate">{clinician.name}</div>
+                        <div className="text-xs text-muted-foreground truncate">{clinician.location || "No location"}</div>
+                      </div>
+                    </div>
+                  </td>
 
-            {allCliniciansData.map((clinician, clinicianIndex) => (
-              <div 
-                key={clinician.id} 
-                className="grid border-b last:border-b-0"
-                style={{ gridTemplateColumns: `200px repeat(${daysInMonth}, minmax(80px, 1fr))` }}
-              >
-                <div className="p-3 border-r sticky left-0 bg-card z-10 flex items-start gap-2">
-                  <div className={cn(
-                    "h-8 w-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0",
-                    getClinicianColor(clinicianIndex)
-                  )}>
-                    {clinician.avatar}
-                  </div>
-                  <div className="min-w-0">
-                    <div className="font-medium text-sm truncate">{clinician.name}</div>
-                    <div className="text-xs text-muted-foreground truncate">{clinician.location || "No location"}</div>
-                  </div>
-                </div>
-
-                {visibleDates.map(date => {
-                  const slotsForDate = getSlotsForDate(clinician, date);
-                  
-                  return (
-                    <div key={`${clinician.id}-${date.toString()}`} className="p-1 border-r min-h-[80px] bg-card">
+                  {visibleDates.map(date => {
+                    const slotsForDate = getSlotsForDate(clinician, date);
+                    
+                    return (
+                      <td key={`${clinician.id}-${date.toString()}`} className="p-1 border-r min-h-[80px] bg-card align-top">
                       {slotsForDate.length === 0 ? (
                         <div className="h-full flex items-center justify-center text-xs text-muted-foreground/50">
                           -
@@ -705,12 +705,13 @@ export default function Availability() {
                           ))}
                         </div>
                       )}
-                    </div>
-                  );
-                })}
-              </div>
-            ))}
-          </div>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </Card>
 

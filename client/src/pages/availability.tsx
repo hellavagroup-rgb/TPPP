@@ -200,7 +200,7 @@ export default function Availability() {
   };
 
   const handleScrollRight = () => {
-    setStartDate(addDays(startDate, 7));
+    setStartDate(addDays(startDate, 30));
   };
 
   const getSlotsForDate = (clinician: ClinicianWithSlots, date: Date): SlotForDate[] => {
@@ -609,7 +609,7 @@ export default function Availability() {
                 Clinician
               </div>
               {visibleDates.map(date => (
-                <div key={date.toString()} className="p-2 text-center border-r last:border-r-0 bg-muted/20">
+                <div key={date.toString()} className="p-2 text-center border-r bg-muted/20">
                   <div className="font-semibold text-sm">{format(date, "EEE")}</div>
                   <div className="text-xs text-muted-foreground">{format(date, "d MMM")}</div>
                 </div>
@@ -639,7 +639,7 @@ export default function Availability() {
                   const slotsForDate = getSlotsForDate(clinician, date);
                   
                   return (
-                    <div key={`${clinician.id}-${date.toString()}`} className="p-1 border-r last:border-r-0 min-h-[80px] bg-white">
+                    <div key={`${clinician.id}-${date.toString()}`} className="p-1 border-r min-h-[80px] bg-card">
                       {slotsForDate.length === 0 ? (
                         <div className="h-full flex items-center justify-center text-xs text-muted-foreground/50">
                           -

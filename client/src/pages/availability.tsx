@@ -27,8 +27,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { DatePicker } from "@/components/ui/date-picker";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import type { Clinician, TimeSlot } from "@shared/schema";
@@ -421,11 +421,11 @@ export default function Availability() {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="grid gap-2">
                     <Label>{newSlotType === "Recurring" ? "Valid From" : "Start Date"}</Label>
-                    <Input type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)} />
+                    <DatePicker value={newDate} onChange={setNewDate} placeholder="Select date" />
                   </div>
                   <div className="grid gap-2">
                     <Label>{newSlotType === "Recurring" ? "Valid Until" : "End Date"}</Label>
-                    <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+                    <DatePicker value={endDate} onChange={setEndDate} placeholder="Select date" />
                   </div>
                 </div>
 

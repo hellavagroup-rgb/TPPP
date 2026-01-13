@@ -131,6 +131,7 @@ export default function Clinicians() {
       nhsTrust: clinician.nhsTrust || "",
       maxNewClients: clinician.maxNewClients ?? 0,
       worksWithCouples: clinician.worksWithCouples || false,
+      allocateForBupa: clinician.allocateForBupa || false,
       insurers: clinician.insurers || [],
       contactMethods: clinician.contactMethods || [],
       isActive: clinician.isActive !== false,

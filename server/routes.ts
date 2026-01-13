@@ -329,6 +329,7 @@ export async function registerRoutes(
       const updated = await storage.getTimeSlotsByClinicianId(req.params.clinicianId);
       res.json(updated);
     } catch (error) {
+      console.error("Error updating time slots:", error);
       res.status(500).json({ error: "Failed to update time slots" });
     }
   });

@@ -44,6 +44,7 @@ import {
   Phone
 } from "lucide-react";
 import { useState } from "react";
+import { useLocation } from "wouter";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
@@ -54,6 +55,7 @@ import type { Client as ClientType, Clinician, FormTemplate as FormTemplateType 
 export default function Clients() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const [searchTerm, setSearchTerm] = useState("");
   const [filterStatus, setFilterStatus] = useState<string>("All");
   const [selectedClient, setSelectedClient] = useState<ClientType | null>(null);
@@ -224,8 +226,7 @@ export default function Clients() {
   };
 
   const handleOpenManualAllocate = (client: ClientType) => {
-    setManualAllocateClient(client);
-    setIsManualAllocateOpen(true);
+    setLocation(`/availability?allocate=${client.id}`);
   };
 
   const handleOpenEditClient = (client: ClientType) => {
@@ -730,7 +731,7 @@ export default function Clients() {
                         </DropdownMenuItem>
                         {client.status !== "Assigned" && client.status !== "Scheduled" && (
                           <DropdownMenuItem onClick={() => handleOpenManualAllocate(client)}>
-                            <Phone className="h-4 w-4 mr-2" /> Allocate (Phone Intake)
+                            <CalendarCheck className="h-4 w-4 mr-2" /> Allocate to Clinician
                           </DropdownMenuItem>
                         )}
                         <DropdownMenuSeparator />

@@ -1,13 +1,14 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { useLocation } from "wouter";
+import { Card } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Filter, ChevronLeft, ChevronRight, Calendar as CalendarIcon, Plus, Briefcase, Trash2, Pencil } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, Trash2, Pencil, UserPlus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { format, addWeeks, subWeeks, startOfWeek, endOfWeek, eachDayOfInterval, parseISO, isWithinInterval } from "date-fns";
+import { format, addDays, startOfDay, parseISO, isWithinInterval, isBefore, isAfter, differenceInDays } from "date-fns";
 import {
   Dialog,
   DialogContent,
@@ -31,14 +32,23 @@ import { Label } from "@/components/ui/label";
 import { DatePicker } from "@/components/ui/date-picker";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import type { Clinician, TimeSlot } from "@shared/schema";
+import type { Clinician, TimeSlot, Client } from "@shared/schema";
 
 type SlotType = "Recurring" | "SpecificDate" | "Vacation";
 
 interface ClinicianWithSlots extends Clinician {
   name: string;
+  email?: string;
   avatar: string;
   slots: TimeSlot[];
+}
+
+interface SlotForDate {
+  slot: TimeSlot;
+  isActive: boolean;
+  isFuture: boolean;
+  validFrom?: string;
+  validUntil?: string;
 }
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -55,8 +65,11 @@ export default function Availability() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
   const { toast } = useToast();
-  const [selectedClinicianId, setSelectedClinicianId] = useState<string>("all");
-  const [currentDate, setCurrentDate] = useState(new Date());
+  const [, setLocation] = useLocation();
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  
+  const [startDate, setStartDate] = useState(startOfDay(new Date()));
+  const VISIBLE_DAYS = 14;
 
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
@@ -72,8 +85,17 @@ export default function Availability() {
   const [newEndTime, setNewEndTime] = useState("17:00");
   const [dialogClinicianId, setDialogClinicianId] = useState<string>("");
 
+  const [isAllocating, setIsAllocating] = useState(false);
+  const [allocatingClientId, setAllocatingClientId] = useState<string | null>(null);
+  const [allocatingClient, setAllocatingClient] = useState<Client | null>(null);
+
   const { data: clinicians = [] } = useQuery<(Clinician & { name: string })[]>({
     queryKey: ["/api/clinicians"],
+  });
+
+  const { data: clients = [] } = useQuery<Client[]>({
+    queryKey: ["/api/clients"],
+    enabled: user?.role === "admin",
   });
 
   const cliniciansWithSlots = useQuery<ClinicianWithSlots[]>({
@@ -85,11 +107,11 @@ export default function Availability() {
           const slots = response.ok ? await response.json() : [];
           return {
             ...clinician,
-            avatar: clinician.name?.charAt(0) || "?",
+            avatar: clinician.name?.substring(0, 2).toUpperCase() || "??",
             slots,
           };
         } catch {
-          return { ...clinician, avatar: clinician.name?.charAt(0) || "?", slots: [] };
+          return { ...clinician, avatar: clinician.name?.substring(0, 2).toUpperCase() || "??", slots: [] };
         }
       });
       return Promise.all(slotsPromises);
@@ -107,11 +129,49 @@ export default function Availability() {
     },
   });
 
+  const assignClientMutation = useMutation({
+    mutationFn: async ({ clientId, clinicianId, slotId }: { clientId: string; clinicianId: string; slotId: string }) => {
+      const response = await apiRequest("POST", `/api/clients/${clientId}/assign`, {
+        clinicianId,
+        slotId,
+        allocationMethod: "manual"
+      });
+      return response.json();
+    },
+    onSuccess: () => {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("allocate");
+      window.history.replaceState({}, "", url.pathname);
+      
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/clinicians/with-slots"] });
+      toast({ title: "Client Allocated", description: "Client has been assigned to the selected slot." });
+      setIsAllocating(false);
+      setAllocatingClientId(null);
+      setAllocatingClient(null);
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to allocate client.", variant: "destructive" });
+    },
+  });
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const clientId = params.get("allocate");
+    if (clientId && clients.length > 0 && !isAllocating) {
+      const client = clients.find(c => c.id === clientId);
+      if (client && client.status !== "Assigned" && client.status !== "Scheduled") {
+        setIsAllocating(true);
+        setAllocatingClientId(clientId);
+        setAllocatingClient(client);
+      }
+    }
+  }, [clients, isAllocating]);
+
   useEffect(() => {
     if (user?.role === "clinician") {
       const myClinician = clinicians.find(c => c.userId === user.id);
       if (myClinician) {
-        setSelectedClinicianId(myClinician.id);
         setDialogClinicianId(myClinician.id);
       }
     }
@@ -119,55 +179,85 @@ export default function Availability() {
 
   useEffect(() => {
     if (isDialogOpen && user?.role !== "clinician") {
-      if (selectedClinicianId !== "all") {
-        setDialogClinicianId(selectedClinicianId);
-      } else if (clinicians.length > 0 && !dialogClinicianId) {
+      if (clinicians.length > 0 && !dialogClinicianId) {
         setDialogClinicianId(clinicians[0].id);
       }
     }
-  }, [isDialogOpen, selectedClinicianId, clinicians, user, dialogClinicianId]);
+  }, [isDialogOpen, clinicians, user, dialogClinicianId]);
 
   const allCliniciansData = cliniciansWithSlots.data || [];
-  const filteredClinicians = selectedClinicianId === "all"
-    ? allCliniciansData
-    : allCliniciansData.filter(c => c.id === selectedClinicianId);
 
-  const startOfCurrentWeek = startOfWeek(currentDate, { weekStartsOn: 1 });
-  const endOfCurrentWeek = endOfWeek(currentDate, { weekStartsOn: 1 });
-  const weekDays = eachDayOfInterval({ start: startOfCurrentWeek, end: endOfCurrentWeek });
-  const hours = Array.from({ length: 13 }, (_, i) => i + 7);
+  const visibleDates = Array.from({ length: VISIBLE_DAYS }, (_, i) => addDays(startDate, i));
 
-  const parseTime = (time: string) => {
-    const [h, m] = time.split(':').map(Number);
-    return h + m / 60;
+  const handleScrollLeft = () => {
+    const today = startOfDay(new Date());
+    const newStart = addDays(startDate, -7);
+    if (isBefore(newStart, today)) {
+      setStartDate(today);
+    } else {
+      setStartDate(newStart);
+    }
   };
 
-  const isSlotInHour = (slotStart: string, slotEnd: string, currentHour: number) => {
-    const start = parseTime(slotStart);
-    const end = parseTime(slotEnd);
-    return start < currentHour + 1 && end > currentHour;
+  const handleScrollRight = () => {
+    setStartDate(addDays(startDate, 7));
   };
 
-  const isSlotActiveOnDate = (slot: TimeSlot, date: Date) => {
-    if (slot.type === "Recurring") {
-      if (slot.day !== format(date, "EEEE")) return false;
-      if (slot.startDate && slot.endDate) {
-        const start = parseISO(slot.startDate);
-        const end = parseISO(slot.endDate);
-        start.setHours(0, 0, 0, 0);
-        end.setHours(23, 59, 59, 999);
-        if (!isWithinInterval(date, { start, end })) return false;
+  const getSlotsForDate = (clinician: ClinicianWithSlots, date: Date): SlotForDate[] => {
+    const today = startOfDay(new Date());
+    const dayName = format(date, "EEEE");
+    const dateStr = format(date, "yyyy-MM-dd");
+    const results: SlotForDate[] = [];
+
+    clinician.slots.forEach(slot => {
+      if (slot.type === "Recurring") {
+        if (slot.day !== dayName) return;
+        
+        const slotStart = slot.startDate ? parseISO(slot.startDate) : null;
+        const slotEnd = slot.endDate ? parseISO(slot.endDate) : null;
+        
+        if (slotStart && slotEnd) {
+          slotStart.setHours(0, 0, 0, 0);
+          slotEnd.setHours(23, 59, 59, 999);
+          
+          const isWithinRange = isWithinInterval(date, { start: slotStart, end: slotEnd });
+          const isFutureSlot = isBefore(date, slotStart);
+          
+          if (isWithinRange) {
+            results.push({
+              slot,
+              isActive: true,
+              isFuture: false,
+            });
+          } else if (isFutureSlot && isBefore(today, slotEnd)) {
+            results.push({
+              slot,
+              isActive: false,
+              isFuture: true,
+              validFrom: format(slotStart, "dd/MM/yyyy"),
+              validUntil: format(slotEnd, "dd/MM/yyyy"),
+            });
+          }
+        } else {
+          results.push({
+            slot,
+            isActive: true,
+            isFuture: false,
+          });
+        }
+      } else if (slot.type === "SpecificDate" || slot.type === "Vacation") {
+        if (slot.date === dateStr) {
+          results.push({
+            slot,
+            isActive: true,
+            isFuture: false,
+          });
+        }
       }
-      return true;
-    }
-    if (slot.type === "SpecificDate" || slot.type === "Vacation") {
-      return slot.date === format(date, "yyyy-MM-dd");
-    }
-    return false;
-  };
+    });
 
-  const handleNextWeek = () => setCurrentDate(addWeeks(currentDate, 1));
-  const handlePrevWeek = () => setCurrentDate(subWeeks(currentDate, 1));
+    return results;
+  };
 
   const resetForm = () => {
     setNewSlotType("SpecificDate");
@@ -210,9 +300,10 @@ export default function Availability() {
       });
     } else {
       const rangeEnd = end < start ? start : end;
-      const daysInRange = eachDayOfInterval({ start, end: rangeEnd });
-
-      daysInRange.forEach(day => {
+      const dayCount = differenceInDays(rangeEnd, start) + 1;
+      
+      for (let i = 0; i < dayCount; i++) {
+        const day = addDays(start, i);
         newSlots.push({
           id: `ts-${Date.now()}-${day.getTime()}`,
           clinicianId: dialogClinicianId,
@@ -225,7 +316,7 @@ export default function Availability() {
           endTime: newSlotType === "Vacation" ? "23:59" : newEndTime,
           isBooked: false,
         } as TimeSlot);
-      });
+      }
     }
 
     const updatedSlots = [...clinician.slots, ...newSlots];
@@ -321,70 +412,76 @@ export default function Availability() {
     );
   };
 
+  const handleSlotClick = (slot: TimeSlot, clinicianId: string) => {
+    if (!isAllocating || !allocatingClientId) return;
+    if (slot.isBooked || slot.type === "Vacation") return;
+    
+    assignClientMutation.mutate({
+      clientId: allocatingClientId,
+      clinicianId,
+      slotId: slot.id,
+    });
+  };
+
+  const cancelAllocation = () => {
+    setIsAllocating(false);
+    setAllocatingClientId(null);
+    setAllocatingClient(null);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("allocate");
+    window.history.replaceState({}, "", url.pathname);
+  };
+
   const getClinicianColor = (index: number) => {
     const colors = [
-      "bg-teal-100 text-teal-800 border-teal-200 hover:bg-teal-200",
-      "bg-indigo-100 text-indigo-800 border-indigo-200 hover:bg-indigo-200",
-      "bg-rose-100 text-rose-800 border-rose-200 hover:bg-rose-200",
-      "bg-amber-100 text-amber-800 border-amber-200 hover:bg-amber-200",
-      "bg-purple-100 text-purple-800 border-purple-200 hover:bg-purple-200",
+      "bg-teal-100 text-teal-800 border-teal-300",
+      "bg-indigo-100 text-indigo-800 border-indigo-300",
+      "bg-rose-100 text-rose-800 border-rose-300",
+      "bg-amber-100 text-amber-800 border-amber-300",
+      "bg-purple-100 text-purple-800 border-purple-300",
+      "bg-emerald-100 text-emerald-800 border-emerald-300",
+      "bg-blue-100 text-blue-800 border-blue-300",
+      "bg-pink-100 text-pink-800 border-pink-300",
     ];
     return colors[index % colors.length];
   };
 
   return (
-    <div className="space-y-6 h-[calc(100vh-8rem)] flex flex-col animate-in fade-in slide-in-from-bottom-4 duration-500">
+    <div className="space-y-4 h-[calc(100vh-8rem)] flex flex-col animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 flex-shrink-0">
         <div>
           <h2 className="text-3xl font-serif font-bold text-foreground">
-            {user?.role === "clinician" ? "My Availability" : "Master Schedule"}
+            {user?.role === "clinician" ? "My Availability" : "Clinician Availability"}
           </h2>
           <p className="text-muted-foreground mt-1">
-            {user?.role === "clinician"
-              ? "Manage your weekly shifts and view booked sessions."
-              : "Weekly view of all clinician availability (7am - 7pm)."}
+            {isAllocating 
+              ? `Select a slot to allocate ${allocatingClient?.displayId || "client"}`
+              : user?.role === "clinician"
+                ? "Manage your availability and view booked sessions."
+                : "View and manage clinician schedules. Scroll left/right to see more dates."}
           </p>
         </div>
 
         <div className="flex items-center gap-2">
-          <div className="flex items-center bg-card rounded-md border shadow-sm">
-            <Button variant="ghost" size="icon" onClick={handlePrevWeek}>
-              <ChevronLeft className="h-4 w-4" />
-            </Button>
-            <div className="px-4 font-medium min-w-[140px] text-center">
-              {format(startOfCurrentWeek, "MMM d")} - {format(endOfCurrentWeek, "MMM d")}
-            </div>
-            <Button variant="ghost" size="icon" onClick={handleNextWeek}>
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          </div>
-
-          {user?.role !== "clinician" && (
-            <div className="flex items-center gap-2 bg-card p-1 rounded-lg border border-border shadow-sm ml-2">
-              <Filter className="h-4 w-4 text-muted-foreground ml-2" />
-              <Select value={selectedClinicianId} onValueChange={setSelectedClinicianId}>
-                <SelectTrigger className="w-[180px] border-none shadow-none focus:ring-0">
-                  <SelectValue placeholder="Filter Clinician" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Clinicians</SelectItem>
-                  {clinicians.map(c => (
-                    <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+          {isAllocating && (
+            <div className="flex items-center gap-2 bg-primary/10 text-primary px-3 py-2 rounded-lg border border-primary/20">
+              <UserPlus className="h-4 w-4" />
+              <span className="text-sm font-medium">Allocating: {allocatingClient?.displayId}</span>
+              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={cancelAllocation}>
+                <X className="h-4 w-4" />
+              </Button>
             </div>
           )}
 
           <Dialog open={isDialogOpen} onOpenChange={(open) => { setIsDialogOpen(open); if (!open) resetForm(); }}>
             <DialogTrigger asChild>
-              <Button className="ml-2 gap-2">
+              <Button className="gap-2">
                 <Plus className="h-4 w-4" /> Add Availability
               </Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>{isEditMode ? "Edit Availability" : "Manage Availability"}</DialogTitle>
+                <DialogTitle>{isEditMode ? "Edit Availability" : "Add Availability"}</DialogTitle>
                 <DialogDescription>{isEditMode ? "Update this time slot." : "Add a specific shift, recurring bank, or vacation."}</DialogDescription>
               </DialogHeader>
               <div className="grid gap-4 py-4">
@@ -492,88 +589,125 @@ export default function Availability() {
         </div>
       </div>
 
-      <Card className="flex-1 border-none shadow-sm overflow-hidden flex flex-col">
-        <div className="overflow-auto flex-1 relative">
-          <div className="grid grid-cols-[60px_repeat(7,1fr)] min-w-[1000px] sticky top-0 z-20 bg-card border-b border-border shadow-sm">
-            <div className="p-4 border-r border-border bg-muted/10"></div>
-            {weekDays.map(day => (
-              <div key={day.toString()} className="p-3 text-center font-semibold text-sm text-foreground bg-muted/10 border-r border-border last:border-r-0">
-                <div>{format(day, "EEEE")}</div>
-                <div className="text-xs text-muted-foreground font-normal">{format(day, "d MMM")}</div>
-              </div>
-            ))}
+      <Card className="flex-1 border shadow-sm overflow-hidden flex flex-col">
+        <div className="flex items-center justify-between p-3 border-b bg-muted/30">
+          <Button variant="outline" size="sm" onClick={handleScrollLeft} disabled={isBefore(startDate, addDays(new Date(), 1))}>
+            <ChevronLeft className="h-4 w-4 mr-1" /> Previous
+          </Button>
+          <div className="text-sm font-medium text-muted-foreground">
+            {format(visibleDates[0], "d MMM yyyy")} - {format(visibleDates[visibleDates.length - 1], "d MMM yyyy")}
           </div>
+          <Button variant="outline" size="sm" onClick={handleScrollRight}>
+            Next <ChevronRight className="h-4 w-4 ml-1" />
+          </Button>
+        </div>
 
-          <div className="min-w-[1000px]">
-            {hours.map(hour => (
-              <div key={hour} className="grid grid-cols-[60px_repeat(7,1fr)] border-b border-border/50 last:border-b-0">
-                <div className="p-2 text-xs text-muted-foreground text-right pr-3 border-r border-border sticky left-0 bg-card z-10 flex items-center justify-end font-mono">
-                  {hour === 12 ? '12 PM' : hour > 12 ? `${hour - 12} PM` : `${hour} AM`}
+        <div className="flex-1 overflow-auto" ref={scrollContainerRef}>
+          <div className="min-w-[1200px]">
+            <div className="grid sticky top-0 z-20 bg-card border-b" style={{ gridTemplateColumns: `200px repeat(${VISIBLE_DAYS}, minmax(100px, 1fr))` }}>
+              <div className="p-3 font-semibold text-sm bg-muted/20 border-r sticky left-0 z-30 bg-card">
+                Clinician
+              </div>
+              {visibleDates.map(date => (
+                <div key={date.toString()} className="p-2 text-center border-r last:border-r-0 bg-muted/20">
+                  <div className="font-semibold text-sm">{format(date, "EEE")}</div>
+                  <div className="text-xs text-muted-foreground">{format(date, "d MMM")}</div>
+                </div>
+              ))}
+            </div>
+
+            {allCliniciansData.map((clinician, clinicianIndex) => (
+              <div 
+                key={clinician.id} 
+                className="grid border-b last:border-b-0"
+                style={{ gridTemplateColumns: `200px repeat(${VISIBLE_DAYS}, minmax(100px, 1fr))` }}
+              >
+                <div className="p-3 border-r sticky left-0 bg-card z-10 flex items-start gap-2">
+                  <div className={cn(
+                    "h-8 w-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0",
+                    getClinicianColor(clinicianIndex)
+                  )}>
+                    {clinician.avatar}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="font-medium text-sm truncate">{clinician.name}</div>
+                    <div className="text-xs text-muted-foreground truncate">{clinician.location || "No location"}</div>
+                  </div>
                 </div>
 
-                {weekDays.map(day => (
-                  <div key={`${day}-${hour}`} className="p-1 border-r border-border/50 last:border-r-0 relative min-h-[80px] hover:bg-muted/5 transition-colors">
-                    {filteredClinicians.map((clinician, cIndex) => {
-                      const activeSlots = clinician.slots.filter(slot =>
-                        isSlotActiveOnDate(slot, day) &&
-                        (slot.type === "Vacation" || isSlotInHour(slot.startTime, slot.endTime, hour))
-                      );
-
-                      if (activeSlots.length === 0) return null;
-
-                      return activeSlots.map(slot => (
-                        <div
-                          key={`${clinician.id}-${slot.id}-${hour}`}
-                          className={cn(
-                            "mb-1 p-1.5 rounded text-[10px] border shadow-sm flex items-center gap-1.5 transition-all cursor-pointer group relative",
-                            slot.type === "Vacation"
-                              ? "bg-slate-100 text-slate-500 border-slate-200 border-dashed h-full items-start"
-                              : slot.isBooked
-                                ? "bg-indigo-50 text-indigo-700 border-indigo-200"
-                                : getClinicianColor(cIndex)
-                          )}
-                        >
-                          <div className={cn(
-                            "h-5 w-5 rounded-full flex items-center justify-center font-bold text-[8px] flex-shrink-0 bg-white/50",
-                            slot.type === "Vacation" ? "text-slate-400" : ""
-                          )}>
-                            {clinician.avatar}
-                          </div>
-                          <div className="overflow-hidden flex-1">
-                            <p className="font-semibold truncate leading-tight">{clinician.name?.split(" ")[1] || clinician.name}</p>
-                            <div className="opacity-80 truncate leading-tight flex items-center gap-1">
-                              {slot.type === "Vacation" ? "NOT AVAILABLE" : `${slot.startTime} - ${slot.endTime}`}
-                            </div>
-                            {slot.isBooked && (
-                              <div className="flex items-center gap-1 mt-0.5 font-bold">
-                                <Briefcase className="h-3 w-3" />
-                                <span>Client Booked</span>
-                              </div>
-                            )}
-                          </div>
-                          <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-0.5 absolute right-1 top-1">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-5 w-5 bg-white/80 hover:bg-white"
-                              onClick={(e) => { e.stopPropagation(); handleEditSlot(slot, clinician.id); }}
-                            >
-                              <Pencil className="h-3 w-3" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-5 w-5 bg-white/80 hover:bg-white text-destructive hover:text-destructive"
-                              onClick={(e) => { e.stopPropagation(); handleDeleteClick(slot, clinician.id); }}
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </Button>
-                          </div>
+                {visibleDates.map(date => {
+                  const slotsForDate = getSlotsForDate(clinician, date);
+                  
+                  return (
+                    <div key={`${clinician.id}-${date.toString()}`} className="p-1 border-r last:border-r-0 min-h-[80px] bg-white">
+                      {slotsForDate.length === 0 ? (
+                        <div className="h-full flex items-center justify-center text-xs text-muted-foreground/50">
+                          -
                         </div>
-                      ));
-                    })}
-                  </div>
-                ))}
+                      ) : (
+                        <div className="space-y-1">
+                          {slotsForDate.map(({ slot, isActive, isFuture, validFrom, validUntil }) => (
+                            <div
+                              key={slot.id}
+                              onClick={() => isActive && !slot.isBooked && slot.type !== "Vacation" && handleSlotClick(slot, clinician.id)}
+                              className={cn(
+                                "p-1.5 rounded text-[10px] border transition-all group relative",
+                                slot.type === "Vacation"
+                                  ? "bg-slate-100 text-slate-500 border-slate-200 border-dashed"
+                                  : isFuture
+                                    ? "bg-gray-50 text-gray-400 border-gray-200 opacity-60"
+                                    : slot.isBooked
+                                      ? "bg-indigo-50 text-indigo-700 border-indigo-200"
+                                      : isAllocating
+                                        ? "cursor-pointer hover:ring-2 hover:ring-primary hover:ring-offset-1 " + getClinicianColor(clinicianIndex)
+                                        : getClinicianColor(clinicianIndex)
+                              )}
+                            >
+                              {slot.type === "Vacation" ? (
+                                <div className="font-medium">OFF</div>
+                              ) : (
+                                <>
+                                  <div className="font-semibold">{slot.startTime} - {slot.endTime}</div>
+                                  {isFuture && (
+                                    <div className="text-[9px] leading-tight mt-0.5 italic">
+                                      Available {validFrom} - {validUntil}
+                                    </div>
+                                  )}
+                                  {slot.isBooked && (
+                                    <Badge variant="secondary" className="text-[8px] px-1 py-0 mt-0.5">
+                                      Booked
+                                    </Badge>
+                                  )}
+                                </>
+                              )}
+                              
+                              {!isAllocating && isActive && !isFuture && (
+                                <div className="opacity-0 group-hover:opacity-100 transition-opacity absolute right-0.5 top-0.5 flex gap-0.5">
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-4 w-4 bg-white/80 hover:bg-white p-0"
+                                    onClick={(e) => { e.stopPropagation(); handleEditSlot(slot, clinician.id); }}
+                                  >
+                                    <Pencil className="h-2.5 w-2.5" />
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-4 w-4 bg-white/80 hover:bg-white text-destructive p-0"
+                                    onClick={(e) => { e.stopPropagation(); handleDeleteClick(slot, clinician.id); }}
+                                  >
+                                    <Trash2 className="h-2.5 w-2.5" />
+                                  </Button>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             ))}
           </div>

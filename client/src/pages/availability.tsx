@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { ChevronLeft, ChevronRight, Plus, Trash2, Pencil, UserPlus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { format, addDays, startOfDay, parseISO, isWithinInterval, isBefore, isAfter, differenceInDays } from "date-fns";
+import { format, addDays, startOfDay, startOfMonth, endOfMonth, addMonths, parseISO, isWithinInterval, isBefore, isAfter, differenceInDays, getDaysInMonth } from "date-fns";
 import {
   Dialog,
   DialogContent,
@@ -68,8 +68,8 @@ export default function Availability() {
   const [, setLocation] = useLocation();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   
-  const [startDate, setStartDate] = useState(startOfDay(new Date()));
-  const VISIBLE_DAYS = 14;
+  const [currentMonth, setCurrentMonth] = useState(startOfMonth(new Date()));
+  const daysInMonth = getDaysInMonth(currentMonth);
 
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
@@ -187,20 +187,20 @@ export default function Availability() {
 
   const allCliniciansData = cliniciansWithSlots.data || [];
 
-  const visibleDates = Array.from({ length: VISIBLE_DAYS }, (_, i) => addDays(startDate, i));
+  const visibleDates = Array.from({ length: daysInMonth }, (_, i) => addDays(currentMonth, i));
 
   const handleScrollLeft = () => {
-    const today = startOfDay(new Date());
-    const newStart = addDays(startDate, -7);
-    if (isBefore(newStart, today)) {
-      setStartDate(today);
+    const prevMonth = addMonths(currentMonth, -1);
+    const thisMonth = startOfMonth(new Date());
+    if (isBefore(prevMonth, thisMonth)) {
+      setCurrentMonth(thisMonth);
     } else {
-      setStartDate(newStart);
+      setCurrentMonth(prevMonth);
     }
   };
 
   const handleScrollRight = () => {
-    setStartDate(addDays(startDate, 30));
+    setCurrentMonth(addMonths(currentMonth, 1));
   };
 
   const getSlotsForDate = (clinician: ClinicianWithSlots, date: Date): SlotForDate[] => {
@@ -591,11 +591,11 @@ export default function Availability() {
 
       <Card className="flex-1 border shadow-sm overflow-hidden flex flex-col">
         <div className="flex items-center justify-between p-3 border-b bg-muted/30">
-          <Button variant="outline" size="sm" onClick={handleScrollLeft} disabled={isBefore(startDate, addDays(new Date(), 1))}>
+          <Button variant="outline" size="sm" onClick={handleScrollLeft} disabled={isBefore(currentMonth, startOfMonth(new Date()))}>
             <ChevronLeft className="h-4 w-4 mr-1" /> Previous
           </Button>
           <div className="text-sm font-medium text-muted-foreground">
-            {format(visibleDates[0], "d MMM yyyy")} - {format(visibleDates[visibleDates.length - 1], "d MMM yyyy")}
+            {format(currentMonth, "MMMM yyyy")}
           </div>
           <Button variant="outline" size="sm" onClick={handleScrollRight}>
             Next <ChevronRight className="h-4 w-4 ml-1" />
@@ -604,7 +604,7 @@ export default function Availability() {
 
         <div className="flex-1 overflow-auto" ref={scrollContainerRef}>
           <div className="min-w-[1200px]">
-            <div className="grid sticky top-0 z-20 bg-card border-b" style={{ gridTemplateColumns: `200px repeat(${VISIBLE_DAYS}, minmax(100px, 1fr))` }}>
+            <div className="grid sticky top-0 z-20 bg-card border-b" style={{ gridTemplateColumns: `200px repeat(${daysInMonth}, minmax(80px, 1fr))` }}>
               <div className="p-3 font-semibold text-sm bg-muted/20 border-r sticky left-0 z-30 bg-card">
                 Clinician
               </div>
@@ -620,7 +620,7 @@ export default function Availability() {
               <div 
                 key={clinician.id} 
                 className="grid border-b last:border-b-0"
-                style={{ gridTemplateColumns: `200px repeat(${VISIBLE_DAYS}, minmax(100px, 1fr))` }}
+                style={{ gridTemplateColumns: `200px repeat(${daysInMonth}, minmax(80px, 1fr))` }}
               >
                 <div className="p-3 border-r sticky left-0 bg-card z-10 flex items-start gap-2">
                   <div className={cn(

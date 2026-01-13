@@ -172,11 +172,19 @@ export class DatabaseStorage implements IStorage {
     // Delete all existing slots for this clinician
     await db.delete(timeSlots).where(eq(timeSlots.clinicianId, clinicianId));
     
-    // Insert new slots
+    // Insert new slots with fresh IDs to avoid conflicts
     if (slots.length > 0) {
-      await db.insert(timeSlots).values(slots.map(slot => ({
-        ...slot,
-        clinicianId
+      await db.insert(timeSlots).values(slots.map((slot, index) => ({
+        id: `ts-${Date.now()}-${index}-${slot.day || slot.date || 'slot'}`,
+        clinicianId,
+        type: slot.type,
+        day: slot.day,
+        date: slot.date,
+        startDate: slot.startDate,
+        endDate: slot.endDate,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        isBooked: slot.isBooked,
       })));
     }
     

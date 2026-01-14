@@ -68,8 +68,8 @@ export default function Availability() {
   const [, setLocation] = useLocation();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   
-  const [currentMonth, setCurrentMonth] = useState(startOfMonth(new Date()));
-  const daysInMonth = getDaysInMonth(currentMonth);
+  const [weekStart, setWeekStart] = useState(startOfDay(new Date()));
+  const DAYS_TO_SHOW = 7;
 
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
@@ -187,20 +187,20 @@ export default function Availability() {
 
   const allCliniciansData = cliniciansWithSlots.data || [];
 
-  const visibleDates = Array.from({ length: daysInMonth }, (_, i) => addDays(currentMonth, i));
+  const visibleDates = Array.from({ length: DAYS_TO_SHOW }, (_, i) => addDays(weekStart, i));
 
   const handleScrollLeft = () => {
-    const prevMonth = addMonths(currentMonth, -1);
-    const thisMonth = startOfMonth(new Date());
-    if (isBefore(prevMonth, thisMonth)) {
-      setCurrentMonth(thisMonth);
+    const prevWeek = addDays(weekStart, -7);
+    const today = startOfDay(new Date());
+    if (isBefore(prevWeek, today)) {
+      setWeekStart(today);
     } else {
-      setCurrentMonth(prevMonth);
+      setWeekStart(prevWeek);
     }
   };
 
   const handleScrollRight = () => {
-    setCurrentMonth(addMonths(currentMonth, 1));
+    setWeekStart(addDays(weekStart, 7));
   };
 
   const getSlotsForDate = (clinician: ClinicianWithSlots, date: Date): SlotForDate[] => {
@@ -591,11 +591,11 @@ export default function Availability() {
 
       <Card className="flex-1 border shadow-sm overflow-hidden flex flex-col">
         <div className="flex items-center justify-between p-3 border-b bg-muted/30">
-          <Button variant="outline" size="sm" onClick={handleScrollLeft} disabled={isBefore(currentMonth, startOfMonth(new Date()))}>
+          <Button variant="outline" size="sm" onClick={handleScrollLeft} disabled={isBefore(weekStart, startOfDay(new Date()))}>
             <ChevronLeft className="h-4 w-4 mr-1" /> Previous
           </Button>
           <div className="text-sm font-medium text-muted-foreground">
-            {format(currentMonth, "MMMM yyyy")}
+            {format(weekStart, "d MMM")} - {format(addDays(weekStart, 6), "d MMM yyyy")}
           </div>
           <Button variant="outline" size="sm" onClick={handleScrollRight}>
             Next <ChevronRight className="h-4 w-4 ml-1" />
@@ -603,16 +603,16 @@ export default function Availability() {
         </div>
 
         <div className="flex-1 overflow-x-auto overflow-y-auto" ref={scrollContainerRef}>
-          <table className="border-collapse" style={{ minWidth: `${200 + daysInMonth * 80}px` }}>
+          <table className="border-collapse w-full">
             <thead className="sticky top-0 z-20">
               <tr className="bg-muted/30">
                 <th className="p-3 font-semibold text-sm text-left border-b border-r bg-muted/30 sticky left-0 z-30 min-w-[200px] w-[200px]">
                   Clinician
                 </th>
                 {visibleDates.map(date => (
-                  <th key={date.toString()} className="p-2 text-center border-b border-r bg-muted/30 min-w-[80px]">
+                  <th key={date.toString()} className="p-2 text-center border-b border-r bg-muted/30 min-w-[120px]">
                     <div className="font-semibold text-sm">{format(date, "EEE")}</div>
-                    <div className="text-xs text-muted-foreground font-normal">{format(date, "d")}</div>
+                    <div className="text-xs text-muted-foreground font-normal">{format(date, "d MMM")}</div>
                   </th>
                 ))}
               </tr>

@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { ChevronLeft, ChevronRight, Plus, Trash2, Pencil, UserPlus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { format, addDays, startOfDay, startOfMonth, endOfMonth, addMonths, parseISO, isWithinInterval, isBefore, isAfter, differenceInDays, getDaysInMonth } from "date-fns";
+import { format, addDays, startOfDay, startOfWeek, parseISO, isWithinInterval, isBefore, isAfter, differenceInDays } from "date-fns";
 import {
   Dialog,
   DialogContent,
@@ -68,7 +68,7 @@ export default function Availability() {
   const [, setLocation] = useLocation();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   
-  const [weekStart, setWeekStart] = useState(startOfDay(new Date()));
+  const [weekStart, setWeekStart] = useState(startOfWeek(new Date(), { weekStartsOn: 1 }));
   const DAYS_TO_SHOW = 7;
 
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -191,9 +191,9 @@ export default function Availability() {
 
   const handleScrollLeft = () => {
     const prevWeek = addDays(weekStart, -7);
-    const today = startOfDay(new Date());
-    if (isBefore(prevWeek, today)) {
-      setWeekStart(today);
+    const currentWeekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
+    if (isBefore(prevWeek, currentWeekStart)) {
+      setWeekStart(currentWeekStart);
     } else {
       setWeekStart(prevWeek);
     }
@@ -591,7 +591,7 @@ export default function Availability() {
 
       <Card className="flex-1 border shadow-sm overflow-hidden flex flex-col">
         <div className="flex items-center justify-between p-3 border-b bg-muted/30">
-          <Button variant="outline" size="sm" onClick={handleScrollLeft} disabled={isBefore(weekStart, startOfDay(new Date()))}>
+          <Button variant="outline" size="sm" onClick={handleScrollLeft} disabled={isBefore(weekStart, startOfWeek(new Date(), { weekStartsOn: 1 })) || weekStart.getTime() === startOfWeek(new Date(), { weekStartsOn: 1 }).getTime()}>
             <ChevronLeft className="h-4 w-4 mr-1" /> Previous
           </Button>
           <div className="text-sm font-medium text-muted-foreground">

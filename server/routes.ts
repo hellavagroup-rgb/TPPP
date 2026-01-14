@@ -376,6 +376,18 @@ export async function registerRoutes(
     }
   });
 
+  // Admin endpoint to delete all SpecificDate slots for a clinician
+  app.delete("/api/timeslots/cleanup/specific-date/:clinicianId", requireAdmin, async (req, res) => {
+    try {
+      const { clinicianId } = req.params;
+      const count = await storage.deleteSpecificDateSlotsByClinicianId(clinicianId);
+      res.json({ deleted: count, message: `Deleted ${count} SpecificDate slots for clinician` });
+    } catch (error) {
+      console.error("Error cleaning up specific date slots:", error);
+      res.status(500).json({ error: "Failed to clean up specific date slots" });
+    }
+  });
+
   // ============ CLIENT ROUTES (GDPR Protected) ============
   app.get("/api/clients", requireAdmin, auditLog("view", "client"), async (req, res) => {
     try {

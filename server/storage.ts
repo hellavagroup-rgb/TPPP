@@ -38,6 +38,7 @@ export interface IStorage {
   updateSlotsByBatchId(batchId: string, updates: Partial<InsertTimeSlot>): Promise<number>;
   deleteSlotsByBatchId(batchId: string): Promise<number>;
   deleteNullTimeSlots(): Promise<number>;
+  deleteSpecificDateSlotsByClinicianId(clinicianId: string): Promise<number>;
   
   // ============ CLIENTS ============
   getAllClients(): Promise<Client[]>;
@@ -232,6 +233,16 @@ export class DatabaseStorage implements IStorage {
           eq(timeSlots.type, "Recurring"),
           isNull(timeSlots.day)
         )
+      ))
+      .returning();
+    return result.length;
+  }
+
+  async deleteSpecificDateSlotsByClinicianId(clinicianId: string): Promise<number> {
+    const result = await db.delete(timeSlots)
+      .where(and(
+        eq(timeSlots.clinicianId, clinicianId),
+        eq(timeSlots.type, "SpecificDate")
       ))
       .returning();
     return result.length;

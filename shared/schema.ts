@@ -70,6 +70,7 @@ export const timeSlots = pgTable("time_slots", {
   startTime: text("start_time").notNull(),
   endTime: text("end_time").notNull(),
   isBooked: boolean("is_booked").default(false).notNull(),
+  batchId: text("batch_id"), // Groups slots created together for batch operations
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

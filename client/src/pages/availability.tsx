@@ -76,6 +76,8 @@ export default function Availability() {
   const [editingSlot, setEditingSlot] = useState<TimeSlot | null>(null);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [deletingSlot, setDeletingSlot] = useState<{ slot: TimeSlot; clinicianId: string } | null>(null);
+  const [batchCount, setBatchCount] = useState<number>(0);
+  const [applyToAllBatch, setApplyToAllBatch] = useState(false);
 
   const [newSlotType, setNewSlotType] = useState<SlotType>("SpecificDate");
   const [newDate, setNewDate] = useState(format(new Date(), "yyyy-MM-dd"));
@@ -152,6 +154,42 @@ export default function Availability() {
     },
     onError: () => {
       toast({ title: "Error", description: "Failed to allocate client.", variant: "destructive" });
+    },
+  });
+
+  const deleteBatchMutation = useMutation({
+    mutationFn: async (batchId: string) => {
+      const response = await apiRequest("DELETE", `/api/timeslots/batch/${batchId}`);
+      return response.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clinicians/with-slots"] });
+      toast({ title: "Batch Deleted", description: `Deleted ${data.deleted} slots.` });
+      setIsDeleteOpen(false);
+      setDeletingSlot(null);
+      setBatchCount(0);
+      setApplyToAllBatch(false);
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to delete batch.", variant: "destructive" });
+    },
+  });
+
+  const updateBatchMutation = useMutation({
+    mutationFn: async ({ batchId, updates }: { batchId: string; updates: Partial<TimeSlot> }) => {
+      const response = await apiRequest("PUT", `/api/timeslots/batch/${batchId}`, updates);
+      return response.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clinicians/with-slots"] });
+      toast({ title: "Batch Updated", description: `Updated ${data.updated} slots.` });
+      setIsDialogOpen(false);
+      resetForm();
+      setBatchCount(0);
+      setApplyToAllBatch(false);
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to update batch.", variant: "destructive" });
     },
   });
 
@@ -268,6 +306,8 @@ export default function Availability() {
     setNewEndTime("17:00");
     setIsEditMode(false);
     setEditingSlot(null);
+    setBatchCount(0);
+    setApplyToAllBatch(false);
   };
 
   const handleAddAvailability = () => {
@@ -282,6 +322,7 @@ export default function Availability() {
     const newSlots: TimeSlot[] = [];
     const start = parseISO(newDate);
     const end = parseISO(endDate);
+    const batchId = `batch-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
     if (newSlotType === "Recurring") {
       selectedDays.forEach(day => {
@@ -296,6 +337,7 @@ export default function Availability() {
           startTime: newStartTime,
           endTime: newEndTime,
           isBooked: false,
+          batchId: selectedDays.length > 1 ? batchId : null,
         } as TimeSlot);
       });
     } else {
@@ -315,6 +357,7 @@ export default function Availability() {
           startTime: newSlotType === "Vacation" ? "00:00" : newStartTime,
           endTime: newSlotType === "Vacation" ? "23:59" : newEndTime,
           isBooked: false,
+          batchId: dayCount > 1 ? batchId : null,
         } as TimeSlot);
       }
     }
@@ -337,7 +380,7 @@ export default function Availability() {
     });
   };
 
-  const handleEditSlot = (slot: TimeSlot, clinicianId: string) => {
+  const handleEditSlot = async (slot: TimeSlot, clinicianId: string) => {
     setIsEditMode(true);
     setEditingSlot(slot);
     setDialogClinicianId(clinicianId);
@@ -346,11 +389,28 @@ export default function Availability() {
     setEndDate(slot.endDate || slot.date || format(new Date(), "yyyy-MM-dd"));
     setNewStartTime(slot.startTime);
     setNewEndTime(slot.endTime);
+    setApplyToAllBatch(false);
+    
     if (slot.type === "Recurring" && slot.day) {
       setSelectedDays([slot.day]);
     } else {
       setSelectedDays([]);
     }
+    
+    if (slot.batchId) {
+      try {
+        const response = await fetch(`/api/timeslots/batch/${slot.batchId}`, { credentials: "include" });
+        if (response.ok) {
+          const batchSlots = await response.json();
+          setBatchCount(batchSlots.length);
+        }
+      } catch {
+        setBatchCount(0);
+      }
+    } else {
+      setBatchCount(0);
+    }
+    
     setIsDialogOpen(true);
   };
 
@@ -359,6 +419,18 @@ export default function Availability() {
     const clinician = allCliniciansData.find(c => c.id === dialogClinicianId);
     if (!clinician) return;
 
+    // If applying to all batch, update the batch with common properties
+    if (applyToAllBatch && editingSlot.batchId) {
+      const batchUpdates: Partial<TimeSlot> = {
+        type: newSlotType,
+        startTime: newSlotType === "Vacation" ? "00:00" : newStartTime,
+        endTime: newSlotType === "Vacation" ? "23:59" : newEndTime,
+      };
+      updateBatchMutation.mutate({ batchId: editingSlot.batchId, updates: batchUpdates });
+      return;
+    }
+
+    // Update single slot
     const updatedSlot: TimeSlot = {
       ...editingSlot,
       type: newSlotType,
@@ -376,6 +448,8 @@ export default function Availability() {
         toast({ title: "Availability Updated", description: "Time slot has been updated." });
         setIsDialogOpen(false);
         resetForm();
+        setBatchCount(0);
+        setApplyToAllBatch(false);
       },
       onError: () => {
         toast({ title: "Error", description: "Failed to update slot.", variant: "destructive" });
@@ -383,13 +457,37 @@ export default function Availability() {
     });
   };
 
-  const handleDeleteClick = (slot: TimeSlot, clinicianId: string) => {
+  const handleDeleteClick = async (slot: TimeSlot, clinicianId: string) => {
     setDeletingSlot({ slot, clinicianId });
+    setApplyToAllBatch(false);
+    
+    if (slot.batchId) {
+      try {
+        const response = await fetch(`/api/timeslots/batch/${slot.batchId}`, { credentials: "include" });
+        if (response.ok) {
+          const batchSlots = await response.json();
+          setBatchCount(batchSlots.length);
+        }
+      } catch {
+        setBatchCount(0);
+      }
+    } else {
+      setBatchCount(0);
+    }
+    
     setIsDeleteOpen(true);
   };
 
   const handleConfirmDelete = () => {
     if (!deletingSlot) return;
+    
+    // If user chose to delete all in batch and slot has a batchId
+    if (applyToAllBatch && deletingSlot.slot.batchId) {
+      deleteBatchMutation.mutate(deletingSlot.slot.batchId);
+      return;
+    }
+    
+    // Delete single slot
     const clinician = allCliniciansData.find(c => c.id === deletingSlot.clinicianId);
     if (!clinician) return;
 
@@ -399,6 +497,8 @@ export default function Availability() {
         toast({ title: "Slot Deleted", description: "Time slot has been removed." });
         setIsDeleteOpen(false);
         setDeletingSlot(null);
+        setBatchCount(0);
+        setApplyToAllBatch(false);
       },
       onError: () => {
         toast({ title: "Error", description: "Failed to delete slot.", variant: "destructive" });
@@ -578,10 +678,45 @@ export default function Availability() {
                     </div>
                   </div>
                 )}
+                
+                {isEditMode && batchCount > 1 && (
+                  <div className="border-t pt-4">
+                    <Label className="text-sm font-medium">Apply Changes To</Label>
+                    <div className="flex flex-col gap-2 mt-2">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="editOption"
+                          checked={!applyToAllBatch}
+                          onChange={() => setApplyToAllBatch(false)}
+                          className="h-4 w-4"
+                        />
+                        <span className="text-sm">Only this slot</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="editOption"
+                          checked={applyToAllBatch}
+                          onChange={() => setApplyToAllBatch(true)}
+                          className="h-4 w-4"
+                        />
+                        <span className="text-sm">All {batchCount} slots in this batch (updates type and times only)</span>
+                      </label>
+                    </div>
+                  </div>
+                )}
               </div>
               <DialogFooter>
-                <Button onClick={isEditMode ? handleSaveEdit : handleAddAvailability} disabled={!dialogClinicianId || updateSlotsMutation.isPending}>
-                  {updateSlotsMutation.isPending ? "Saving..." : isEditMode ? "Save Changes" : "Save to Schedule"}
+                <Button 
+                  onClick={isEditMode ? handleSaveEdit : handleAddAvailability} 
+                  disabled={!dialogClinicianId || updateSlotsMutation.isPending || updateBatchMutation.isPending}
+                >
+                  {(updateSlotsMutation.isPending || updateBatchMutation.isPending) 
+                    ? "Saving..." 
+                    : isEditMode 
+                      ? (applyToAllBatch ? `Update ${batchCount} Slots` : "Save Changes")
+                      : "Save to Schedule"}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -715,21 +850,64 @@ export default function Availability() {
         </div>
       </Card>
 
-      <AlertDialog open={isDeleteOpen} onOpenChange={setIsDeleteOpen}>
+      <AlertDialog open={isDeleteOpen} onOpenChange={(open) => {
+        setIsDeleteOpen(open);
+        if (!open) {
+          setBatchCount(0);
+          setApplyToAllBatch(false);
+        }
+      }}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Availability Slot</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete this time slot? This action cannot be undone.
+              {batchCount > 1 ? (
+                <span>
+                  This slot is part of a batch of <strong>{batchCount} slots</strong> created together.
+                  You can delete just this slot or all {batchCount} slots in the batch.
+                </span>
+              ) : (
+                "Are you sure you want to delete this time slot? This action cannot be undone."
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          
+          {batchCount > 1 && (
+            <div className="flex flex-col gap-2 py-2">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="deleteOption"
+                  checked={!applyToAllBatch}
+                  onChange={() => setApplyToAllBatch(false)}
+                  className="h-4 w-4"
+                />
+                <span>Delete only this slot</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="deleteOption"
+                  checked={applyToAllBatch}
+                  onChange={() => setApplyToAllBatch(true)}
+                  className="h-4 w-4"
+                />
+                <span>Delete all {batchCount} slots in this batch</span>
+              </label>
+            </div>
+          )}
+          
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleConfirmDelete}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {updateSlotsMutation.isPending ? "Deleting..." : "Delete"}
+              {(updateSlotsMutation.isPending || deleteBatchMutation.isPending) 
+                ? "Deleting..." 
+                : applyToAllBatch 
+                  ? `Delete ${batchCount} Slots` 
+                  : "Delete"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

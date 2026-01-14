@@ -334,6 +334,37 @@ export async function registerRoutes(
     }
   });
 
+  // Batch operations for time slots
+  app.get("/api/timeslots/batch/:batchId", requireAuth, async (req, res) => {
+    try {
+      const slots = await storage.getSlotsByBatchId(req.params.batchId);
+      res.json(slots);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch batch slots" });
+    }
+  });
+
+  app.put("/api/timeslots/batch/:batchId", requireAuth, async (req, res) => {
+    try {
+      const updates = req.body;
+      const count = await storage.updateSlotsByBatchId(req.params.batchId, updates);
+      res.json({ updated: count });
+    } catch (error) {
+      console.error("Error updating batch slots:", error);
+      res.status(500).json({ error: "Failed to update batch slots" });
+    }
+  });
+
+  app.delete("/api/timeslots/batch/:batchId", requireAuth, async (req, res) => {
+    try {
+      const count = await storage.deleteSlotsByBatchId(req.params.batchId);
+      res.json({ deleted: count });
+    } catch (error) {
+      console.error("Error deleting batch slots:", error);
+      res.status(500).json({ error: "Failed to delete batch slots" });
+    }
+  });
+
   // ============ CLIENT ROUTES (GDPR Protected) ============
   app.get("/api/clients", requireAdmin, auditLog("view", "client"), async (req, res) => {
     try {

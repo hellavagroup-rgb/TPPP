@@ -34,6 +34,9 @@ export interface IStorage {
   updateTimeSlot(id: string, updates: Partial<InsertTimeSlot>): Promise<TimeSlot | undefined>;
   deleteTimeSlot(id: string): Promise<void>;
   bulkUpdateTimeSlots(clinicianId: string, slots: TimeSlot[]): Promise<void>;
+  getSlotsByBatchId(batchId: string): Promise<TimeSlot[]>;
+  updateSlotsByBatchId(batchId: string, updates: Partial<InsertTimeSlot>): Promise<number>;
+  deleteSlotsByBatchId(batchId: string): Promise<number>;
   
   // ============ CLIENTS ============
   getAllClients(): Promise<Client[]>;
@@ -185,6 +188,7 @@ export class DatabaseStorage implements IStorage {
         startTime: slot.startTime,
         endTime: slot.endTime,
         isBooked: slot.isBooked,
+        batchId: slot.batchId,
       })));
     }
     
@@ -192,6 +196,25 @@ export class DatabaseStorage implements IStorage {
     await db.update(clinicians).set({
       lastUpdatedAvailability: new Date()
     }).where(eq(clinicians.id, clinicianId));
+  }
+
+  async getSlotsByBatchId(batchId: string): Promise<TimeSlot[]> {
+    return await db.select().from(timeSlots).where(eq(timeSlots.batchId, batchId));
+  }
+
+  async updateSlotsByBatchId(batchId: string, updates: Partial<InsertTimeSlot>): Promise<number> {
+    const result = await db.update(timeSlots)
+      .set(updates)
+      .where(eq(timeSlots.batchId, batchId))
+      .returning();
+    return result.length;
+  }
+
+  async deleteSlotsByBatchId(batchId: string): Promise<number> {
+    const result = await db.delete(timeSlots)
+      .where(eq(timeSlots.batchId, batchId))
+      .returning();
+    return result.length;
   }
 
   // ============ CLIENTS ============

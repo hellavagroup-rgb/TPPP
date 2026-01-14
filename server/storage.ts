@@ -10,7 +10,7 @@ import {
   type AuditLog, type InsertAuditLog
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, and, or, desc, sql, isNull } from "drizzle-orm";
 
 // Storage interface for all CRUD operations
 export interface IStorage {
@@ -37,6 +37,7 @@ export interface IStorage {
   getSlotsByBatchId(batchId: string): Promise<TimeSlot[]>;
   updateSlotsByBatchId(batchId: string, updates: Partial<InsertTimeSlot>): Promise<number>;
   deleteSlotsByBatchId(batchId: string): Promise<number>;
+  deleteNullTimeSlots(): Promise<number>;
   
   // ============ CLIENTS ============
   getAllClients(): Promise<Client[]>;
@@ -213,6 +214,25 @@ export class DatabaseStorage implements IStorage {
   async deleteSlotsByBatchId(batchId: string): Promise<number> {
     const result = await db.delete(timeSlots)
       .where(eq(timeSlots.batchId, batchId))
+      .returning();
+    return result.length;
+  }
+
+  async deleteNullTimeSlots(): Promise<number> {
+    const result = await db.delete(timeSlots)
+      .where(or(
+        isNull(timeSlots.clinicianId),
+        isNull(timeSlots.startTime),
+        isNull(timeSlots.endTime),
+        and(
+          eq(timeSlots.type, "SpecificDate"),
+          isNull(timeSlots.date)
+        ),
+        and(
+          eq(timeSlots.type, "Recurring"),
+          isNull(timeSlots.day)
+        )
+      ))
       .returning();
     return result.length;
   }

@@ -365,6 +365,17 @@ export async function registerRoutes(
     }
   });
 
+  // Admin endpoint to clean up corrupted/null time slots
+  app.delete("/api/timeslots/cleanup/null-entries", requireAdmin, async (req, res) => {
+    try {
+      const count = await storage.deleteNullTimeSlots();
+      res.json({ deleted: count, message: `Deleted ${count} corrupted/null time slots` });
+    } catch (error) {
+      console.error("Error cleaning up null slots:", error);
+      res.status(500).json({ error: "Failed to clean up null slots" });
+    }
+  });
+
   // ============ CLIENT ROUTES (GDPR Protected) ============
   app.get("/api/clients", requireAdmin, auditLog("view", "client"), async (req, res) => {
     try {

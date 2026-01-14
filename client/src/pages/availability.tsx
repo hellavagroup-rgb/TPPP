@@ -430,6 +430,57 @@ export default function Availability() {
       return;
     }
 
+    // For recurring slots with multiple days selected, create new slots for additional days
+    if (newSlotType === "Recurring" && selectedDays.length > 1) {
+      const batchId = `batch-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      
+      // Update the original slot with first day
+      const updatedSlot: TimeSlot = {
+        ...editingSlot,
+        type: newSlotType,
+        day: selectedDays[0],
+        date: null,
+        startDate: newDate,
+        endDate: endDate,
+        startTime: newStartTime,
+        endTime: newEndTime,
+        batchId: batchId,
+      };
+
+      // Create new slots for additional days
+      const newSlots: TimeSlot[] = selectedDays.slice(1).map((day, index) => ({
+        id: `ts-${Date.now()}-${index}-${day}`,
+        clinicianId: dialogClinicianId,
+        type: "Recurring" as const,
+        day: day,
+        date: null,
+        startDate: newDate,
+        endDate: endDate,
+        startTime: newStartTime,
+        endTime: newEndTime,
+        isBooked: false,
+        batchId: batchId,
+        createdAt: new Date(),
+      }));
+
+      const updatedSlots = [
+        ...clinician.slots.map(s => s.id === editingSlot.id ? updatedSlot : s),
+        ...newSlots
+      ];
+
+      updateSlotsMutation.mutate({ clinicianId: dialogClinicianId, slots: updatedSlots }, {
+        onSuccess: () => {
+          toast({ title: "Availability Updated", description: `Added recurring schedule for ${selectedDays.length} days.` });
+          setIsDialogOpen(false);
+          resetForm();
+        },
+        onError: () => {
+          toast({ title: "Error", description: "Failed to update slot.", variant: "destructive" });
+        },
+      });
+      return;
+    }
+
     // Update single slot
     const updatedSlot: TimeSlot = {
       ...editingSlot,

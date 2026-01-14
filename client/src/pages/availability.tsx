@@ -79,7 +79,7 @@ export default function Availability() {
   const [batchCount, setBatchCount] = useState<number>(0);
   const [applyToAllBatch, setApplyToAllBatch] = useState(false);
 
-  const [newSlotType, setNewSlotType] = useState<SlotType>("SpecificDate");
+  const [newSlotType, setNewSlotType] = useState<SlotType>("Recurring");
   const [newDate, setNewDate] = useState(format(new Date(), "yyyy-MM-dd"));
   const [endDate, setEndDate] = useState(format(new Date(), "yyyy-MM-dd"));
   const [selectedDays, setSelectedDays] = useState<string[]>([]);
@@ -298,7 +298,7 @@ export default function Availability() {
   };
 
   const resetForm = () => {
-    setNewSlotType("SpecificDate");
+    setNewSlotType("Recurring");
     setNewDate(format(new Date(), "yyyy-MM-dd"));
     setEndDate(format(new Date(), "yyyy-MM-dd"));
     setSelectedDays([]);

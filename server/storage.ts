@@ -202,6 +202,41 @@ export class DatabaseStorage implements IStorage {
   }
 
   async archiveClient(id: string): Promise<Client | undefined> {
+    // First, get the client to find their assigned slot and clinician
+    const [existingClient] = await db.select().from(clients).where(eq(clients.id, id));
+    
+    if (!existingClient) return undefined;
+
+    // If client was assigned to a slot, release it
+    if (existingClient.assignedClinicianId && existingClient.assignedSlot) {
+      // Parse the slot string "Day HH:MM" to find the matching slot
+      const slotParts = existingClient.assignedSlot.split(' ');
+      const day = slotParts[0];
+      const startTime = slotParts[1];
+
+      // Find and release the booked slot for this clinician
+      const [slot] = await db.select().from(timeSlots)
+        .where(and(
+          eq(timeSlots.clinicianId, existingClient.assignedClinicianId),
+          eq(timeSlots.day, day),
+          eq(timeSlots.startTime, startTime),
+          eq(timeSlots.isBooked, true)
+        ));
+
+      if (slot) {
+        // Release the slot
+        await db.update(timeSlots).set({
+          isBooked: false
+        }).where(eq(timeSlots.id, slot.id));
+
+        // Decrement clinician load
+        await db.update(clinicians).set({
+          currentLoad: sql`GREATEST(${clinicians.currentLoad} - 1, 0)`
+        }).where(eq(clinicians.id, existingClient.assignedClinicianId));
+      }
+    }
+
+    // Archive the client
     const [client] = await db.update(clients).set({
       isArchived: true,
       archivedAt: new Date(),

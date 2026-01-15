@@ -841,7 +841,7 @@ export default function Availability() {
                                 slot.type === "Vacation"
                                   ? "bg-slate-100 text-slate-500 border-slate-200 border-dashed"
                                   : isFuture
-                                    ? "bg-gray-50 text-gray-400 border-gray-200 opacity-60"
+                                    ? "bg-gray-100 text-gray-600 border-gray-300"
                                     : slot.isBooked
                                       ? "bg-indigo-50 text-indigo-700 border-indigo-200"
                                       : isAllocating

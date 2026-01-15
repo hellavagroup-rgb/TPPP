@@ -1,14 +1,23 @@
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Users, Clock, CalendarCheck, FileText } from "lucide-react";
-import type { Client, Clinician } from "@shared/schema";
+import type { Client, Clinician, TimeSlot } from "@shared/schema";
+
+type ClinicianWithAvailability = Clinician & { name?: string; availability?: TimeSlot[] };
+
+function getSlotCounts(availability?: TimeSlot[]) {
+  if (!availability) return { available: 0, pending: 0 };
+  const available = availability.filter(s => s.type === "Recurring" && !s.isBooked).length;
+  const pending = availability.filter(s => s.type === "SpecificDate" && !s.isBooked).length;
+  return { available, pending };
+}
 
 export default function Analytics() {
   const { data: clients = [] } = useQuery<Client[]>({
     queryKey: ["/api/clients"],
   });
 
-  const { data: clinicians = [] } = useQuery<Clinician[]>({
+  const { data: clinicians = [] } = useQuery<ClinicianWithAvailability[]>({
     queryKey: ["/api/clinicians"],
   });
 
@@ -121,8 +130,8 @@ export default function Analytics() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Clinician Capacity</CardTitle>
-          <CardDescription>Current load vs. maximum capacity for each clinician.</CardDescription>
+          <CardTitle>Clinician Availability</CardTitle>
+          <CardDescription>Available and pending slots for each clinician.</CardDescription>
         </CardHeader>
         <CardContent>
           {clinicians.length === 0 ? (
@@ -135,27 +144,30 @@ export default function Analytics() {
             </div>
           ) : (
             <div className="space-y-4">
-              {clinicians.slice(0, 10).map((clinician: any) => {
-                const utilization = clinician.capacity > 0 
-                  ? Math.round((clinician.currentLoad / clinician.capacity) * 100) 
-                  : 0;
+              {clinicians.slice(0, 10).map((clinician) => {
+                const counts = getSlotCounts(clinician.availability);
+                const totalSlots = counts.available + counts.pending;
                 return (
                   <div key={clinician.id} className="space-y-2">
                     <div className="flex items-center justify-between text-sm">
-                      <span className="font-medium">{clinician.user?.name || clinician.avatar}</span>
+                      <span className="font-medium">{clinician.name || clinician.avatar}</span>
                       <span className="text-muted-foreground">
-                        {clinician.currentLoad}/{clinician.capacity} ({utilization}%)
+                        {counts.available} available, {counts.pending} pending
                       </span>
                     </div>
-                    <div className="h-2 w-full bg-secondary rounded-full overflow-hidden">
-                      <div 
-                        className={`h-full rounded-full ${
-                          utilization >= 90 ? 'bg-red-500' : 
-                          utilization >= 70 ? 'bg-amber-500' : 
-                          'bg-emerald-500'
-                        }`} 
-                        style={{ width: `${Math.min(utilization, 100)}%` }} 
-                      />
+                    <div className="h-2 w-full bg-secondary rounded-full overflow-hidden flex">
+                      {totalSlots > 0 && (
+                        <>
+                          <div 
+                            className="h-full bg-emerald-500" 
+                            style={{ width: `${(counts.available / Math.max(totalSlots, 1)) * 100}%` }} 
+                          />
+                          <div 
+                            className="h-full bg-slate-400" 
+                            style={{ width: `${(counts.pending / Math.max(totalSlots, 1)) * 100}%` }} 
+                          />
+                        </>
+                      )}
                     </div>
                   </div>
                 );

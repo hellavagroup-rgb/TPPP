@@ -50,7 +50,14 @@ import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { format, parseISO, isSameDay } from "date-fns";
 import { apiRequest } from "@/lib/queryClient";
-import type { Client as ClientType, Clinician, FormTemplate as FormTemplateType } from "@shared/schema";
+import type { Client as ClientType, Clinician, FormTemplate as FormTemplateType, TimeSlot } from "@shared/schema";
+
+function getSlotCounts(availability?: TimeSlot[]) {
+  if (!availability) return { available: 0, pending: 0 };
+  const available = availability.filter(s => s.type === "Recurring" && !s.isBooked).length;
+  const pending = availability.filter(s => s.type === "SpecificDate" && !s.isBooked).length;
+  return { available, pending };
+}
 
 export default function Clients() {
   const queryClient = useQueryClient();
@@ -1028,7 +1035,7 @@ export default function Clients() {
                         <div className="flex items-center justify-between mb-3">
                           <span className="font-medium">{clinician.name.split(",")[0]}</span>
                           <span className="text-xs text-muted-foreground">
-                            {clinician.currentLoad}/{clinician.capacity} clients
+                            {getSlotCounts(clinician.availability).available} available, {getSlotCounts(clinician.availability).pending} pending
                           </span>
                         </div>
                         <div className="grid grid-cols-3 gap-2">
@@ -1155,7 +1162,7 @@ export default function Clients() {
                         <div className="flex items-center gap-3 text-xs text-muted-foreground">
                           <span className="flex items-center gap-1">
                             <Briefcase className="h-3 w-3" />
-                            {clinician.currentLoad}/{clinician.capacity}
+                            {getSlotCounts(clinician.availability).available} avail, {getSlotCounts(clinician.availability).pending} pending
                           </span>
                         </div>
                       </div>

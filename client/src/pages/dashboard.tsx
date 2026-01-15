@@ -11,8 +11,17 @@ import {
   Mail
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import type { Client, Task, Clinician } from "@shared/schema";
+import type { Client, Task, Clinician, TimeSlot } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
+
+type ClinicianWithAvailability = Clinician & { name: string; availability?: TimeSlot[] };
+
+function getSlotCounts(availability?: TimeSlot[]) {
+  if (!availability) return { available: 0, pending: 0 };
+  const available = availability.filter(s => s.type === "Recurring" && !s.isBooked).length;
+  const pending = availability.filter(s => s.type === "SpecificDate" && !s.isBooked).length;
+  return { available, pending };
+}
 
 export default function Dashboard() {
   const { toast } = useToast();
@@ -26,7 +35,7 @@ export default function Dashboard() {
     queryKey: ["/api/tasks"],
   });
 
-  const { data: clinicians = [] } = useQuery<(Clinician & { name: string })[]>({
+  const { data: clinicians = [] } = useQuery<ClinicianWithAvailability[]>({
     queryKey: ["/api/clinicians"],
   });
 
@@ -161,31 +170,40 @@ export default function Dashboard() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
-            {clinicians.slice(0, 5).map((clinician) => (
-              <div key={clinician.id} className="space-y-3 pb-3 border-b border-border/40 last:border-0">
-                <div className="flex items-center justify-between text-sm">
-                  <div className="flex items-center gap-3">
-                    <div className="h-8 w-8 rounded-full bg-secondary text-secondary-foreground flex items-center justify-center text-xs font-medium">
-                      {clinician.avatar}
+            {clinicians.slice(0, 5).map((clinician) => {
+              const counts = getSlotCounts(clinician.availability);
+              return (
+                <div key={clinician.id} className="space-y-3 pb-3 border-b border-border/40 last:border-0">
+                  <div className="flex items-center justify-between text-sm">
+                    <div className="flex items-center gap-3">
+                      <div className="h-8 w-8 rounded-full bg-secondary text-secondary-foreground flex items-center justify-center text-xs font-medium">
+                        {clinician.avatar}
+                      </div>
+                      <div>
+                        <span className="font-medium block">{clinician.name}</span>
+                        <span className="text-[10px] text-muted-foreground">
+                          {counts.available + counts.pending} open slots
+                        </span>
+                      </div>
                     </div>
-                    <div>
-                      <span className="font-medium block">{clinician.name}</span>
-                      <span className="text-[10px] text-muted-foreground">
-                        {clinician.currentLoad}/{clinician.capacity} clients
-                      </span>
+                    <div className="text-right space-y-0.5">
+                      <div className="flex items-center gap-2 justify-end">
+                        <span className={`font-bold ${counts.available > 0 ? "text-emerald-600" : "text-muted-foreground"}`}>
+                          {counts.available}
+                        </span>
+                        <span className="text-[10px] text-muted-foreground">available</span>
+                      </div>
+                      <div className="flex items-center gap-2 justify-end">
+                        <span className="font-bold text-slate-500">
+                          {counts.pending}
+                        </span>
+                        <span className="text-[10px] text-muted-foreground">pending</span>
+                      </div>
                     </div>
-                  </div>
-                  <div className="text-right">
-                    <span className={`block font-bold ${
-                      (clinician.currentLoad ?? 0) >= (clinician.capacity ?? 0) ? "text-destructive" : "text-emerald-600"
-                    }`}>
-                      {(clinician.capacity ?? 0) - (clinician.currentLoad ?? 0)}
-                    </span>
-                    <span className="text-[10px] text-muted-foreground">slots open</span>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
             
             <Button 
               variant="outline" 

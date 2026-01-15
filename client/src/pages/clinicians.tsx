@@ -13,13 +13,20 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { MapPin, Building, Users, Shield, Edit, Briefcase, Lock, Mail, MessageSquare, Phone, Trash2, UserX, Plus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import type { Clinician } from "@shared/schema";
+import type { Clinician, TimeSlot } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
 
 const INSURERS = ["Aviva", "Axa", "Bupa", "Cigna", "Vitality", "WPA", "Other"];
 const CONTACT_METHODS = ["Email", "Text", "WhatsApp"];
 
-type ClinicianWithName = Clinician & { name: string; email?: string | null };
+type ClinicianWithName = Clinician & { name: string; email?: string | null; availability?: TimeSlot[] };
+
+function getSlotCounts(availability?: TimeSlot[]) {
+  if (!availability) return { available: 0, pending: 0 };
+  const available = availability.filter(s => s.type === "Recurring" && !s.isBooked).length;
+  const pending = availability.filter(s => s.type === "SpecificDate" && !s.isBooked).length;
+  return { available, pending };
+}
 
 export default function Clinicians() {
   const queryClient = useQueryClient();
@@ -305,13 +312,13 @@ export default function Clinicians() {
 
             <CardFooter className="bg-slate-50/50 p-4 border-t border-slate-100 text-xs text-muted-foreground flex flex-col gap-3">
               <div className="flex items-center justify-between w-full">
-                <div className="flex items-center gap-1.5" title="Max New Clients">
-                  <Users className="h-3.5 w-3.5" />
-                  <span>Cap: {clinician.maxNewClients || 0} New</span>
+                <div className="flex items-center gap-1.5" title="Available Recurring Slots">
+                  <Briefcase className="h-3.5 w-3.5 text-emerald-600" />
+                  <span>Available: {getSlotCounts(clinician.availability).available}</span>
                 </div>
-                <div className="flex items-center gap-1.5">
-                  <Briefcase className="h-3.5 w-3.5" />
-                  <span>Load: {clinician.currentLoad}/{clinician.capacity}</span>
+                <div className="flex items-center gap-1.5" title="Pending Specific Date Slots">
+                  <Briefcase className="h-3.5 w-3.5 text-slate-400" />
+                  <span>Pending: {getSlotCounts(clinician.availability).pending}</span>
                 </div>
               </div>
               <div className="flex gap-2 w-full">

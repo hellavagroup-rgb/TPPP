@@ -15,7 +15,17 @@ function getSlotCounts(availability?: TimeSlot[]) {
   
   availability.filter(s => !s.isBooked && s.type !== "Vacation").forEach(slot => {
     if (slot.type === "Recurring") {
-      available++;
+      if (slot.startDate) {
+        const startDate = new Date(slot.startDate);
+        startDate.setHours(0, 0, 0, 0);
+        if (startDate > today) {
+          pending++;
+        } else {
+          available++;
+        }
+      } else {
+        available++;
+      }
     } else if (slot.type === "SpecificDate" && slot.date) {
       const slotDate = new Date(slot.date);
       slotDate.setHours(0, 0, 0, 0);

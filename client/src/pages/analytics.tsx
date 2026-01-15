@@ -7,8 +7,26 @@ type ClinicianWithAvailability = Clinician & { name?: string; availability?: Tim
 
 function getSlotCounts(availability?: TimeSlot[]) {
   if (!availability) return { available: 0, pending: 0 };
-  const available = availability.filter(s => s.type === "Recurring" && !s.isBooked).length;
-  const pending = availability.filter(s => s.type === "SpecificDate" && !s.isBooked).length;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  
+  let available = 0;
+  let pending = 0;
+  
+  availability.filter(s => !s.isBooked && s.type !== "Vacation").forEach(slot => {
+    if (slot.type === "Recurring") {
+      available++;
+    } else if (slot.type === "SpecificDate" && slot.date) {
+      const slotDate = new Date(slot.date);
+      slotDate.setHours(0, 0, 0, 0);
+      if (slotDate <= today) {
+        available++;
+      } else {
+        pending++;
+      }
+    }
+  });
+  
   return { available, pending };
 }
 

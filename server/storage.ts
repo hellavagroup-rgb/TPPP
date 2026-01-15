@@ -48,6 +48,7 @@ export interface IStorage {
   updateClient(id: string, updates: Partial<InsertClient>): Promise<Client | undefined>;
   archiveClient(id: string): Promise<Client | undefined>;
   assignClinicianToClient(clientId: string, clinicianId: string, slotId: string, allocationMethod?: "form" | "manual"): Promise<void>;
+  reassignClient(clientId: string, newClinicianId: string | null, newSlotId: string | null, newStatus: string): Promise<Client | undefined>;
   
   // ============ FORMS ============
   getAllFormTemplates(): Promise<FormTemplate[]>;
@@ -262,26 +263,41 @@ export class DatabaseStorage implements IStorage {
     if (!existingClient) return undefined;
 
     // If client was assigned to a slot, release it
-    if (existingClient.assignedClinicianId && existingClient.assignedSlot) {
-      // Parse the slot string "Day HH:MM" to find the matching slot
-      const slotParts = existingClient.assignedSlot.split(' ');
-      const day = slotParts[0];
-      const startTime = slotParts[1];
+    if (existingClient.assignedClinicianId) {
+      let slotIdToRelease = existingClient.assignedSlotId;
+      
+      // Fallback for legacy records without assignedSlotId but with assignedSlot string
+      if (!slotIdToRelease && existingClient.assignedSlot) {
+        const slotParts = existingClient.assignedSlot.split(' ');
+        const dayOrDate = slotParts[0];
+        const startTime = slotParts[1];
 
-      // Find and release the booked slot for this clinician
-      const [slot] = await db.select().from(timeSlots)
-        .where(and(
-          eq(timeSlots.clinicianId, existingClient.assignedClinicianId),
-          eq(timeSlots.day, day),
-          eq(timeSlots.startTime, startTime),
-          eq(timeSlots.isBooked, true)
-        ));
+        // Try to find by day (recurring) first, then by date (specific date)
+        let [foundSlot] = await db.select().from(timeSlots)
+          .where(and(
+            eq(timeSlots.clinicianId, existingClient.assignedClinicianId),
+            eq(timeSlots.day, dayOrDate),
+            eq(timeSlots.startTime, startTime),
+            eq(timeSlots.isBooked, true)
+          ));
 
-      if (slot) {
+        if (!foundSlot) {
+          [foundSlot] = await db.select().from(timeSlots)
+            .where(and(
+              eq(timeSlots.clinicianId, existingClient.assignedClinicianId),
+              eq(timeSlots.date, dayOrDate),
+              eq(timeSlots.startTime, startTime),
+              eq(timeSlots.isBooked, true)
+            ));
+        }
+        slotIdToRelease = foundSlot?.id || null;
+      }
+
+      if (slotIdToRelease) {
         // Release the slot
         await db.update(timeSlots).set({
           isBooked: false
-        }).where(eq(timeSlots.id, slot.id));
+        }).where(eq(timeSlots.id, slotIdToRelease));
 
         // Decrement clinician load
         await db.update(clinicians).set({
@@ -328,7 +344,10 @@ export class DatabaseStorage implements IStorage {
     
     if (!slot) throw new Error("Slot not found");
 
-    const slotString = `${slot.day} ${slot.startTime}`;
+    // Store slot identifier: "day startTime" for recurring, "date startTime" for specific date
+    const slotString = slot.type === "SpecificDate" 
+      ? `${slot.date} ${slot.startTime}` 
+      : `${slot.day} ${slot.startTime}`;
 
     // Start transaction
     await db.transaction(async (tx) => {
@@ -336,6 +355,7 @@ export class DatabaseStorage implements IStorage {
       await tx.update(clients).set({
         status: "Assigned",
         assignedClinicianId: clinicianId,
+        assignedSlotId: slotId,
         assignedSlot: slotString,
         allocationMethod: allocationMethod,
         updatedAt: new Date()
@@ -351,6 +371,143 @@ export class DatabaseStorage implements IStorage {
         currentLoad: sql`${clinicians.currentLoad} + 1`
       }).where(eq(clinicians.id, clinicianId));
     });
+  }
+
+  async reassignClient(clientId: string, newClinicianId: string | null, newSlotId: string | null, newStatus: string): Promise<Client | undefined> {
+    const [existingClient] = await db.select().from(clients).where(eq(clients.id, clientId));
+    if (!existingClient) return undefined;
+
+    const oldClinicianId = existingClient.assignedClinicianId;
+    let oldSlotIdToRelease = existingClient.assignedSlotId;
+    const isAllocatedStatus = newStatus === "Assigned" || newStatus === "Scheduled";
+    const isReassigning = newSlotId !== null;
+
+    // Check if client has any allocation (either by slotId or legacy slot string)
+    const hasAllocation = oldClinicianId && (oldSlotIdToRelease || existingClient.assignedSlot);
+
+    await db.transaction(async (tx) => {
+      // Helper function to find old slot ID with fallback for legacy records
+      const findOldSlotId = async (): Promise<string | null> => {
+        if (oldSlotIdToRelease) return oldSlotIdToRelease;
+        if (!oldClinicianId || !existingClient.assignedSlot) return null;
+
+        const slotParts = existingClient.assignedSlot.split(' ');
+        const dayOrDate = slotParts[0];
+        const startTime = slotParts[1];
+
+        // Try to find by day (recurring) first, then by date (specific date)
+        let [foundSlot] = await tx.select().from(timeSlots)
+          .where(and(
+            eq(timeSlots.clinicianId, oldClinicianId),
+            eq(timeSlots.day, dayOrDate),
+            eq(timeSlots.startTime, startTime),
+            eq(timeSlots.isBooked, true)
+          ));
+
+        if (!foundSlot) {
+          [foundSlot] = await tx.select().from(timeSlots)
+            .where(and(
+              eq(timeSlots.clinicianId, oldClinicianId),
+              eq(timeSlots.date, dayOrDate),
+              eq(timeSlots.startTime, startTime),
+              eq(timeSlots.isBooked, true)
+            ));
+        }
+        return foundSlot?.id || null;
+      };
+
+      // Case 1: Status-only change to allocated status (keep current slot)
+      if (isAllocatedStatus && !isReassigning && hasAllocation) {
+        await tx.update(clients).set({
+          status: newStatus as any,
+          updatedAt: new Date()
+        }).where(eq(clients.id, clientId));
+        return;
+      }
+
+      // Case 2: Reassign to a new slot
+      if (isAllocatedStatus && isReassigning && newClinicianId) {
+        // Validate new slot exists, belongs to clinician, and is available
+        const [newSlot] = await tx.select().from(timeSlots).where(eq(timeSlots.id, newSlotId));
+        if (!newSlot) throw new Error("New slot not found");
+        if (newSlot.clinicianId !== newClinicianId) throw new Error("Slot does not belong to selected clinician");
+        if (newSlot.isBooked) throw new Error("Slot is already booked");
+
+        // Release old slot if was allocated
+        if (hasAllocation) {
+          const slotToRelease = await findOldSlotId();
+          if (slotToRelease) {
+            await tx.update(timeSlots).set({ isBooked: false }).where(eq(timeSlots.id, slotToRelease));
+          }
+
+          // Decrement old clinician load only if changing clinicians
+          if (oldClinicianId !== newClinicianId) {
+            await tx.update(clinicians).set({
+              currentLoad: sql`GREATEST(0, ${clinicians.currentLoad} - 1)`
+            }).where(eq(clinicians.id, oldClinicianId));
+          }
+        }
+
+        // Store slot identifier: "day startTime" for recurring, "date startTime" for specific date
+        const slotString = newSlot.type === "SpecificDate" 
+          ? `${newSlot.date} ${newSlot.startTime}` 
+          : `${newSlot.day} ${newSlot.startTime}`;
+
+        // Update client with new assignment
+        await tx.update(clients).set({
+          status: newStatus as any,
+          assignedClinicianId: newClinicianId,
+          assignedSlotId: newSlotId,
+          assignedSlot: slotString,
+          updatedAt: new Date()
+        }).where(eq(clients.id, clientId));
+
+        // Mark new slot as booked
+        await tx.update(timeSlots).set({ isBooked: true }).where(eq(timeSlots.id, newSlotId));
+
+        // Increment new clinician load only if changing clinicians or wasn't allocated before
+        if (!hasAllocation || oldClinicianId !== newClinicianId) {
+          await tx.update(clinicians).set({
+            currentLoad: sql`${clinicians.currentLoad} + 1`
+          }).where(eq(clinicians.id, newClinicianId));
+        }
+        return;
+      }
+
+      // Case 3: Change to non-allocated status (release slot and clear assignment)
+      if (!isAllocatedStatus) {
+        if (hasAllocation && oldClinicianId) {
+          const slotToRelease = await findOldSlotId();
+          if (slotToRelease) {
+            await tx.update(timeSlots).set({ isBooked: false }).where(eq(timeSlots.id, slotToRelease));
+          }
+
+          // Decrement old clinician load
+          await tx.update(clinicians).set({
+            currentLoad: sql`GREATEST(0, ${clinicians.currentLoad} - 1)`
+          }).where(eq(clinicians.id, oldClinicianId));
+        }
+
+        await tx.update(clients).set({
+          status: newStatus as any,
+          assignedClinicianId: null,
+          assignedSlotId: null,
+          assignedSlot: null,
+          updatedAt: new Date()
+        }).where(eq(clients.id, clientId));
+        return;
+      }
+
+      // Case 4: Trying to set allocated status without existing allocation or new slot
+      // Just update the status (edge case - shouldn't normally happen)
+      await tx.update(clients).set({
+        status: newStatus as any,
+        updatedAt: new Date()
+      }).where(eq(clients.id, clientId));
+    });
+
+    const [updated] = await db.select().from(clients).where(eq(clients.id, clientId));
+    return updated;
   }
 
   // ============ FORMS ============

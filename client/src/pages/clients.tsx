@@ -194,6 +194,52 @@ export default function Clients() {
     status: "New" as ClientType["status"]
   });
 
+  // Edit Allocation State
+  const [isEditAllocationOpen, setIsEditAllocationOpen] = useState(false);
+  const [editAllocationClient, setEditAllocationClient] = useState<ClientType | null>(null);
+  const [editAllocationData, setEditAllocationData] = useState({
+    status: "Assigned" as ClientType["status"],
+    clinicianId: null as string | null,
+    slotId: null as string | null
+  });
+
+  const reassignClientMutation = useMutation({
+    mutationFn: async ({ clientId, clinicianId, slotId, status }: { clientId: string; clinicianId: string | null; slotId: string | null; status: string }) => {
+      const response = await apiRequest("POST", `/api/clients/${clientId}/reassign`, { clinicianId, slotId, status });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/clinicians"] });
+      toast({ title: "Allocation Updated", description: "Client allocation has been updated." });
+      setIsEditAllocationOpen(false);
+      setEditAllocationClient(null);
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to update allocation.", variant: "destructive" });
+    },
+  });
+
+  const handleOpenEditAllocation = (client: ClientType) => {
+    setEditAllocationClient(client);
+    setEditAllocationData({
+      status: client.status,
+      clinicianId: client.assignedClinicianId || null,
+      slotId: null
+    });
+    setIsEditAllocationOpen(true);
+  };
+
+  const handleSaveEditAllocation = () => {
+    if (!editAllocationClient) return;
+    reassignClientMutation.mutate({
+      clientId: editAllocationClient.id,
+      clinicianId: editAllocationData.clinicianId,
+      slotId: editAllocationData.slotId,
+      status: editAllocationData.status
+    });
+  };
+
   const filteredClients = clients.filter(client => {
     // Search now works on ID instead of Name
     const matchesSearch = client.displayId.toLowerCase().includes(searchTerm.toLowerCase());
@@ -734,6 +780,11 @@ export default function Clients() {
                             <CalendarCheck className="h-4 w-4 mr-2" /> Allocate to Clinician
                           </DropdownMenuItem>
                         )}
+                        {(client.status === "Assigned" || client.status === "Scheduled") && (
+                          <DropdownMenuItem onClick={() => handleOpenEditAllocation(client)}>
+                            <CalendarCheck className="h-4 w-4 mr-2" /> Edit Allocation
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuSeparator />
                         <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>
                             Archive
@@ -906,6 +957,127 @@ export default function Clients() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsEditClientOpen(false)}>Cancel</Button>
             <Button onClick={handleSaveEditClient}>Save Changes</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Allocation Dialog */}
+      <Dialog open={isEditAllocationOpen} onOpenChange={setIsEditAllocationOpen}>
+        <DialogContent className="sm:max-w-[600px] max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CalendarCheck className="h-5 w-5" />
+              Edit Allocation
+            </DialogTitle>
+            <DialogDescription>
+              Change the status or reassign {editAllocationClient?.displayId} to a different time slot.
+            </DialogDescription>
+          </DialogHeader>
+          
+          {editAllocationClient && (
+            <div className="grid gap-6 py-4">
+              <div className="p-3 bg-muted/30 rounded border border-border space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-muted-foreground font-medium">CURRENT ALLOCATION</p>
+                </div>
+                <div className="text-sm">
+                  <span className="font-medium">Clinician:</span>{" "}
+                  {clinicians.find(c => c.id === editAllocationClient.assignedClinicianId)?.name?.split(",")[0] || "None"}
+                </div>
+                <div className="text-sm">
+                  <span className="font-medium">Slot:</span>{" "}
+                  {editAllocationClient.assignedSlot || "None"}
+                </div>
+              </div>
+
+              <div className="grid gap-2">
+                <Label>Status</Label>
+                <Select 
+                  value={editAllocationData.status} 
+                  onValueChange={(v) => setEditAllocationData({...editAllocationData, status: v as ClientType["status"]})}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="New">New</SelectItem>
+                    <SelectItem value="Forms Sent">Forms Sent</SelectItem>
+                    <SelectItem value="Forms Completed">Forms Completed</SelectItem>
+                    <SelectItem value="Assigned">Assigned</SelectItem>
+                    <SelectItem value="Scheduled">Scheduled</SelectItem>
+                    <SelectItem value="Waitlist">Waitlist</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Changing to New, Forms Sent, Forms Completed, or Waitlist will release the current time slot.
+                </p>
+              </div>
+
+              {(editAllocationData.status === "Assigned" || editAllocationData.status === "Scheduled") && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <Label>Reassign to Different Slot (optional)</Label>
+                  </div>
+
+                  {clinicians.map(clinician => {
+                    const availableSlots = clinician.availability.filter(s => s.type !== "Vacation" && !s.isBooked);
+                    if (availableSlots.length === 0) return null;
+                    
+                    return (
+                      <div key={clinician.id} className="p-4 border rounded-lg">
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="font-medium">{clinician.name.split(",")[0]}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {clinician.currentLoad}/{clinician.capacity} clients
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2">
+                          {availableSlots.map(slot => (
+                            <Button
+                              key={slot.id}
+                              variant={editAllocationData.slotId === slot.id && editAllocationData.clinicianId === clinician.id ? "default" : "outline"}
+                              size="sm"
+                              className="justify-start h-auto py-2 px-3 text-xs"
+                              onClick={() => setEditAllocationData({
+                                ...editAllocationData,
+                                clinicianId: clinician.id,
+                                slotId: slot.id
+                              })}
+                            >
+                              <CalendarCheck className="h-3 w-3 mr-2" />
+                              <div className="text-left">
+                                <div className="font-medium">{slot.day || (slot.date && format(parseISO(slot.date), "EEE"))}</div>
+                                <div className="text-[10px] text-muted-foreground">{slot.startTime} - {slot.endTime}</div>
+                              </div>
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {editAllocationData.slotId && (
+                    <Button 
+                      variant="ghost" 
+                      size="sm"
+                      onClick={() => setEditAllocationData({...editAllocationData, clinicianId: editAllocationClient.assignedClinicianId, slotId: null})}
+                    >
+                      Clear selection (keep current slot)
+                    </Button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsEditAllocationOpen(false)}>Cancel</Button>
+            <Button 
+              onClick={handleSaveEditAllocation}
+              disabled={reassignClientMutation.isPending}
+            >
+              {reassignClientMutation.isPending ? "Saving..." : "Save Changes"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

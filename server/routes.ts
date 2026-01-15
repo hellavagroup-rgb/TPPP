@@ -452,6 +452,29 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/clients/:clientId/reassign", requireAdmin, auditLog("reassign", "client"), async (req, res) => {
+    try {
+      const { clinicianId, slotId, status } = req.body;
+      
+      if (!status) {
+        return res.status(400).json({ error: "Missing status" });
+      }
+
+      const updated = await storage.reassignClient(req.params.clientId, clinicianId || null, slotId || null, status);
+      if (!updated) {
+        return res.status(404).json({ error: "Client not found" });
+      }
+      res.json(updated);
+    } catch (error: any) {
+      console.error("Failed to reassign client:", error);
+      // Return validation errors as 400
+      if (error.message?.includes("not found") || error.message?.includes("does not belong") || error.message?.includes("already booked")) {
+        return res.status(400).json({ error: error.message });
+      }
+      res.status(500).json({ error: "Failed to reassign client" });
+    }
+  });
+
   app.post("/api/clients/:id/archive", requireAdmin, auditLog("archive", "client"), async (req, res) => {
     try {
       const archived = await storage.archiveClient(req.params.id);

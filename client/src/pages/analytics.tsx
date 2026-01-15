@@ -143,41 +143,55 @@ export default function Analytics() {
               </p>
             </div>
           ) : (
-            <div className="space-y-4">
-              {clinicians.slice(0, 10).map((clinician) => {
-                const counts = getSlotCounts(clinician.availability);
-                const totalSlots = counts.available + counts.pending;
-                return (
-                  <div key={clinician.id} className="space-y-2">
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="font-medium">{clinician.name || clinician.avatar}</span>
-                      <span className="text-muted-foreground">
-                        {counts.available} available, {counts.pending} pending
-                      </span>
-                    </div>
-                    <div className="h-2 w-full bg-secondary rounded-full overflow-hidden flex">
-                      {totalSlots > 0 && (
-                        <>
-                          <div 
-                            className="h-full bg-emerald-500" 
-                            style={{ width: `${(counts.available / Math.max(totalSlots, 1)) * 100}%` }} 
-                          />
-                          <div 
-                            className="h-full bg-slate-400" 
-                            style={{ width: `${(counts.pending / Math.max(totalSlots, 1)) * 100}%` }} 
-                          />
-                        </>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-              {clinicians.length > 10 && (
-                <p className="text-xs text-muted-foreground text-center pt-2">
-                  Showing 10 of {clinicians.length} clinicians
-                </p>
-              )}
-            </div>
+            (() => {
+              const cliniciansWithCounts = clinicians.map(c => ({
+                ...c,
+                counts: getSlotCounts(c.availability),
+                total: getSlotCounts(c.availability).available + getSlotCounts(c.availability).pending
+              }));
+              const sortedClinicians = [...cliniciansWithCounts].sort((a, b) => b.total - a.total);
+              const maxSlots = Math.max(...sortedClinicians.map(c => c.total), 1);
+
+              return (
+                <div className="space-y-4">
+                  {sortedClinicians.slice(0, 10).map((clinician) => {
+                    const barWidth = (clinician.total / maxSlots) * 100;
+                    const availableWidth = clinician.total > 0 ? (clinician.counts.available / clinician.total) * barWidth : 0;
+                    const pendingWidth = clinician.total > 0 ? (clinician.counts.pending / clinician.total) * barWidth : 0;
+                    
+                    return (
+                      <div key={clinician.id} className="space-y-2">
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="font-medium">{clinician.name || clinician.avatar}</span>
+                          <span className="text-muted-foreground">
+                            {clinician.counts.available} available, {clinician.counts.pending} pending
+                          </span>
+                        </div>
+                        <div className="h-2 w-full bg-secondary rounded-full overflow-hidden flex">
+                          {clinician.total > 0 ? (
+                            <>
+                              <div 
+                                className="h-full bg-emerald-500" 
+                                style={{ width: `${availableWidth}%` }} 
+                              />
+                              <div 
+                                className="h-full bg-slate-400" 
+                                style={{ width: `${pendingWidth}%` }} 
+                              />
+                            </>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {clinicians.length > 10 && (
+                    <p className="text-xs text-muted-foreground text-center pt-2">
+                      Showing 10 of {clinicians.length} clinicians
+                    </p>
+                  )}
+                </div>
+              );
+            })()
           )}
         </CardContent>
       </Card>

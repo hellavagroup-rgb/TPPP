@@ -41,7 +41,10 @@ import {
   XCircle,
   Briefcase,
   Edit,
-  Phone
+  Phone,
+  FileText,
+  Download,
+  Loader2
 } from "lucide-react";
 import { useState } from "react";
 import { useLocation } from "wouter";
@@ -273,6 +276,90 @@ export default function Clients() {
       slotId: editAllocationData.slotId,
       status: editAllocationData.status
     });
+  };
+
+  // View Responses State
+  const [isViewResponsesOpen, setIsViewResponsesOpen] = useState(false);
+  const [viewResponsesClient, setViewResponsesClient] = useState<ClientType | null>(null);
+  const [submissions, setSubmissions] = useState<any[]>([]);
+  const [loadingSubmissions, setLoadingSubmissions] = useState(false);
+
+  const handleOpenViewResponses = async (client: ClientType) => {
+    setViewResponsesClient(client);
+    setIsViewResponsesOpen(true);
+    setLoadingSubmissions(true);
+    try {
+      const response = await apiRequest("GET", `/api/clients/${client.id}/submissions`);
+      if (!response.ok) {
+        throw new Error("Failed to fetch submissions");
+      }
+      const data = await response.json();
+      setSubmissions(data);
+    } catch (error) {
+      toast({ title: "Error", description: "Failed to load form responses.", variant: "destructive" });
+      setSubmissions([]);
+    } finally {
+      setLoadingSubmissions(false);
+    }
+  };
+
+  const generatePDF = (submission: any) => {
+    const formTitle = submission.formTitle;
+    const responses = submission.responses || {};
+    const fields = submission.formFields || [];
+    
+    // Build a printable HTML document
+    let content = `
+      <html>
+      <head>
+        <title>${formTitle} - ${viewResponsesClient?.displayId}</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 40px; max-width: 800px; margin: 0 auto; }
+          h1 { color: #1f2937; border-bottom: 2px solid #3b82f6; padding-bottom: 10px; }
+          h2 { color: #374151; margin-top: 30px; }
+          .field { margin-bottom: 15px; page-break-inside: avoid; }
+          .label { font-weight: bold; color: #4b5563; }
+          .value { margin-top: 5px; padding: 10px; background: #f9fafb; border-radius: 4px; }
+          .meta { color: #6b7280; font-size: 12px; margin-bottom: 20px; }
+          @media print { body { padding: 20px; } }
+        </style>
+      </head>
+      <body>
+        <h1>${formTitle}</h1>
+        <p class="meta">Client ID: ${viewResponsesClient?.displayId} | Submitted: ${submission.submittedAt ? formatDateUK(submission.submittedAt) : 'N/A'}</p>
+    `;
+
+    // Group responses by field
+    fields.forEach((field: any) => {
+      const value = responses[field.id];
+      if (value !== undefined && value !== null && value !== '') {
+        let displayValue = value;
+        if (Array.isArray(value)) {
+          displayValue = value.join(', ');
+        } else if (typeof value === 'boolean') {
+          displayValue = value ? 'Yes' : 'No';
+        }
+        content += `
+          <div class="field">
+            <div class="label">${field.label}</div>
+            <div class="value">${displayValue}</div>
+          </div>
+        `;
+      }
+    });
+
+    content += '</body></html>';
+
+    // Open print dialog
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.write(content);
+      printWindow.document.close();
+      printWindow.focus();
+      setTimeout(() => {
+        printWindow.print();
+      }, 250);
+    }
   };
 
   const filteredClients = clients.filter(client => {
@@ -825,6 +912,11 @@ export default function Clients() {
                             <Mail className="h-4 w-4 mr-2" /> Resend Forms
                           </DropdownMenuItem>
                         )}
+                        {client.status !== "New" && client.status !== "Forms Sent" && (
+                          <DropdownMenuItem onClick={() => handleOpenViewResponses(client)}>
+                            <Eye className="h-4 w-4 mr-2" /> View Responses
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuSeparator />
                         <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>
                             Archive
@@ -1267,6 +1359,89 @@ export default function Clients() {
               disabled={archiveClientMutation.isPending}
             >
               {archiveClientMutation.isPending ? "Archiving..." : "Yes, Archive Client"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* View Responses Dialog */}
+      <Dialog open={isViewResponsesOpen} onOpenChange={setIsViewResponsesOpen}>
+        <DialogContent className="sm:max-w-[700px] max-h-[80vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5" />
+              Form Responses - {viewResponsesClient?.displayId}
+            </DialogTitle>
+            <DialogDescription>
+              Review submitted form responses for this client.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="flex-1 overflow-y-auto py-4">
+            {loadingSubmissions ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              </div>
+            ) : submissions.length === 0 ? (
+              <div className="text-center py-12 text-muted-foreground">
+                <FileText className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                <p>No form submissions found for this client.</p>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {submissions.map((submission, index) => (
+                  <div key={submission.id || index} className="border rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h3 className="font-semibold text-lg">{submission.formTitle}</h3>
+                        <p className="text-sm text-muted-foreground">
+                          Submitted: {submission.submittedAt ? formatDateUK(submission.submittedAt) : 'N/A'}
+                        </p>
+                      </div>
+                      <Button 
+                        variant="outline" 
+                        size="sm"
+                        onClick={() => generatePDF(submission)}
+                        data-testid={`button-download-pdf-${submission.id}`}
+                      >
+                        <Download className="h-4 w-4 mr-2" />
+                        Download PDF
+                      </Button>
+                    </div>
+                    
+                    <div className="space-y-3">
+                      {(submission.formFields || []).map((field: any) => {
+                        const value = submission.responses?.[field.id];
+                        if (value === undefined || value === null || value === '') return null;
+                        
+                        let displayValue = value;
+                        if (Array.isArray(value)) {
+                          displayValue = value.join(', ');
+                        } else if (typeof value === 'boolean') {
+                          displayValue = value ? 'Yes' : 'No';
+                        }
+                        
+                        return (
+                          <div key={field.id} className="grid grid-cols-3 gap-2 py-2 border-b last:border-b-0">
+                            <div className="font-medium text-sm text-muted-foreground col-span-1">
+                              {field.label}
+                            </div>
+                            <div className="text-sm col-span-2">
+                              {displayValue}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsViewResponsesOpen(false)}>
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>

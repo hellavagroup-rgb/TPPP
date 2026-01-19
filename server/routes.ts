@@ -556,9 +556,15 @@ export async function registerRoutes(
     }
   });
 
-  // Get form submissions for a client
-  app.get("/api/clients/:id/submissions", requireAuth, async (req, res) => {
+  // Get form submissions for a client (admin only)
+  app.get("/api/clients/:id/submissions", requireAdmin, async (req, res) => {
     try {
+      // Verify client exists
+      const client = await storage.getClientById(req.params.id);
+      if (!client) {
+        return res.status(404).json({ error: "Client not found" });
+      }
+
       const submissions = await storage.getFormSubmissionsByClientId(req.params.id);
       
       // Enrich with form template info

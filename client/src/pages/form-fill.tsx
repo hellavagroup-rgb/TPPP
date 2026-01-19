@@ -337,7 +337,7 @@ export default function FormFill() {
                                                     selected={formState[field.id]}
                                                     onSelect={(date) => handleValueChange(field.id, date)}
                                                     disabled={(date) =>
-                                                        date > new Date() || date < new Date("1900-01-01")
+                                                        date < new Date("1900-01-01")
                                                     }
                                                     initialFocus
                                                 />

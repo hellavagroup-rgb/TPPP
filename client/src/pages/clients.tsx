@@ -820,6 +820,11 @@ export default function Clients() {
                             <CalendarCheck className="h-4 w-4 mr-2" /> Edit Allocation
                           </DropdownMenuItem>
                         )}
+                        {client.status !== "New" && (
+                          <DropdownMenuItem onClick={() => handleOpenSendForms(client)}>
+                            <Mail className="h-4 w-4 mr-2" /> Resend Forms
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuSeparator />
                         <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>
                             Archive

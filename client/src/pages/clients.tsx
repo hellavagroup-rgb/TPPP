@@ -338,6 +338,20 @@ export default function Clients() {
           displayValue = value.join(', ');
         } else if (typeof value === 'boolean') {
           displayValue = value ? 'Yes' : 'No';
+        } else if (typeof value === 'object' && value !== null) {
+          // Handle availability picker or other object values
+          const entries = Object.entries(value as Record<string, string[]>);
+          if (entries.length > 0 && Array.isArray(entries[0][1])) {
+            // This is an availability picker value
+            const availabilityLines = entries
+              .filter(([_, times]) => times.length > 0)
+              .map(([day, times]) => `<strong>${day}:</strong> ${(times as string[]).sort().join(', ')}`)
+              .join('<br>');
+            displayValue = availabilityLines || 'No times selected';
+          } else {
+            // Generic object - stringify it
+            displayValue = JSON.stringify(value);
+          }
         }
         content += `
           <div class="field">
@@ -1539,11 +1553,33 @@ export default function Clients() {
                         const value = submission.responses?.[field.id];
                         if (value === undefined || value === null || value === '') return null;
                         
-                        let displayValue = value;
+                        let displayValue: React.ReactNode = value;
                         if (Array.isArray(value)) {
                           displayValue = value.join(', ');
                         } else if (typeof value === 'boolean') {
                           displayValue = value ? 'Yes' : 'No';
+                        } else if (typeof value === 'object' && value !== null) {
+                          // Handle availability picker or other object values
+                          const entries = Object.entries(value as Record<string, string[]>);
+                          if (entries.length > 0 && Array.isArray(entries[0][1])) {
+                            // This is an availability picker value
+                            displayValue = (
+                              <div className="space-y-1">
+                                {entries.filter(([_, times]) => times.length > 0).map(([day, times]) => (
+                                  <div key={day} className="text-xs">
+                                    <span className="font-medium">{day}:</span>{' '}
+                                    {(times as string[]).sort().join(', ')}
+                                  </div>
+                                ))}
+                                {entries.filter(([_, times]) => times.length > 0).length === 0 && (
+                                  <span className="text-muted-foreground">No times selected</span>
+                                )}
+                              </div>
+                            );
+                          } else {
+                            // Generic object - stringify it
+                            displayValue = JSON.stringify(value);
+                          }
                         }
                         
                         return (

@@ -556,6 +556,29 @@ export async function registerRoutes(
     }
   });
 
+  // Get form submissions for a client
+  app.get("/api/clients/:id/submissions", requireAuth, async (req, res) => {
+    try {
+      const submissions = await storage.getFormSubmissionsByClientId(req.params.id);
+      
+      // Enrich with form template info
+      const enrichedSubmissions = await Promise.all(
+        submissions.map(async (sub) => {
+          const form = await storage.getFormTemplateById(sub.formTemplateId);
+          return {
+            ...sub,
+            formTitle: form?.title || "Unknown Form",
+            formFields: form?.fields || [],
+          };
+        })
+      );
+      
+      res.json(enrichedSubmissions);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch submissions" });
+    }
+  });
+
   // ============ FORM TEMPLATES ============
   app.get("/api/forms", requireAuth, async (req, res) => {
     try {

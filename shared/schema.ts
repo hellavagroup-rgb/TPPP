@@ -97,7 +97,7 @@ export const clients = pgTable("clients", {
   // Clinical Data
   referralSource: text("referral_source"),
   insurer: text("insurer"),
-  status: text("status", { enum: ["New", "Forms Sent", "Forms Completed", "Assigned", "Scheduled", "Waitlist"] }).notNull().default("New"),
+  status: text("status", { enum: ["New", "Forms Sent", "Forms Completed", "Allocated", "Confirmed", "Waitlist"] }).notNull().default("New"),
   presentingIssues: text("presenting_issues").array().default(sql`ARRAY[]::text[]`),
   notes: text("notes"), // Clinical notes - restricted access
   // Assignment

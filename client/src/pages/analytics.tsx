@@ -51,7 +51,7 @@ export default function Analytics() {
 
   const totalClients = clients.length;
   const newClients = clients.filter(c => c.status === "New").length;
-  const scheduledClients = clients.filter(c => c.status === "Scheduled").length;
+  const confirmedClients = clients.filter(c => c.status === "Confirmed").length;
   const activeClinicians = clinicians.filter(c => (c.maxNewClients ?? 0) > 0).length;
 
   return (
@@ -96,7 +96,7 @@ export default function Analytics() {
             <CalendarCheck className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{scheduledClients}</div>
+            <div className="text-2xl font-bold">{confirmedClients}</div>
             <p className="text-xs text-muted-foreground pt-1">
               Clients with upcoming appointments
             </p>
@@ -133,7 +133,7 @@ export default function Analytics() {
             </div>
           ) : (
             <div className="space-y-4">
-              {["New", "Forms Sent", "Forms Completed", "Assigned", "Scheduled", "Waitlist"].map(status => {
+              {["New", "Forms Sent", "Forms Completed", "Allocated", "Confirmed", "Waitlist"].map(status => {
                 const count = clients.filter(c => c.status === status).length;
                 const percentage = totalClients > 0 ? Math.round((count / totalClients) * 100) : 0;
                 return (

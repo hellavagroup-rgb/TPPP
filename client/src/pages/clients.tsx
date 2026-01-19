@@ -232,11 +232,11 @@ export default function Clients() {
     status: "New" as ClientType["status"]
   });
 
-  // Edit Allocation State
-  const [isEditAllocationOpen, setIsEditAllocationOpen] = useState(false);
-  const [editAllocationClient, setEditAllocationClient] = useState<ClientType | null>(null);
-  const [editAllocationData, setEditAllocationData] = useState({
-    status: "Assigned" as ClientType["status"],
+  // Edit Status State
+  const [isEditStatusOpen, setIsEditStatusOpen] = useState(false);
+  const [editStatusClient, setEditStatusClient] = useState<ClientType | null>(null);
+  const [editStatusData, setEditStatusData] = useState({
+    status: "Allocated" as ClientType["status"],
     clinicianId: null as string | null,
     slotId: null as string | null
   });
@@ -250,31 +250,31 @@ export default function Clients() {
       queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
       queryClient.invalidateQueries({ queryKey: ["/api/clinicians"] });
       toast({ title: "Allocation Updated", description: "Client allocation has been updated." });
-      setIsEditAllocationOpen(false);
-      setEditAllocationClient(null);
+      setIsEditStatusOpen(false);
+      setEditStatusClient(null);
     },
     onError: () => {
       toast({ title: "Error", description: "Failed to update allocation.", variant: "destructive" });
     },
   });
 
-  const handleOpenEditAllocation = (client: ClientType) => {
-    setEditAllocationClient(client);
-    setEditAllocationData({
+  const handleOpenEditStatus = (client: ClientType) => {
+    setEditStatusClient(client);
+    setEditStatusData({
       status: client.status,
       clinicianId: client.assignedClinicianId || null,
       slotId: null
     });
-    setIsEditAllocationOpen(true);
+    setIsEditStatusOpen(true);
   };
 
-  const handleSaveEditAllocation = () => {
-    if (!editAllocationClient) return;
+  const handleSaveEditStatus = () => {
+    if (!editStatusClient) return;
     reassignClientMutation.mutate({
-      clientId: editAllocationClient.id,
-      clinicianId: editAllocationData.clinicianId,
-      slotId: editAllocationData.slotId,
-      status: editAllocationData.status
+      clientId: editStatusClient.id,
+      clinicianId: editStatusData.clinicianId,
+      slotId: editStatusData.slotId,
+      status: editStatusData.status
     });
   };
 
@@ -374,8 +374,8 @@ export default function Clients() {
       case "New": return "bg-blue-100 text-blue-700 hover:bg-blue-200";
       case "Forms Sent": return "bg-amber-100 text-amber-700 hover:bg-amber-200";
       case "Forms Completed": return "bg-emerald-100 text-emerald-700 hover:bg-emerald-200";
-      case "Assigned": return "bg-indigo-100 text-indigo-700 hover:bg-indigo-200";
-      case "Scheduled": return "bg-green-100 text-green-700 hover:bg-green-200";
+      case "Allocated": return "bg-indigo-100 text-indigo-700 hover:bg-indigo-200";
+      case "Confirmed": return "bg-green-100 text-green-700 hover:bg-green-200";
       case "Waitlist": return "bg-slate-100 text-slate-700 hover:bg-slate-200";
       default: return "bg-slate-100 text-slate-700";
     }
@@ -696,7 +696,8 @@ export default function Clients() {
               <SelectItem value="New">New</SelectItem>
               <SelectItem value="Forms Sent">Forms Sent</SelectItem>
               <SelectItem value="Forms Completed">Forms Completed</SelectItem>
-              <SelectItem value="Assigned">Assigned</SelectItem>
+              <SelectItem value="Allocated">Allocated</SelectItem>
+              <SelectItem value="Confirmed">Confirmed</SelectItem>
               <SelectItem value="Waitlist">Waitlist</SelectItem>
             </SelectContent>
           </Select>
@@ -897,14 +898,14 @@ export default function Clients() {
                         <DropdownMenuItem onClick={() => handleOpenEditClient(client)}>
                             <Edit className="h-4 w-4 mr-2" /> Edit Details
                         </DropdownMenuItem>
-                        {client.status !== "Assigned" && client.status !== "Scheduled" && (
+                        {client.status !== "Allocated" && client.status !== "Confirmed" && (
                           <DropdownMenuItem onClick={() => handleOpenManualAllocate(client)}>
                             <CalendarCheck className="h-4 w-4 mr-2" /> Allocate to Clinician
                           </DropdownMenuItem>
                         )}
-                        {(client.status === "Assigned" || client.status === "Scheduled") && (
-                          <DropdownMenuItem onClick={() => handleOpenEditAllocation(client)}>
-                            <CalendarCheck className="h-4 w-4 mr-2" /> Edit Allocation
+                        {(client.status === "Allocated" || client.status === "Confirmed") && (
+                          <DropdownMenuItem onClick={() => handleOpenEditStatus(client)}>
+                            <CalendarCheck className="h-4 w-4 mr-2" /> Edit Status
                           </DropdownMenuItem>
                         )}
                         {client.status !== "New" && (
@@ -1050,8 +1051,8 @@ export default function Clients() {
                     <SelectItem value="New">New</SelectItem>
                     <SelectItem value="Forms Sent">Forms Sent</SelectItem>
                     <SelectItem value="Forms Completed">Forms Completed</SelectItem>
-                    <SelectItem value="Assigned">Assigned</SelectItem>
-                    <SelectItem value="Scheduled">Scheduled</SelectItem>
+                    <SelectItem value="Allocated">Allocated</SelectItem>
+                    <SelectItem value="Confirmed">Confirmed</SelectItem>
                     <SelectItem value="Waitlist">Waitlist</SelectItem>
                   </SelectContent>
                 </Select>
@@ -1093,20 +1094,20 @@ export default function Clients() {
         </DialogContent>
       </Dialog>
 
-      {/* Edit Allocation Dialog */}
-      <Dialog open={isEditAllocationOpen} onOpenChange={setIsEditAllocationOpen}>
+      {/* Edit Status Dialog */}
+      <Dialog open={isEditStatusOpen} onOpenChange={setIsEditStatusOpen}>
         <DialogContent className="sm:max-w-[600px] max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <CalendarCheck className="h-5 w-5" />
-              Edit Allocation
+              Edit Status
             </DialogTitle>
             <DialogDescription>
-              Change the status or reassign {editAllocationClient?.displayId} to a different time slot.
+              Change the status or reassign {editStatusClient?.displayId} to a different time slot.
             </DialogDescription>
           </DialogHeader>
           
-          {editAllocationClient && (
+          {editStatusClient && (
             <div className="grid gap-6 py-4">
               <div className="p-3 bg-muted/30 rounded border border-border space-y-2">
                 <div className="flex items-center justify-between">
@@ -1114,19 +1115,19 @@ export default function Clients() {
                 </div>
                 <div className="text-sm">
                   <span className="font-medium">Clinician:</span>{" "}
-                  {clinicians.find(c => c.id === editAllocationClient.assignedClinicianId)?.name?.split(",")[0] || "None"}
+                  {clinicians.find(c => c.id === editStatusClient.assignedClinicianId)?.name?.split(",")[0] || "None"}
                 </div>
                 <div className="text-sm">
                   <span className="font-medium">Slot:</span>{" "}
-                  {editAllocationClient.assignedSlot || "None"}
+                  {editStatusClient.assignedSlot || "None"}
                 </div>
               </div>
 
               <div className="grid gap-2">
                 <Label>Status</Label>
                 <Select 
-                  value={editAllocationData.status} 
-                  onValueChange={(v) => setEditAllocationData({...editAllocationData, status: v as ClientType["status"]})}
+                  value={editStatusData.status} 
+                  onValueChange={(v) => setEditStatusData({...editStatusData, status: v as ClientType["status"]})}
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -1135,8 +1136,8 @@ export default function Clients() {
                     <SelectItem value="New">New</SelectItem>
                     <SelectItem value="Forms Sent">Forms Sent</SelectItem>
                     <SelectItem value="Forms Completed">Forms Completed</SelectItem>
-                    <SelectItem value="Assigned">Assigned</SelectItem>
-                    <SelectItem value="Scheduled">Scheduled</SelectItem>
+                    <SelectItem value="Allocated">Allocated</SelectItem>
+                    <SelectItem value="Confirmed">Confirmed</SelectItem>
                     <SelectItem value="Waitlist">Waitlist</SelectItem>
                   </SelectContent>
                 </Select>
@@ -1145,7 +1146,7 @@ export default function Clients() {
                 </p>
               </div>
 
-              {(editAllocationData.status === "Assigned" || editAllocationData.status === "Scheduled") && (
+              {(editStatusData.status === "Allocated" || editStatusData.status === "Confirmed") && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <Label>Reassign to Different Slot (optional)</Label>
@@ -1167,11 +1168,11 @@ export default function Clients() {
                           {availableSlots.map(slot => (
                             <Button
                               key={slot.id}
-                              variant={editAllocationData.slotId === slot.id && editAllocationData.clinicianId === clinician.id ? "default" : "outline"}
+                              variant={editStatusData.slotId === slot.id && editStatusData.clinicianId === clinician.id ? "default" : "outline"}
                               size="sm"
                               className="justify-start h-auto py-2 px-3 text-xs"
-                              onClick={() => setEditAllocationData({
-                                ...editAllocationData,
+                              onClick={() => setEditStatusData({
+                                ...editStatusData,
                                 clinicianId: clinician.id,
                                 slotId: slot.id
                               })}
@@ -1188,11 +1189,11 @@ export default function Clients() {
                     );
                   })}
 
-                  {editAllocationData.slotId && (
+                  {editStatusData.slotId && (
                     <Button 
                       variant="ghost" 
                       size="sm"
-                      onClick={() => setEditAllocationData({...editAllocationData, clinicianId: editAllocationClient.assignedClinicianId, slotId: null})}
+                      onClick={() => setEditStatusData({...editStatusData, clinicianId: editStatusClient.assignedClinicianId, slotId: null})}
                     >
                       Clear selection (keep current slot)
                     </Button>
@@ -1203,9 +1204,9 @@ export default function Clients() {
           )}
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setIsEditAllocationOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setIsEditStatusOpen(false)}>Cancel</Button>
             <Button 
-              onClick={handleSaveEditAllocation}
+              onClick={handleSaveEditStatus}
               disabled={reassignClientMutation.isPending}
             >
               {reassignClientMutation.isPending ? "Saving..." : "Save Changes"}

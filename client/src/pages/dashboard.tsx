@@ -113,7 +113,7 @@ export default function Dashboard() {
     },
     {
       title: "Allocated - Awaiting Confirmation",
-      value: clients.filter(c => c.status === "Assigned").length,
+      value: clients.filter(c => c.status === "Allocated").length,
       change: "Pending admin confirmation",
       icon: Users,
       color: "text-purple-600",
@@ -121,7 +121,7 @@ export default function Dashboard() {
     },
     {
       title: "Allocated",
-      value: clients.filter(c => c.status === "Scheduled").length,
+      value: clients.filter(c => c.status === "Confirmed").length,
       change: "Confirmed allocations",
       icon: Calendar,
       color: "text-emerald-600",

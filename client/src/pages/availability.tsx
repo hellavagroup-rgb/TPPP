@@ -198,7 +198,7 @@ export default function Availability() {
     const clientId = params.get("allocate");
     if (clientId && clients.length > 0 && !isAllocating) {
       const client = clients.find(c => c.id === clientId);
-      if (client && client.status !== "Assigned" && client.status !== "Scheduled") {
+      if (client && client.status !== "Allocated" && client.status !== "Confirmed") {
         setIsAllocating(true);
         setAllocatingClientId(clientId);
         setAllocatingClient(client);

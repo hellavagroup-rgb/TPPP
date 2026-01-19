@@ -1,7 +1,7 @@
 # The Perinatal Psychology Practice - Client Management System
 
 ## Recent Changes (January 2026)
-- Renamed client statuses: "Assigned" → "Allocated", "Scheduled" → "Confirmed"
+- UI labels updated: "Assigned" displays as "Allocated", "Scheduled" displays as "Confirmed" (database values unchanged)
 - Renamed "Edit Allocation" to "Edit Status" in client dropdown menu
 - Added "View Responses" feature to view submitted form responses with PDF download
 - Added comprehensive Therapy Enquiry Form matching WriteUpp form with 35+ fields including safety/risk assessment, therapy history, and neurodiversity accommodations
@@ -15,7 +15,7 @@
 This is a practice management and client onboarding system for The Perinatal Psychology Practice. It enables staff to manage client intake workflows, clinician scheduling, form creation/distribution, task assignment, and waitlist management. The system supports two user roles: administrators (full access) and clinicians (limited to their own profile and availability).
 
 Key features include:
-- Client intake and status tracking (New → Forms Sent → Forms Completed → Allocated → Confirmed)
+- Client intake and status tracking (New → Forms Sent → Forms Completed → Allocated → Confirmed) [stored as Assigned/Scheduled]
 - Clinician availability management with recurring and one-off time slots
 - Dynamic form builder for creating intake questionnaires
 - Public form filling interface for clients (no authentication required)

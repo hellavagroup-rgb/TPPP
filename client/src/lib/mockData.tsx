@@ -3,7 +3,7 @@ import { format, subDays, addDays, isSameDay, parseISO, startOfWeek, endOfWeek, 
 import { useAppData } from "./useAppData";
 
 // Types
-export type ClientStatus = "New" | "Forms Sent" | "Forms Completed" | "Allocated" | "Confirmed" | "Waitlist";
+export type ClientStatus = "New" | "Forms Sent" | "Forms Completed" | "Assigned" | "Scheduled" | "Waitlist";
 
 export interface Client {
   id: string; // Internal ID
@@ -432,7 +432,7 @@ const MOCK_CLIENTS: Client[] = [
     id: "cl4",
     displayId: "W12039482",
     email: "redacted@example.com",
-    status: "Allocated",
+    status: "Assigned",
     intakeDate: format(subDays(new Date(), 7), "yyyy-MM-dd"),
     assignedClinicianId: "c1",
     assignedSlot: "Monday 14:00",

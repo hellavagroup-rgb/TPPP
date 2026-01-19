@@ -236,7 +236,7 @@ export default function Clients() {
   const [isEditStatusOpen, setIsEditStatusOpen] = useState(false);
   const [editStatusClient, setEditStatusClient] = useState<ClientType | null>(null);
   const [editStatusData, setEditStatusData] = useState({
-    status: "Allocated" as ClientType["status"],
+    status: "Assigned" as ClientType["status"],
     clinicianId: null as string | null,
     slotId: null as string | null
   });
@@ -369,13 +369,22 @@ export default function Clients() {
     return matchesSearch && matchesStatus;
   });
 
+  // Display labels for statuses (shows "Allocated"/"Confirmed" but stores "Assigned"/"Scheduled")
+  const getStatusDisplayLabel = (status: string) => {
+    switch(status) {
+      case "Assigned": return "Allocated";
+      case "Scheduled": return "Confirmed";
+      default: return status;
+    }
+  };
+
   const getStatusColor = (status: ClientStatus) => {
     switch(status) {
       case "New": return "bg-blue-100 text-blue-700 hover:bg-blue-200";
       case "Forms Sent": return "bg-amber-100 text-amber-700 hover:bg-amber-200";
       case "Forms Completed": return "bg-emerald-100 text-emerald-700 hover:bg-emerald-200";
-      case "Allocated": return "bg-indigo-100 text-indigo-700 hover:bg-indigo-200";
-      case "Confirmed": return "bg-green-100 text-green-700 hover:bg-green-200";
+      case "Assigned": return "bg-indigo-100 text-indigo-700 hover:bg-indigo-200";
+      case "Scheduled": return "bg-green-100 text-green-700 hover:bg-green-200";
       case "Waitlist": return "bg-slate-100 text-slate-700 hover:bg-slate-200";
       default: return "bg-slate-100 text-slate-700";
     }
@@ -696,8 +705,8 @@ export default function Clients() {
               <SelectItem value="New">New</SelectItem>
               <SelectItem value="Forms Sent">Forms Sent</SelectItem>
               <SelectItem value="Forms Completed">Forms Completed</SelectItem>
-              <SelectItem value="Allocated">Allocated</SelectItem>
-              <SelectItem value="Confirmed">Confirmed</SelectItem>
+              <SelectItem value="Assigned">Allocated</SelectItem>
+              <SelectItem value="Scheduled">Confirmed</SelectItem>
               <SelectItem value="Waitlist">Waitlist</SelectItem>
             </SelectContent>
           </Select>
@@ -719,7 +728,7 @@ export default function Clients() {
                     <Shield className="h-4 w-4 text-muted-foreground" />
                     <h3 className="font-semibold text-lg leading-none font-mono tracking-tight">{client.displayId}</h3>
                     <Badge variant="secondary" className={getStatusColor(client.status)}>
-                      {client.status}
+                      {getStatusDisplayLabel(client.status)}
                     </Badge>
                   </div>
                   <p className="text-sm text-muted-foreground flex items-center gap-2">
@@ -898,12 +907,12 @@ export default function Clients() {
                         <DropdownMenuItem onClick={() => handleOpenEditClient(client)}>
                             <Edit className="h-4 w-4 mr-2" /> Edit Details
                         </DropdownMenuItem>
-                        {client.status !== "Allocated" && client.status !== "Confirmed" && (
+                        {client.status !== "Assigned" && client.status !== "Scheduled" && (
                           <DropdownMenuItem onClick={() => handleOpenManualAllocate(client)}>
                             <CalendarCheck className="h-4 w-4 mr-2" /> Allocate to Clinician
                           </DropdownMenuItem>
                         )}
-                        {(client.status === "Allocated" || client.status === "Confirmed") && (
+                        {(client.status === "Assigned" || client.status === "Scheduled") && (
                           <DropdownMenuItem onClick={() => handleOpenEditStatus(client)}>
                             <CalendarCheck className="h-4 w-4 mr-2" /> Edit Status
                           </DropdownMenuItem>
@@ -1051,8 +1060,8 @@ export default function Clients() {
                     <SelectItem value="New">New</SelectItem>
                     <SelectItem value="Forms Sent">Forms Sent</SelectItem>
                     <SelectItem value="Forms Completed">Forms Completed</SelectItem>
-                    <SelectItem value="Allocated">Allocated</SelectItem>
-                    <SelectItem value="Confirmed">Confirmed</SelectItem>
+                    <SelectItem value="Assigned">Allocated</SelectItem>
+                    <SelectItem value="Scheduled">Confirmed</SelectItem>
                     <SelectItem value="Waitlist">Waitlist</SelectItem>
                   </SelectContent>
                 </Select>
@@ -1136,8 +1145,8 @@ export default function Clients() {
                     <SelectItem value="New">New</SelectItem>
                     <SelectItem value="Forms Sent">Forms Sent</SelectItem>
                     <SelectItem value="Forms Completed">Forms Completed</SelectItem>
-                    <SelectItem value="Allocated">Allocated</SelectItem>
-                    <SelectItem value="Confirmed">Confirmed</SelectItem>
+                    <SelectItem value="Assigned">Allocated</SelectItem>
+                    <SelectItem value="Scheduled">Confirmed</SelectItem>
                     <SelectItem value="Waitlist">Waitlist</SelectItem>
                   </SelectContent>
                 </Select>
@@ -1146,7 +1155,7 @@ export default function Clients() {
                 </p>
               </div>
 
-              {(editStatusData.status === "Allocated" || editStatusData.status === "Confirmed") && (
+              {(editStatusData.status === "Assigned" || editStatusData.status === "Scheduled") && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <Label>Reassign to Different Slot (optional)</Label>

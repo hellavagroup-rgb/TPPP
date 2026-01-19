@@ -353,7 +353,7 @@ export class DatabaseStorage implements IStorage {
     await db.transaction(async (tx) => {
       // Update client
       await tx.update(clients).set({
-        status: "Allocated",
+        status: "Assigned",
         assignedClinicianId: clinicianId,
         assignedSlotId: slotId,
         assignedSlot: slotString,
@@ -379,7 +379,7 @@ export class DatabaseStorage implements IStorage {
 
     const oldClinicianId = existingClient.assignedClinicianId;
     let oldSlotIdToRelease = existingClient.assignedSlotId;
-    const isAllocatedStatus = newStatus === "Allocated" || newStatus === "Confirmed";
+    const isAllocatedStatus = newStatus === "Assigned" || newStatus === "Scheduled";
     const isReassigning = newSlotId !== null;
 
     // Check if client has any allocation (either by slotId or legacy slot string)

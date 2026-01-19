@@ -995,34 +995,33 @@ export default function Clients() {
                                                         const isPending = isSlotPending(slot);
                                                         const pendingDate = getSlotPendingDate(slot);
                                                         const availMatch = doesSlotMatchClientAvailability(slot, clientAvailabilityForAllocation);
-                                                        const isMatch = availMatch === true && !isPending && !slot.isBooked;
+                                                        const isMatch = availMatch === true && !slot.isBooked;
                                                         const noMatch = availMatch === false;
-                                                        const isDisabled = slot.isBooked || isPending;
                                                         
                                                         return (
                                                         <Button 
                                                             key={slot.id}
-                                                            variant={isDisabled ? "ghost" : "outline"}
-                                                            disabled={isDisabled}
+                                                            variant={slot.isBooked ? "ghost" : "outline"}
+                                                            disabled={slot.isBooked}
                                                             className={`justify-start h-auto py-2 px-3 text-xs relative ${
                                                                 slot.isBooked 
                                                                     ? "opacity-50 line-through decoration-destructive" 
                                                                     : isPending
-                                                                        ? "opacity-70 bg-amber-50 border-amber-200 cursor-not-allowed"
+                                                                        ? "bg-amber-50 border-amber-300 hover:border-amber-400 hover:bg-amber-100"
                                                                         : isMatch 
                                                                             ? "border-emerald-400 bg-emerald-50 hover:border-emerald-500 hover:bg-emerald-100 ring-1 ring-emerald-200" 
                                                                             : noMatch 
                                                                                 ? "opacity-60 border-slate-200" 
                                                                                 : "hover:border-primary hover:bg-primary/5"
                                                             }`}
-                                                            onClick={() => !isDisabled && handleAssign(clinician.id, slot.id)}
+                                                            onClick={() => handleAssign(clinician.id, slot.id)}
                                                         >
-                                                            {isMatch && <span className="absolute -top-1 -right-1 bg-emerald-500 text-white text-[8px] px-1 rounded">Match</span>}
+                                                            {isMatch && !isPending && <span className="absolute -top-1 -right-1 bg-emerald-500 text-white text-[8px] px-1 rounded">Match</span>}
                                                             {isPending && <span className="absolute -top-1 -right-1 bg-amber-500 text-white text-[8px] px-1 rounded">Pending</span>}
-                                                            <CalendarCheck className={`h-3 w-3 mr-2 ${isMatch ? "text-emerald-600" : isPending ? "text-amber-600" : ""}`} />
+                                                            <CalendarCheck className={`h-3 w-3 mr-2 ${isMatch && !isPending ? "text-emerald-600" : isPending ? "text-amber-600" : ""}`} />
                                                             <div className="text-left">
-                                                                <div className={`font-medium ${isMatch ? "text-emerald-700" : isPending ? "text-amber-700" : ""}`}>{slot.day || format(parseISO(slot.date!), "EEE")}</div>
-                                                                <div className={`text-[10px] ${isMatch ? "text-emerald-600" : isPending ? "text-amber-600" : "text-muted-foreground"}`}>
+                                                                <div className={`font-medium ${isMatch && !isPending ? "text-emerald-700" : isPending ? "text-amber-700" : ""}`}>{slot.day || format(parseISO(slot.date!), "EEE")}</div>
+                                                                <div className={`text-[10px] ${isMatch && !isPending ? "text-emerald-600" : isPending ? "text-amber-600" : "text-muted-foreground"}`}>
                                                                     {isPending ? `From ${pendingDate}` : `${slot.startTime} - ${slot.endTime}`}
                                                                 </div>
                                                             </div>
@@ -1307,9 +1306,8 @@ export default function Clients() {
                   </div>
 
                   {clinicians.map(clinician => {
-                    const availableSlots = clinician.availability.filter(s => s.type !== "Vacation" && !s.isBooked && !isSlotPending(s));
-                    const pendingSlots = clinician.availability.filter(s => s.type !== "Vacation" && !s.isBooked && isSlotPending(s));
-                    if (availableSlots.length === 0 && pendingSlots.length === 0) return null;
+                    const allSlots = clinician.availability.filter(s => s.type !== "Vacation" && !s.isBooked);
+                    if (allSlots.length === 0) return null;
                     
                     return (
                       <div key={clinician.id} className="p-4 border rounded-lg">
@@ -1320,39 +1318,36 @@ export default function Clients() {
                           </span>
                         </div>
                         <div className="grid grid-cols-3 gap-2">
-                          {availableSlots.map(slot => (
-                            <Button
-                              key={slot.id}
-                              variant={editStatusData.slotId === slot.id && editStatusData.clinicianId === clinician.id ? "default" : "outline"}
-                              size="sm"
-                              className="justify-start h-auto py-2 px-3 text-xs"
-                              onClick={() => setEditStatusData({
-                                ...editStatusData,
-                                clinicianId: clinician.id,
-                                slotId: slot.id
-                              })}
-                            >
-                              <CalendarCheck className="h-3 w-3 mr-2" />
-                              <div className="text-left">
-                                <div className="font-medium">{slot.day || (slot.date && format(parseISO(slot.date), "EEE"))}</div>
-                                <div className="text-[10px] text-muted-foreground">{slot.startTime} - {slot.endTime}</div>
-                              </div>
-                            </Button>
-                          ))}
-                          {pendingSlots.map(slot => (
-                            <div
-                              key={slot.id}
-                              className="justify-start h-auto py-2 px-3 text-xs border rounded bg-amber-50 border-amber-200 opacity-70"
-                            >
-                              <div className="flex items-center gap-2">
-                                <CalendarCheck className="h-3 w-3 text-amber-600" />
+                          {allSlots.map(slot => {
+                            const isPending = isSlotPending(slot);
+                            const pendingDate = getSlotPendingDate(slot);
+                            const isSelected = editStatusData.slotId === slot.id && editStatusData.clinicianId === clinician.id;
+                            
+                            return (
+                              <Button
+                                key={slot.id}
+                                variant={isSelected ? "default" : "outline"}
+                                size="sm"
+                                className={`justify-start h-auto py-2 px-3 text-xs relative ${
+                                  isPending && !isSelected ? "bg-amber-50 border-amber-300 hover:border-amber-400 hover:bg-amber-100" : ""
+                                }`}
+                                onClick={() => setEditStatusData({
+                                  ...editStatusData,
+                                  clinicianId: clinician.id,
+                                  slotId: slot.id
+                                })}
+                              >
+                                {isPending && <span className="absolute -top-1 -right-1 bg-amber-500 text-white text-[8px] px-1 rounded">Pending</span>}
+                                <CalendarCheck className={`h-3 w-3 mr-2 ${isPending && !isSelected ? "text-amber-600" : ""}`} />
                                 <div className="text-left">
-                                  <div className="font-medium text-amber-700">{slot.day || (slot.date && format(parseISO(slot.date), "EEE"))}</div>
-                                  <div className="text-[10px] text-amber-600">From {getSlotPendingDate(slot)}</div>
+                                  <div className={`font-medium ${isPending && !isSelected ? "text-amber-700" : ""}`}>{slot.day || (slot.date && format(parseISO(slot.date), "EEE"))}</div>
+                                  <div className={`text-[10px] ${isPending && !isSelected ? "text-amber-600" : "text-muted-foreground"}`}>
+                                    {isPending ? `From ${pendingDate}` : `${slot.startTime} - ${slot.endTime}`}
+                                  </div>
                                 </div>
-                              </div>
-                            </div>
-                          ))}
+                              </Button>
+                            );
+                          })}
                         </div>
                       </div>
                     );

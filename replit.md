@@ -1,6 +1,7 @@
 # The Perinatal Psychology Practice - Client Management System
 
 ## Recent Changes (January 2026)
+- Added admin-editable email templates in Settings > Email Templates (form invite, password reset, task reminder, availability reminder)
 - UI labels updated: "Assigned" displays as "Allocated", "Scheduled" displays as "Confirmed" (database values unchanged)
 - Renamed "Edit Allocation" to "Edit Status" in client dropdown menu
 - Added "View Responses" feature to view submitted form responses with PDF download

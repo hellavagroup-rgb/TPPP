@@ -16,6 +16,88 @@ import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
 
+const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const DAY_ABBREVS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const HOURS = ["09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00"];
+const HOUR_LABELS = ["9am", "10am", "11am", "12pm", "1pm", "2pm", "3pm", "4pm", "5pm", "6pm"];
+
+function AvailabilityPickerPreview({ field }: { field: any }) {
+    const [selected, setSelected] = useState<Record<string, string[]>>({});
+
+    const toggleSlot = (day: string, hour: string) => {
+        setSelected(prev => {
+            const daySlots = prev[day] || [];
+            const isSelected = daySlots.includes(hour);
+            return {
+                ...prev,
+                [day]: isSelected 
+                    ? daySlots.filter(h => h !== hour)
+                    : [...daySlots, hour]
+            };
+        });
+    };
+
+    const isSlotSelected = (day: string, hour: string) => {
+        return (selected[day] || []).includes(hour);
+    };
+
+    return (
+        <div className="grid gap-3">
+            <Label>
+                {field.label}
+                {field.required && <span className="text-red-500 ml-1">*</span>}
+            </Label>
+            <div className="border rounded-lg p-4 bg-slate-50">
+                <p className="text-sm text-muted-foreground mb-3">
+                    Click on the time slots when you are available. Select all times that work for you.
+                </p>
+                <div className="overflow-x-auto">
+                    <div className="grid grid-cols-8 gap-1 text-xs min-w-[400px]">
+                        <div></div>
+                        {DAY_ABBREVS.map(d => (
+                            <div key={d} className="text-center font-medium bg-slate-200 rounded p-2">{d}</div>
+                        ))}
+                        {HOURS.map((hour, hourIdx) => (
+                            <>
+                                <div key={`${hour}-label`} className="text-right pr-2 text-muted-foreground flex items-center justify-end">
+                                    {HOUR_LABELS[hourIdx]}
+                                </div>
+                                {DAYS.map((day, dayIdx) => {
+                                    const isSelected = isSlotSelected(day, hour);
+                                    return (
+                                        <button
+                                            key={`${hour}-${day}`}
+                                            type="button"
+                                            onClick={() => toggleSlot(day, hour)}
+                                            className={cn(
+                                                "border rounded p-2 text-center transition-colors cursor-pointer hover:bg-primary/10",
+                                                isSelected 
+                                                    ? "bg-primary text-primary-foreground border-primary" 
+                                                    : "bg-white text-muted-foreground"
+                                            )}
+                                            data-testid={`slot-${day}-${hour}`}
+                                        >
+                                            {isSelected ? "✓" : "-"}
+                                        </button>
+                                    );
+                                })}
+                            </>
+                        ))}
+                    </div>
+                </div>
+                <p className="text-xs text-muted-foreground mt-3 italic">
+                    Selected: {Object.entries(selected).filter(([_, slots]) => slots.length > 0).length > 0 
+                        ? Object.entries(selected)
+                            .filter(([_, slots]) => slots.length > 0)
+                            .map(([day, slots]) => `${day}: ${slots.length} slot${slots.length > 1 ? 's' : ''}`)
+                            .join(', ')
+                        : 'None - click cells to select available times'}
+                </p>
+            </div>
+        </div>
+    );
+}
+
 interface FormPreviewProps {
     form: FormTemplate;
 }
@@ -199,32 +281,7 @@ export function FormPreview({ form }: FormPreviewProps) {
                                 );
                             case "availability":
                                 return (
-                                    <div key={field.id} className="grid gap-3">
-                                        <Label>
-                                            {field.label}
-                                            {field.required && <span className="text-red-500 ml-1">*</span>}
-                                        </Label>
-                                        <div className="border rounded-lg p-4 bg-slate-50">
-                                            <p className="text-sm text-muted-foreground mb-2">
-                                                Client will select their available times from a grid of days and hourly slots.
-                                            </p>
-                                            <div className="grid grid-cols-8 gap-1 text-[10px]">
-                                                <div></div>
-                                                {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(d => (
-                                                    <div key={d} className="text-center font-medium bg-slate-200 rounded p-1">{d}</div>
-                                                ))}
-                                                {["9am", "10am", "11am"].map(h => (
-                                                    <>
-                                                        <div key={`${h}-label`} className="text-right pr-1 text-muted-foreground">{h}</div>
-                                                        {[1,2,3,4,5,6,7].map(i => (
-                                                            <div key={`${h}-${i}`} className="border rounded bg-white p-1 text-center text-muted-foreground">-</div>
-                                                        ))}
-                                                    </>
-                                                ))}
-                                            </div>
-                                            <p className="text-[10px] text-muted-foreground mt-2 italic">Preview shows 3 rows; actual picker has 10 time slots (9am-6pm)</p>
-                                        </div>
-                                    </div>
+                                    <AvailabilityPickerPreview key={field.id} field={field} />
                                 );
                             default:
                                 return null;

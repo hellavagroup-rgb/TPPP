@@ -129,6 +129,9 @@ export function FormPreview({ form }: FormPreviewProps) {
                                                     disabled={(date) =>
                                                         date < new Date("1900-01-01")
                                                     }
+                                                    captionLayout="dropdown"
+                                                    fromYear={1920}
+                                                    toYear={new Date().getFullYear() + 5}
                                                     initialFocus
                                                 />
                                             </PopoverContent>

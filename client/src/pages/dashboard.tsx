@@ -96,6 +96,14 @@ export default function Dashboard() {
 
   const stats = [
     {
+      title: "Pending Intake",
+      value: clients.filter(c => c.status === "New" || c.status === "Forms Completed").length,
+      change: "Not yet allocated",
+      icon: AlertCircle,
+      color: "text-amber-600",
+      bg: "bg-amber-100"
+    },
+    {
       title: "Screen Booked/Sent",
       value: clients.filter(c => c.status === "Forms Sent").length,
       change: "Forms sent to client",
@@ -108,8 +116,8 @@ export default function Dashboard() {
       value: clients.filter(c => c.status === "Assigned").length,
       change: "Pending admin confirmation",
       icon: Users,
-      color: "text-amber-600",
-      bg: "bg-amber-100"
+      color: "text-purple-600",
+      bg: "bg-purple-100"
     },
     {
       title: "Allocated",
@@ -126,14 +134,6 @@ export default function Dashboard() {
       icon: AlertCircle,
       color: "text-slate-600",
       bg: "bg-slate-100"
-    },
-    {
-      title: "Tasks Due",
-      value: tasks.filter(t => t.status !== "Completed").length,
-      change: `${tasks.length} total tasks`,
-      icon: AlertCircle,
-      color: "text-destructive",
-      bg: "bg-destructive/10"
     }
   ];
 

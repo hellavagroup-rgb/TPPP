@@ -96,26 +96,34 @@ export default function Dashboard() {
 
   const stats = [
     {
-      title: "Pending Intake",
-      value: clients.filter(c => c.status === "New" || c.status === "Forms Sent" || c.status === "Forms Completed").length,
-      change: "Not yet allocated",
+      title: "Screen Booked/Sent",
+      value: clients.filter(c => c.status === "Forms Sent").length,
+      change: "Forms sent to client",
       icon: FileText,
+      color: "text-blue-600",
+      bg: "bg-blue-100"
+    },
+    {
+      title: "Allocated - Awaiting Confirmation",
+      value: clients.filter(c => c.status === "Assigned").length,
+      change: "Pending admin confirmation",
+      icon: Users,
       color: "text-amber-600",
       bg: "bg-amber-100"
     },
     {
-      title: "Active Clients",
-      value: clients.filter(c => c.status === "Assigned" || c.status === "Scheduled").length,
-      change: `${clients.length} total`,
-      icon: Users,
-      color: "text-primary",
-      bg: "bg-primary/10"
+      title: "Allocated",
+      value: clients.filter(c => c.status === "Scheduled").length,
+      change: "Confirmed allocations",
+      icon: Calendar,
+      color: "text-emerald-600",
+      bg: "bg-emerald-100"
     },
     {
       title: "Waitlist",
       value: clients.filter(c => c.status === "Waitlist").length,
-      change: "Awaiting allocation",
-      icon: Calendar,
+      change: "Awaiting clinician match",
+      icon: AlertCircle,
       color: "text-slate-600",
       bg: "bg-slate-100"
     },

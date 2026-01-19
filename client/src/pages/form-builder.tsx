@@ -71,6 +71,7 @@ const FIELD_TYPES = [
   { type: "date", label: "Date", icon: CalendarIcon },
   { type: "email", label: "Email", icon: Mail },
   { type: "tel", label: "Phone", icon: Smartphone },
+  { type: "availability", label: "Availability Picker", icon: CalendarIcon },
   { type: "section", label: "Section Header", icon: Heading },
   { type: "info", label: "Info Text", icon: Info },
 ];

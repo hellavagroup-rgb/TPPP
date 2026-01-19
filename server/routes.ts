@@ -732,7 +732,7 @@ export async function registerRoutes(
       const formUrl = `${baseUrl}/fill/${client.id}/${formId}`;
 
       // Generate and send email
-      const emailOptions = generateFormInviteEmail(form.title, formUrl);
+      const emailOptions = await generateFormInviteEmail(form.title, formUrl);
       emailOptions.to = client.email;
 
       const result = await sendEmail(emailOptions);
@@ -765,7 +765,7 @@ export async function registerRoutes(
         return res.status(404).json({ error: "Task not found" });
       }
 
-      const emailOptions = generateTaskReminderEmail(
+      const emailOptions = await generateTaskReminderEmail(
         task.assignee,
         task.title,
         task.description || '',
@@ -815,7 +815,7 @@ export async function registerRoutes(
           continue;
         }
 
-        const emailOptions = generateAvailabilityReminderEmail(user.name, loginUrl);
+        const emailOptions = await generateAvailabilityReminderEmail(user.name, loginUrl);
         emailOptions.to = user.email;
 
         const result = await sendEmail(emailOptions);
@@ -868,7 +868,7 @@ export async function registerRoutes(
       const baseUrl = `${protocol}://${host}`;
       const resetUrl = `${baseUrl}/reset-password?token=${resetToken}`;
 
-      const emailOptions = generatePasswordResetEmail(user.name, resetUrl);
+      const emailOptions = await generatePasswordResetEmail(user.name, resetUrl);
       emailOptions.to = user.email;
 
       const result = await sendEmail(emailOptions);

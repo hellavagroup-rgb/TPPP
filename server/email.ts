@@ -1,9 +1,62 @@
 import { Resend } from 'resend';
+import { storage } from './storage';
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 // From address - defaults to Resend sandbox for testing, should be set to verified domain in production
 const FROM_EMAIL = process.env.FROM_EMAIL || 'The Perinatal Psychology Practice <onboarding@resend.dev>';
+
+// Helper to wrap plain text in HTML email template
+function wrapInHtmlTemplate(text: string, headerTitle?: string): string {
+  const lines = text.split('\n').map(line => line ? `<p>${line}</p>` : '<br>').join('\n');
+  return `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+          .content { background: #f8f9fa; padding: 30px; border-radius: 0 0 8px 8px; }
+          .button { display: inline-block; background: #667eea; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 20px 0; }
+          .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          ${headerTitle ? `<div class="header"><h1>${headerTitle}</h1></div>` : ''}
+          <div class="content">
+            ${lines}
+          </div>
+          <div class="footer">
+            <p>The Perinatal Psychology Practice</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
+}
+
+// Helper to replace placeholders in template text
+function replacePlaceholders(text: string, placeholders: Record<string, string>): string {
+  let result = text;
+  for (const [key, value] of Object.entries(placeholders)) {
+    result = result.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), value);
+  }
+  return result;
+}
+
+// Async helper to get template from DB or return null
+async function getStoredTemplate(templateKey: string): Promise<{ subject: string; bodyText: string } | null> {
+  try {
+    const template = await storage.getEmailTemplateByKey(templateKey);
+    return template ? { subject: template.subject, bodyText: template.bodyText } : null;
+  } catch (error) {
+    console.error(`Error fetching email template ${templateKey}:`, error);
+    return null;
+  }
+}
 
 export interface EmailOptions {
   to: string;
@@ -37,7 +90,21 @@ export async function sendEmail(options: EmailOptions): Promise<{ success: boole
 
 // ============ EMAIL TEMPLATES ============
 
-export function generateFormInviteEmail(formName: string, formUrl: string): EmailOptions {
+export async function generateFormInviteEmail(formName: string, formUrl: string): Promise<EmailOptions> {
+  const storedTemplate = await getStoredTemplate('form_invite');
+  
+  if (storedTemplate) {
+    const placeholders = { form_name: formName, form_link: formUrl };
+    const bodyText = replacePlaceholders(storedTemplate.bodyText, placeholders);
+    const subject = replacePlaceholders(storedTemplate.subject, placeholders);
+    return {
+      to: '',
+      subject,
+      html: wrapInHtmlTemplate(bodyText, 'The Perinatal Psychology Practice'),
+      text: bodyText,
+    };
+  }
+
   return {
     to: '', // Will be set by caller
     subject: `Please Complete: ${formName} - The Perinatal Psychology Practice`,
@@ -84,7 +151,21 @@ export function generateFormInviteEmail(formName: string, formUrl: string): Emai
   };
 }
 
-export function generatePasswordResetEmail(userName: string, resetUrl: string): EmailOptions {
+export async function generatePasswordResetEmail(userName: string, resetUrl: string): Promise<EmailOptions> {
+  const storedTemplate = await getStoredTemplate('password_reset');
+  
+  if (storedTemplate) {
+    const placeholders = { name: userName, reset_link: resetUrl };
+    const bodyText = replacePlaceholders(storedTemplate.bodyText, placeholders);
+    const subject = replacePlaceholders(storedTemplate.subject, placeholders);
+    return {
+      to: '',
+      subject,
+      html: wrapInHtmlTemplate(bodyText, 'Password Reset'),
+      text: bodyText,
+    };
+  }
+
   return {
     to: '', // Will be set by caller
     subject: 'Password Reset - The Perinatal Psychology Practice',
@@ -131,7 +212,26 @@ export function generatePasswordResetEmail(userName: string, resetUrl: string): 
   };
 }
 
-export function generateTaskReminderEmail(assigneeName: string, taskTitle: string, taskDescription: string, dueDate: string): EmailOptions {
+export async function generateTaskReminderEmail(assigneeName: string, taskTitle: string, taskDescription: string, dueDate: string): Promise<EmailOptions> {
+  const storedTemplate = await getStoredTemplate('task_reminder');
+  
+  if (storedTemplate) {
+    const placeholders = { 
+      name: assigneeName, 
+      task_title: taskTitle, 
+      task_description: taskDescription, 
+      due_date: dueDate 
+    };
+    const bodyText = replacePlaceholders(storedTemplate.bodyText, placeholders);
+    const subject = replacePlaceholders(storedTemplate.subject, placeholders);
+    return {
+      to: '',
+      subject,
+      html: wrapInHtmlTemplate(bodyText, 'Task Reminder'),
+      text: bodyText,
+    };
+  }
+
   return {
     to: '', // Will be set by caller
     subject: `Task Reminder: ${taskTitle} - Due ${dueDate}`,
@@ -176,7 +276,21 @@ export function generateTaskReminderEmail(assigneeName: string, taskTitle: strin
   };
 }
 
-export function generateAvailabilityReminderEmail(clinicianName: string, loginUrl: string): EmailOptions {
+export async function generateAvailabilityReminderEmail(clinicianName: string, loginUrl: string): Promise<EmailOptions> {
+  const storedTemplate = await getStoredTemplate('availability_reminder');
+  
+  if (storedTemplate) {
+    const placeholders = { name: clinicianName, login_link: loginUrl };
+    const bodyText = replacePlaceholders(storedTemplate.bodyText, placeholders);
+    const subject = replacePlaceholders(storedTemplate.subject, placeholders);
+    return {
+      to: '',
+      subject,
+      html: wrapInHtmlTemplate(bodyText, 'Availability Update Request'),
+      text: bodyText,
+    };
+  }
+
   return {
     to: '',
     subject: `Please Update Your Availability - The Perinatal Psychology Practice`,

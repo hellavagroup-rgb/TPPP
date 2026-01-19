@@ -78,7 +78,7 @@ export interface Notification {
 
 export interface FormField {
   id: string;
-  type: "text" | "textarea" | "date" | "select" | "radio" | "checkbox" | "email" | "tel" | "header" | "info" | "section";
+  type: "text" | "textarea" | "date" | "select" | "radio" | "checkbox" | "email" | "tel" | "header" | "info" | "section" | "availability";
   label: string;
   content?: string; // For info/header types
   options?: string[]; // For select, radio, checkbox

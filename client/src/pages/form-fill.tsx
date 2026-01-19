@@ -23,6 +23,116 @@ import { cn } from "@/lib/utils";
 import logo from "@assets/xPerinatalPP-logo-large-digital.png.pagespeed.ic.wAjk_RUOnf_1766008188694.png";
 import type { FormTemplate, Client } from "@shared/schema";
 
+const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const HOURS = [
+  { label: "9am", value: "09:00" },
+  { label: "10am", value: "10:00" },
+  { label: "11am", value: "11:00" },
+  { label: "12pm", value: "12:00" },
+  { label: "1pm", value: "13:00" },
+  { label: "2pm", value: "14:00" },
+  { label: "3pm", value: "15:00" },
+  { label: "4pm", value: "16:00" },
+  { label: "5pm", value: "17:00" },
+  { label: "6pm", value: "18:00" },
+];
+
+interface AvailabilityPickerProps {
+  value: Record<string, string[]>;
+  onChange: (value: Record<string, string[]>) => void;
+  error?: boolean;
+}
+
+function AvailabilityPicker({ value, onChange, error }: AvailabilityPickerProps) {
+  const toggleSlot = (day: string, hour: string) => {
+    const currentDaySlots = value[day] || [];
+    const isSelected = currentDaySlots.includes(hour);
+    
+    const newDaySlots = isSelected
+      ? currentDaySlots.filter(h => h !== hour)
+      : [...currentDaySlots, hour].sort();
+    
+    const newValue = { ...value };
+    if (newDaySlots.length === 0) {
+      delete newValue[day];
+    } else {
+      newValue[day] = newDaySlots;
+    }
+    
+    onChange(newValue);
+  };
+
+  const hasAnySelection = Object.keys(value).length > 0;
+
+  return (
+    <div className={cn("space-y-4", error && "ring-2 ring-destructive ring-offset-2 rounded-lg")}>
+      <p className="text-sm text-muted-foreground">
+        Select all the times you are generally available for appointments. Click on a time slot to toggle it.
+      </p>
+      
+      <div className="overflow-x-auto">
+        <div className="min-w-[600px]">
+          <div className="grid grid-cols-8 gap-1">
+            <div className="p-2 text-xs font-medium text-center text-muted-foreground"></div>
+            {DAYS.map(day => (
+              <div key={day} className="p-2 text-xs font-medium text-center bg-slate-100 rounded-t-md">
+                {day.slice(0, 3)}
+              </div>
+            ))}
+          </div>
+          
+          {HOURS.map(({ label, value: hour }) => (
+            <div key={hour} className="grid grid-cols-8 gap-1">
+              <div className="p-2 text-xs font-medium text-right text-muted-foreground pr-3">
+                {label}
+              </div>
+              {DAYS.map(day => {
+                const isSelected = (value[day] || []).includes(hour);
+                return (
+                  <button
+                    key={`${day}-${hour}`}
+                    type="button"
+                    onClick={() => toggleSlot(day, hour)}
+                    className={cn(
+                      "p-2 text-xs border rounded transition-all hover:scale-105",
+                      isSelected
+                        ? "bg-emerald-500 text-white border-emerald-600 shadow-sm"
+                        : "bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50"
+                    )}
+                    data-testid={`availability-slot-${day.toLowerCase()}-${hour}`}
+                  >
+                    {isSelected ? "✓" : ""}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      </div>
+      
+      {hasAnySelection && (
+        <div className="bg-emerald-50 p-3 rounded-md border border-emerald-100">
+          <p className="text-sm font-medium text-emerald-800 mb-2">Your selected availability:</p>
+          <div className="flex flex-wrap gap-2">
+            {DAYS.map(day => {
+              const slots = value[day];
+              if (!slots || slots.length === 0) return null;
+              return (
+                <span key={day} className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 px-2 py-1 rounded text-xs">
+                  <strong>{day.slice(0, 3)}:</strong> {slots.map(s => {
+                    const hourLabel = HOURS.find(h => h.value === s)?.label || s;
+                    return hourLabel;
+                  }).join(", ")}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function FormFill() {
   const [, params] = useRoute("/fill/:clientId/:formId");
   const [isSubmitted, setIsSubmitted] = useState(false);
@@ -346,6 +456,14 @@ export default function FormFill() {
                                                 />
                                             </PopoverContent>
                                         </Popover>
+                                    )}
+
+                                    {field.type === "availability" && (
+                                        <AvailabilityPicker
+                                            value={formState[field.id] || {}}
+                                            onChange={(val) => handleValueChange(field.id, val)}
+                                            error={errors[field.id]}
+                                        />
                                     )}
 
                                     {errors[field.id] && (

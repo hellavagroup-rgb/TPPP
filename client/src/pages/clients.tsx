@@ -549,6 +549,88 @@ export default function Clients() {
       return hasSpace && acceptsInsurer;
   };
 
+  // Helper to check if a clinician slot overlaps with client availability
+  // Client picks hourly blocks (e.g., "09:00" = available 9am-10am)
+  // Slot matches if its start time falls within that hour
+  const doesSlotMatchClientAvailability = (slot: any, clientAvailability: Record<string, string[]> | null) => {
+    if (!clientAvailability || Object.keys(clientAvailability).length === 0) {
+      return null; // No availability data - can't determine match
+    }
+
+    // Get the day of the slot - use slot.day for recurring, or derive from date for specific-date slots
+    let slotDay = slot.day;
+    if (!slotDay && slot.date) {
+      // Derive day from date for specific-date slots
+      const dayIndex = parseISO(slot.date).getDay();
+      const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+      slotDay = dayNames[dayIndex];
+    }
+    
+    if (!slotDay) return null; // Can't determine day
+    
+    const clientDaySlots = clientAvailability[slotDay];
+    
+    if (!clientDaySlots || clientDaySlots.length === 0) {
+      return false; // Client not available on this day
+    }
+
+    // Parse slot start time (e.g., "09:15" -> 9)
+    const [slotHour] = slot.startTime.split(":").map(Number);
+    
+    // Check if any client hour block contains this slot
+    // Client hour "09:00" means available 9:00-9:59
+    return clientDaySlots.some(clientHour => {
+      const [clientHourNum] = clientHour.split(":").map(Number);
+      return slotHour === clientHourNum;
+    });
+  };
+
+  // State to store client availability for allocation
+  const [clientAvailabilityForAllocation, setClientAvailabilityForAllocation] = useState<Record<string, string[]> | null>(null);
+
+  // Fetch client availability when allocation dialog opens
+  const fetchClientAvailability = async (clientId: string) => {
+    try {
+      const response = await apiRequest("GET", `/api/clients/${clientId}/submissions`);
+      if (response.ok) {
+        const submissions = await response.json();
+        const dayNames = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+        
+        // Find availability field in any submission
+        // Availability data format: { Monday: ["09:00", "10:00"], Tuesday: ["14:00"] }
+        for (const submission of submissions) {
+          const responses = submission.responses || {};
+          for (const [fieldId, value] of Object.entries(responses)) {
+            // Check if this looks like availability data
+            if (value && typeof value === 'object' && !Array.isArray(value)) {
+              const keys = Object.keys(value as object);
+              // Must have at least one day key AND values must be arrays of time strings
+              const hasDayKeys = keys.some(k => dayNames.includes(k));
+              if (hasDayKeys) {
+                const valObj = value as Record<string, any>;
+                // Validate that values are arrays of time strings (e.g., "09:00")
+                const isValidFormat = keys.every(k => {
+                  if (!dayNames.includes(k)) return true; // ignore non-day keys
+                  const arr = valObj[k];
+                  return Array.isArray(arr) && arr.every((t: any) => 
+                    typeof t === 'string' && /^\d{2}:\d{2}$/.test(t)
+                  );
+                });
+                if (isValidFormat) {
+                  setClientAvailabilityForAllocation(valObj as Record<string, string[]>);
+                  return;
+                }
+              }
+            }
+          }
+        }
+      }
+      setClientAvailabilityForAllocation(null);
+    } catch {
+      setClientAvailabilityForAllocation(null);
+    }
+  };
+
   const getCliniciansForAllocation = (client: ClientType) => {
       if (showAllClinicians) return clinicians;
       // Filter by match logic
@@ -775,7 +857,7 @@ export default function Clients() {
                     {client.status === "Forms Completed" && (
                          <Dialog>
                             <DialogTrigger asChild>
-                                <Button size="sm" className="gap-2 bg-primary hover:bg-primary/90" onClick={() => setSelectedClient(client)}>
+                                <Button size="sm" className="gap-2 bg-primary hover:bg-primary/90" onClick={() => { setSelectedClient(client); fetchClientAvailability(client.id); }}>
                                     <UserCheck className="h-4 w-4" /> Allocate
                                 </Button>
                             </DialogTrigger>
@@ -801,6 +883,28 @@ export default function Clients() {
                                     </div>
                                     
                                     <div className="space-y-4">
+                                        {clientAvailabilityForAllocation && Object.keys(clientAvailabilityForAllocation).length > 0 && (
+                                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                                                <p className="text-xs font-medium text-blue-800 mb-2">Client's Stated Availability:</p>
+                                                <div className="flex flex-wrap gap-1">
+                                                    {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map(day => {
+                                                        const slots = clientAvailabilityForAllocation[day];
+                                                        if (!slots || slots.length === 0) return null;
+                                                        const hourLabels = slots.map(s => {
+                                                            const h = parseInt(s.split(":")[0]);
+                                                            return h < 12 ? `${h}am` : h === 12 ? "12pm" : `${h - 12}pm`;
+                                                        }).join(", ");
+                                                        return (
+                                                            <span key={day} className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-[10px]">
+                                                                {day.slice(0, 3)}: {hourLabels}
+                                                            </span>
+                                                        );
+                                                    })}
+                                                </div>
+                                                <p className="text-[10px] text-blue-600 mt-2">Slots with green "Match" badges align with client availability</p>
+                                            </div>
+                                        )}
+
                                         <div className="flex items-center justify-between">
                                             <p className="text-sm font-medium text-muted-foreground">AVAILABLE SLOTS</p>
                                             <div className="flex items-center gap-2">
@@ -866,23 +970,34 @@ export default function Clients() {
                                                 </div>
                                                 
                                                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pl-8">
-                                                    {clinician.availability.filter(s => s.type !== "Vacation").map(slot => (
+                                                    {clinician.availability.filter(s => s.type !== "Vacation").map(slot => {
+                                                        const availMatch = doesSlotMatchClientAvailability(slot, clientAvailabilityForAllocation);
+                                                        const isMatch = availMatch === true;
+                                                        const noMatch = availMatch === false;
+                                                        return (
                                                         <Button 
                                                             key={slot.id}
                                                             variant={slot.isBooked ? "ghost" : "outline"}
                                                             disabled={slot.isBooked}
-                                                            className={`justify-start h-auto py-2 px-3 text-xs ${
-                                                                slot.isBooked ? "opacity-50 line-through decoration-destructive" : "hover:border-primary hover:bg-primary/5"
+                                                            className={`justify-start h-auto py-2 px-3 text-xs relative ${
+                                                                slot.isBooked 
+                                                                    ? "opacity-50 line-through decoration-destructive" 
+                                                                    : isMatch 
+                                                                        ? "border-emerald-400 bg-emerald-50 hover:border-emerald-500 hover:bg-emerald-100 ring-1 ring-emerald-200" 
+                                                                        : noMatch 
+                                                                            ? "opacity-60 border-slate-200" 
+                                                                            : "hover:border-primary hover:bg-primary/5"
                                                             }`}
                                                             onClick={() => handleAssign(clinician.id, slot.id)}
                                                         >
-                                                            <CalendarCheck className="h-3 w-3 mr-2" />
+                                                            {isMatch && <span className="absolute -top-1 -right-1 bg-emerald-500 text-white text-[8px] px-1 rounded">Match</span>}
+                                                            <CalendarCheck className={`h-3 w-3 mr-2 ${isMatch ? "text-emerald-600" : ""}`} />
                                                             <div className="text-left">
-                                                                <div className="font-medium">{slot.day || format(parseISO(slot.date!), "EEE")}</div>
-                                                                <div className="text-[10px] text-muted-foreground">{slot.startTime} - {slot.endTime}</div>
+                                                                <div className={`font-medium ${isMatch ? "text-emerald-700" : ""}`}>{slot.day || format(parseISO(slot.date!), "EEE")}</div>
+                                                                <div className={`text-[10px] ${isMatch ? "text-emerald-600" : "text-muted-foreground"}`}>{slot.startTime} - {slot.endTime}</div>
                                                             </div>
                                                         </Button>
-                                                    ))}
+                                                    )})}
                                                     {clinician.availability.filter(s => s.type !== "Vacation").length === 0 && (
                                                         <div className="col-span-3 text-xs text-muted-foreground italic p-2 border border-dashed rounded bg-slate-50/50 text-center">
                                                             No availability set.

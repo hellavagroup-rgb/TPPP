@@ -197,6 +197,35 @@ export function FormPreview({ form }: FormPreviewProps) {
                                         </div>
                                     </div>
                                 );
+                            case "availability":
+                                return (
+                                    <div key={field.id} className="grid gap-3">
+                                        <Label>
+                                            {field.label}
+                                            {field.required && <span className="text-red-500 ml-1">*</span>}
+                                        </Label>
+                                        <div className="border rounded-lg p-4 bg-slate-50">
+                                            <p className="text-sm text-muted-foreground mb-2">
+                                                Client will select their available times from a grid of days and hourly slots.
+                                            </p>
+                                            <div className="grid grid-cols-8 gap-1 text-[10px]">
+                                                <div></div>
+                                                {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(d => (
+                                                    <div key={d} className="text-center font-medium bg-slate-200 rounded p-1">{d}</div>
+                                                ))}
+                                                {["9am", "10am", "11am"].map(h => (
+                                                    <>
+                                                        <div key={`${h}-label`} className="text-right pr-1 text-muted-foreground">{h}</div>
+                                                        {[1,2,3,4,5,6,7].map(i => (
+                                                            <div key={`${h}-${i}`} className="border rounded bg-white p-1 text-center text-muted-foreground">-</div>
+                                                        ))}
+                                                    </>
+                                                ))}
+                                            </div>
+                                            <p className="text-[10px] text-muted-foreground mt-2 italic">Preview shows 3 rows; actual picker has 10 time slots (9am-6pm)</p>
+                                        </div>
+                                    </div>
+                                );
                             default:
                                 return null;
                         }

@@ -884,5 +884,48 @@ export async function registerRoutes(
     }
   });
 
+  // ============ EMAIL TEMPLATES ============
+  app.get("/api/email-templates", requireAdmin, async (req, res) => {
+    try {
+      const templates = await storage.getAllEmailTemplates();
+      res.json(templates);
+    } catch (error) {
+      console.error("Get email templates error:", error);
+      res.status(500).json({ error: "Failed to get email templates" });
+    }
+  });
+
+  app.get("/api/email-templates/:key", requireAdmin, async (req, res) => {
+    try {
+      const template = await storage.getEmailTemplateByKey(req.params.key);
+      if (!template) {
+        return res.status(404).json({ error: "Template not found" });
+      }
+      res.json(template);
+    } catch (error) {
+      console.error("Get email template error:", error);
+      res.status(500).json({ error: "Failed to get email template" });
+    }
+  });
+
+  app.put("/api/email-templates/:key", requireAdmin, async (req, res) => {
+    try {
+      const { name, subject, bodyText } = req.body;
+      if (!name || !subject || !bodyText) {
+        return res.status(400).json({ error: "Name, subject, and body are required" });
+      }
+      const template = await storage.upsertEmailTemplate({
+        templateKey: req.params.key,
+        name,
+        subject,
+        bodyText,
+      });
+      res.json(template);
+    } catch (error) {
+      console.error("Update email template error:", error);
+      res.status(500).json({ error: "Failed to update email template" });
+    }
+  });
+
   return httpServer;
 }

@@ -696,10 +696,10 @@ export async function registerRoutes(
         return res.status(404).json({ error: "Form not found" });
       }
 
-      // Generate form URL - use client's displayId for security
-      const baseUrl = process.env.REPL_SLUG 
-        ? `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`
-        : 'http://localhost:5000';
+      // Generate form URL - use request host for correct URL
+      const protocol = req.headers['x-forwarded-proto'] || 'https';
+      const host = req.headers.host || 'localhost:5000';
+      const baseUrl = `${protocol}://${host}`;
       const formUrl = `${baseUrl}/fill/${client.id}/${formId}`;
 
       // Generate and send email
@@ -834,9 +834,9 @@ export async function registerRoutes(
       // For now, we'll log the token - in production, store it in DB with expiry
       console.log(`Password reset token for ${email}: ${resetToken}`);
 
-      const baseUrl = process.env.REPL_SLUG 
-        ? `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`
-        : 'http://localhost:5000';
+      const protocol = req.headers['x-forwarded-proto'] || 'https';
+      const host = req.headers.host || 'localhost:5000';
+      const baseUrl = `${protocol}://${host}`;
       const resetUrl = `${baseUrl}/reset-password?token=${resetToken}`;
 
       const emailOptions = generatePasswordResetEmail(user.name, resetUrl);

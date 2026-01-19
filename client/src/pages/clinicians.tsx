@@ -16,7 +16,7 @@ import { useToast } from "@/hooks/use-toast";
 import type { Clinician, TimeSlot } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
 
-const INSURERS = ["Aviva", "Axa", "Bupa", "Cigna", "Vitality", "WPA", "Other"];
+const INSURERS = ["Aviva", "Axa", "Bupa", "Bupa Global", "Cigna", "Vitality", "WPA", "Other"];
 const CONTACT_METHODS = ["Email", "Text", "WhatsApp"];
 
 type ClinicianWithName = Clinician & { name: string; email?: string | null; availability?: TimeSlot[] };

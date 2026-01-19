@@ -14,7 +14,7 @@ import { MapPin, Building, Shield, User, Loader2 } from "lucide-react";
 import type { Clinician } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
 
-const INSURERS = ["Aviva", "Axa", "Bupa", "Cigna", "Vitality", "WPA", "Other"];
+const INSURERS = ["Aviva", "Axa", "Bupa", "Bupa Global", "Cigna", "Vitality", "WPA", "Other"];
 
 type ClinicianWithAvailability = Clinician & { availability: any[] };
 

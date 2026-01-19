@@ -106,7 +106,7 @@ export default function ClinicianProfile() {
               </div>
               <CardTitle>{user?.name}</CardTitle>
               <div className="flex justify-center gap-2 mt-2">
-                <Badge variant="outline">{formData.tier || "Associate"}</Badge>
+                <Badge variant="outline">{formData.tier || "Mid"}</Badge>
               </div>
             </CardHeader>
             <CardContent className="space-y-4 text-sm">
@@ -164,14 +164,14 @@ export default function ClinicianProfile() {
 
               <div className="space-y-2">
                 <Label>Practice Tier</Label>
-                <Select value={formData.tier || "Associate"} onValueChange={(v) => setFormData({...formData, tier: v})}>
+                <Select value={formData.tier || "Mid"} onValueChange={(v) => setFormData({...formData, tier: v})}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="Associate">Associate</SelectItem>
-                    <SelectItem value="Senior">Senior</SelectItem>
-                    <SelectItem value="Director">Director</SelectItem>
+                    <SelectItem value="High">High</SelectItem>
+                    <SelectItem value="Mid">Mid</SelectItem>
+                    <SelectItem value="Low">Low</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

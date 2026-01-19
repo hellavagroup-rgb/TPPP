@@ -50,7 +50,7 @@ export interface Clinician {
   location?: string;
   nhsTrust?: string;
   worksWithCouples?: boolean;
-  tier?: "Associate" | "Senior" | "Director";
+  tier?: "High" | "Mid" | "Low";
 }
 
 export type TaskPriority = "High" | "Medium" | "Low";
@@ -353,7 +353,7 @@ const MOCK_CLINICIANS: Clinician[] = [
     location: "North London",
     nhsTrust: "Tavistock and Portman",
     worksWithCouples: false,
-    tier: "Senior"
+    tier: "High"
   },
   {
     id: "c2",
@@ -374,7 +374,7 @@ const MOCK_CLINICIANS: Clinician[] = [
     location: "West London",
     nhsTrust: "Imperial College Healthcare",
     worksWithCouples: true,
-    tier: "Associate"
+    tier: "Mid"
   },
   {
     id: "c3",

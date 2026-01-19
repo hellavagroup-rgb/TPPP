@@ -223,7 +223,12 @@ export default function Availability() {
     }
   }, [isDialogOpen, clinicians, user, dialogClinicianId]);
 
-  const allCliniciansData = cliniciansWithSlots.data || [];
+  const tierOrder: Record<string, number> = { "High": 0, "Mid": 1, "Low": 2 };
+  const allCliniciansData = [...(cliniciansWithSlots.data || [])].sort((a, b) => {
+    const tierA = tierOrder[a.tier || "Mid"] ?? 1;
+    const tierB = tierOrder[b.tier || "Mid"] ?? 1;
+    return tierA - tierB;
+  });
 
   const visibleDates = Array.from({ length: DAYS_TO_SHOW }, (_, i) => addDays(weekStart, i));
 
@@ -816,7 +821,7 @@ export default function Availability() {
                       </div>
                       <div className="min-w-0">
                         <div className="font-medium text-sm truncate">{clinician.name}</div>
-                        <div className="text-xs text-muted-foreground truncate">{clinician.location || "No location"}</div>
+                        <div className="text-xs text-muted-foreground truncate">{clinician.tier || "Mid"} · {clinician.location || "No location"}</div>
                       </div>
                     </div>
                   </td>

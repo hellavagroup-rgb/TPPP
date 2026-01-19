@@ -1,5 +1,5 @@
 import { 
-  users, clients, clinicians, timeSlots, formTemplates, formSubmissions, tasks, auditLogs,
+  users, clients, clinicians, timeSlots, formTemplates, formSubmissions, tasks, auditLogs, emailTemplates,
   type User, type InsertUser, type SafeUser,
   type Client, type InsertClient,
   type Clinician, type InsertClinician,
@@ -7,7 +7,8 @@ import {
   type FormTemplate, type InsertFormTemplate,
   type FormSubmission, type InsertFormSubmission,
   type Task, type InsertTask,
-  type AuditLog, type InsertAuditLog
+  type AuditLog, type InsertAuditLog,
+  type EmailTemplate, type InsertEmailTemplate
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, or, desc, sql, isNull } from "drizzle-orm";
@@ -71,6 +72,11 @@ export interface IStorage {
   // ============ AUDIT LOGS (GDPR) ============
   createAuditLog(log: InsertAuditLog): Promise<AuditLog>;
   getAuditLogsByUserId(userId: string): Promise<AuditLog[]>;
+
+  // ============ EMAIL TEMPLATES ============
+  getAllEmailTemplates(): Promise<EmailTemplate[]>;
+  getEmailTemplateByKey(templateKey: string): Promise<EmailTemplate | undefined>;
+  upsertEmailTemplate(template: InsertEmailTemplate): Promise<EmailTemplate>;
 }
 
 // Database implementation with PostgreSQL
@@ -579,6 +585,33 @@ export class DatabaseStorage implements IStorage {
 
   async getAuditLogsByUserId(userId: string): Promise<AuditLog[]> {
     return await db.select().from(auditLogs).where(eq(auditLogs.userId, userId)).orderBy(desc(auditLogs.timestamp));
+  }
+
+  // ============ EMAIL TEMPLATES ============
+  async getAllEmailTemplates(): Promise<EmailTemplate[]> {
+    return await db.select().from(emailTemplates);
+  }
+
+  async getEmailTemplateByKey(templateKey: string): Promise<EmailTemplate | undefined> {
+    const [template] = await db.select().from(emailTemplates).where(eq(emailTemplates.templateKey, templateKey));
+    return template || undefined;
+  }
+
+  async upsertEmailTemplate(template: InsertEmailTemplate): Promise<EmailTemplate> {
+    const [result] = await db
+      .insert(emailTemplates)
+      .values(template)
+      .onConflictDoUpdate({
+        target: emailTemplates.templateKey,
+        set: {
+          name: template.name,
+          subject: template.subject,
+          bodyText: template.bodyText,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    return result;
   }
 }
 

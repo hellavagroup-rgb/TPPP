@@ -190,6 +190,7 @@ export default function FormBuilder() {
   const [description, setDescription] = useState("");
   const [fields, setFields] = useState<FormField[]>([]);
   const [selectedFieldId, setSelectedFieldId] = useState<string | null>(null);
+  const [isInitialized, setIsInitialized] = useState(false);
 
   // Fetch existing form data from API
   const { data: existingForm } = useQuery<FormTemplate>({
@@ -221,9 +222,7 @@ export default function FormBuilder() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/forms"] });
-      queryClient.invalidateQueries({ queryKey: [`/api/forms/${params?.id}`] });
       toast({ title: "Form Updated", description: "Form template changes saved." });
-      setLocation("/forms");
     },
     onError: () => {
       toast({ title: "Error", description: "Failed to update form.", variant: "destructive" });
@@ -251,14 +250,15 @@ export default function FormBuilder() {
     }
   };
 
-  // Load existing form data
+  // Load existing form data (only on initial load, not after saves)
   useEffect(() => {
-    if (!isNew && existingForm) {
+    if (!isNew && existingForm && !isInitialized) {
       setTitle(existingForm.title);
       setDescription(existingForm.description);
       setFields(JSON.parse(JSON.stringify(existingForm.fields))); // Deep copy
+      setIsInitialized(true);
     }
-  }, [isNew, existingForm]);
+  }, [isNew, existingForm, isInitialized]);
 
   const handleSave = () => {
     if (!title.trim()) {

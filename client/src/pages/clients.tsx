@@ -55,35 +55,42 @@ import { format, parseISO, isSameDay } from "date-fns";
 import { apiRequest } from "@/lib/queryClient";
 import type { Client as ClientType, Clinician, FormTemplate as FormTemplateType, TimeSlot } from "@shared/schema";
 
-function getSlotCounts(availability?: TimeSlot[]) {
-  if (!availability) return { available: 0, pending: 0 };
+function isSlotPending(slot: TimeSlot): boolean {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
+  
+  if (slot.type === "Recurring" && slot.startDate) {
+    const startDate = new Date(slot.startDate);
+    startDate.setHours(0, 0, 0, 0);
+    return startDate > today;
+  } else if (slot.type === "SpecificDate" && slot.date) {
+    const slotDate = new Date(slot.date);
+    slotDate.setHours(0, 0, 0, 0);
+    return slotDate > today;
+  }
+  return false;
+}
+
+function getSlotPendingDate(slot: TimeSlot): string | null {
+  if (slot.type === "Recurring" && slot.startDate) {
+    return format(parseISO(slot.startDate), "dd/MM/yyyy");
+  } else if (slot.type === "SpecificDate" && slot.date) {
+    return format(parseISO(slot.date), "dd/MM/yyyy");
+  }
+  return null;
+}
+
+function getSlotCounts(availability?: TimeSlot[]) {
+  if (!availability) return { available: 0, pending: 0 };
   
   let available = 0;
   let pending = 0;
   
   availability.filter(s => !s.isBooked && s.type !== "Vacation").forEach(slot => {
-    if (slot.type === "Recurring") {
-      if (slot.startDate) {
-        const startDate = new Date(slot.startDate);
-        startDate.setHours(0, 0, 0, 0);
-        if (startDate > today) {
-          pending++;
-        } else {
-          available++;
-        }
-      } else {
-        available++;
-      }
-    } else if (slot.type === "SpecificDate" && slot.date) {
-      const slotDate = new Date(slot.date);
-      slotDate.setHours(0, 0, 0, 0);
-      if (slotDate <= today) {
-        available++;
-      } else {
-        pending++;
-      }
+    if (isSlotPending(slot)) {
+      pending++;
+    } else {
+      available++;
     }
   });
   
@@ -985,30 +992,39 @@ export default function Clients() {
                                                 
                                                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pl-8">
                                                     {clinician.availability.filter(s => s.type !== "Vacation").map(slot => {
+                                                        const isPending = isSlotPending(slot);
+                                                        const pendingDate = getSlotPendingDate(slot);
                                                         const availMatch = doesSlotMatchClientAvailability(slot, clientAvailabilityForAllocation);
-                                                        const isMatch = availMatch === true;
+                                                        const isMatch = availMatch === true && !isPending && !slot.isBooked;
                                                         const noMatch = availMatch === false;
+                                                        const isDisabled = slot.isBooked || isPending;
+                                                        
                                                         return (
                                                         <Button 
                                                             key={slot.id}
-                                                            variant={slot.isBooked ? "ghost" : "outline"}
-                                                            disabled={slot.isBooked}
+                                                            variant={isDisabled ? "ghost" : "outline"}
+                                                            disabled={isDisabled}
                                                             className={`justify-start h-auto py-2 px-3 text-xs relative ${
                                                                 slot.isBooked 
                                                                     ? "opacity-50 line-through decoration-destructive" 
-                                                                    : isMatch 
-                                                                        ? "border-emerald-400 bg-emerald-50 hover:border-emerald-500 hover:bg-emerald-100 ring-1 ring-emerald-200" 
-                                                                        : noMatch 
-                                                                            ? "opacity-60 border-slate-200" 
-                                                                            : "hover:border-primary hover:bg-primary/5"
+                                                                    : isPending
+                                                                        ? "opacity-70 bg-amber-50 border-amber-200 cursor-not-allowed"
+                                                                        : isMatch 
+                                                                            ? "border-emerald-400 bg-emerald-50 hover:border-emerald-500 hover:bg-emerald-100 ring-1 ring-emerald-200" 
+                                                                            : noMatch 
+                                                                                ? "opacity-60 border-slate-200" 
+                                                                                : "hover:border-primary hover:bg-primary/5"
                                                             }`}
-                                                            onClick={() => handleAssign(clinician.id, slot.id)}
+                                                            onClick={() => !isDisabled && handleAssign(clinician.id, slot.id)}
                                                         >
                                                             {isMatch && <span className="absolute -top-1 -right-1 bg-emerald-500 text-white text-[8px] px-1 rounded">Match</span>}
-                                                            <CalendarCheck className={`h-3 w-3 mr-2 ${isMatch ? "text-emerald-600" : ""}`} />
+                                                            {isPending && <span className="absolute -top-1 -right-1 bg-amber-500 text-white text-[8px] px-1 rounded">Pending</span>}
+                                                            <CalendarCheck className={`h-3 w-3 mr-2 ${isMatch ? "text-emerald-600" : isPending ? "text-amber-600" : ""}`} />
                                                             <div className="text-left">
-                                                                <div className={`font-medium ${isMatch ? "text-emerald-700" : ""}`}>{slot.day || format(parseISO(slot.date!), "EEE")}</div>
-                                                                <div className={`text-[10px] ${isMatch ? "text-emerald-600" : "text-muted-foreground"}`}>{slot.startTime} - {slot.endTime}</div>
+                                                                <div className={`font-medium ${isMatch ? "text-emerald-700" : isPending ? "text-amber-700" : ""}`}>{slot.day || format(parseISO(slot.date!), "EEE")}</div>
+                                                                <div className={`text-[10px] ${isMatch ? "text-emerald-600" : isPending ? "text-amber-600" : "text-muted-foreground"}`}>
+                                                                    {isPending ? `From ${pendingDate}` : `${slot.startTime} - ${slot.endTime}`}
+                                                                </div>
                                                             </div>
                                                         </Button>
                                                     )})}
@@ -1291,8 +1307,9 @@ export default function Clients() {
                   </div>
 
                   {clinicians.map(clinician => {
-                    const availableSlots = clinician.availability.filter(s => s.type !== "Vacation" && !s.isBooked);
-                    if (availableSlots.length === 0) return null;
+                    const availableSlots = clinician.availability.filter(s => s.type !== "Vacation" && !s.isBooked && !isSlotPending(s));
+                    const pendingSlots = clinician.availability.filter(s => s.type !== "Vacation" && !s.isBooked && isSlotPending(s));
+                    if (availableSlots.length === 0 && pendingSlots.length === 0) return null;
                     
                     return (
                       <div key={clinician.id} className="p-4 border rounded-lg">
@@ -1321,6 +1338,20 @@ export default function Clients() {
                                 <div className="text-[10px] text-muted-foreground">{slot.startTime} - {slot.endTime}</div>
                               </div>
                             </Button>
+                          ))}
+                          {pendingSlots.map(slot => (
+                            <div
+                              key={slot.id}
+                              className="justify-start h-auto py-2 px-3 text-xs border rounded bg-amber-50 border-amber-200 opacity-70"
+                            >
+                              <div className="flex items-center gap-2">
+                                <CalendarCheck className="h-3 w-3 text-amber-600" />
+                                <div className="text-left">
+                                  <div className="font-medium text-amber-700">{slot.day || (slot.date && format(parseISO(slot.date), "EEE"))}</div>
+                                  <div className="text-[10px] text-amber-600">From {getSlotPendingDate(slot)}</div>
+                                </div>
+                              </div>
+                            </div>
                           ))}
                         </div>
                       </div>

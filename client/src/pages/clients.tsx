@@ -988,10 +988,6 @@ export default function Clients() {
                                                         const availMatch = doesSlotMatchClientAvailability(slot, clientAvailabilityForAllocation);
                                                         const isMatch = availMatch === true;
                                                         const noMatch = availMatch === false;
-                                                        const isSpecificDate = slot.type === "SpecificDate" && slot.date;
-                                                        const displayDay = isSpecificDate 
-                                                            ? format(parseISO(slot.date!), "EEE dd/MM") 
-                                                            : slot.day || format(parseISO(slot.date!), "EEE");
                                                         return (
                                                         <Button 
                                                             key={slot.id}
@@ -1011,11 +1007,8 @@ export default function Clients() {
                                                             {isMatch && <span className="absolute -top-1 -right-1 bg-emerald-500 text-white text-[8px] px-1 rounded">Match</span>}
                                                             <CalendarCheck className={`h-3 w-3 mr-2 ${isMatch ? "text-emerald-600" : ""}`} />
                                                             <div className="text-left">
-                                                                <div className={`font-medium ${isMatch ? "text-emerald-700" : ""}`}>{displayDay}</div>
+                                                                <div className={`font-medium ${isMatch ? "text-emerald-700" : ""}`}>{slot.day || format(parseISO(slot.date!), "EEE")}</div>
                                                                 <div className={`text-[10px] ${isMatch ? "text-emerald-600" : "text-muted-foreground"}`}>{slot.startTime} - {slot.endTime}</div>
-                                                                {isSpecificDate && (
-                                                                    <div className="text-[9px] text-blue-600">One-off</div>
-                                                                )}
                                                             </div>
                                                         </Button>
                                                     )})}
@@ -1310,35 +1303,25 @@ export default function Clients() {
                           </span>
                         </div>
                         <div className="grid grid-cols-3 gap-2">
-                          {availableSlots.map(slot => {
-                            const isSpecificDate = slot.type === "SpecificDate" && slot.date;
-                            const displayDay = isSpecificDate 
-                              ? format(parseISO(slot.date), "EEE dd/MM") 
-                              : slot.day || (slot.date && format(parseISO(slot.date), "EEE"));
-                            
-                            return (
-                              <Button
-                                key={slot.id}
-                                variant={editStatusData.slotId === slot.id && editStatusData.clinicianId === clinician.id ? "default" : "outline"}
-                                size="sm"
-                                className="justify-start h-auto py-2 px-3 text-xs"
-                                onClick={() => setEditStatusData({
-                                  ...editStatusData,
-                                  clinicianId: clinician.id,
-                                  slotId: slot.id
-                                })}
-                              >
-                                <CalendarCheck className="h-3 w-3 mr-2" />
-                                <div className="text-left">
-                                  <div className="font-medium">{displayDay}</div>
-                                  <div className="text-[10px] text-muted-foreground">{slot.startTime} - {slot.endTime}</div>
-                                  {isSpecificDate && (
-                                    <div className="text-[9px] text-blue-600">One-off slot</div>
-                                  )}
-                                </div>
-                              </Button>
-                            );
-                          })}
+                          {availableSlots.map(slot => (
+                            <Button
+                              key={slot.id}
+                              variant={editStatusData.slotId === slot.id && editStatusData.clinicianId === clinician.id ? "default" : "outline"}
+                              size="sm"
+                              className="justify-start h-auto py-2 px-3 text-xs"
+                              onClick={() => setEditStatusData({
+                                ...editStatusData,
+                                clinicianId: clinician.id,
+                                slotId: slot.id
+                              })}
+                            >
+                              <CalendarCheck className="h-3 w-3 mr-2" />
+                              <div className="text-left">
+                                <div className="font-medium">{slot.day || (slot.date && format(parseISO(slot.date), "EEE"))}</div>
+                                <div className="text-[10px] text-muted-foreground">{slot.startTime} - {slot.endTime}</div>
+                              </div>
+                            </Button>
+                          ))}
                         </div>
                       </div>
                     );

@@ -842,6 +842,12 @@ export default function Clients() {
                             <span>{client.referralSource}</span>
                         </>
                     )}
+                    {client.insurer && (
+                        <>
+                            <span className="text-border mx-1">|</span>
+                            <span className="text-primary font-medium">{client.insurer}</span>
+                        </>
+                    )}
                   </p>
                 </div>
 

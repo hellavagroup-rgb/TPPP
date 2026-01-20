@@ -546,8 +546,23 @@ export async function registerRoutes(
         responses: data,
       });
 
-      // Update client status to "Forms Completed"
-      await storage.updateClient(clientId, { status: "Forms Completed" });
+      // Extract insurer from form data if present
+      // Look for common field IDs that might contain insurer info
+      const insurerFieldIds = ["insurer", "insuranceProvider", "insurance", "healthInsurer", "privateInsurer"];
+      let insurerValue: string | null = null;
+      for (const fieldId of insurerFieldIds) {
+        if (data[fieldId] && typeof data[fieldId] === "string") {
+          insurerValue = data[fieldId];
+          break;
+        }
+      }
+
+      // Update client status to "Forms Completed" and insurer if found
+      const clientUpdate: { status: string; insurer?: string } = { status: "Forms Completed" };
+      if (insurerValue) {
+        clientUpdate.insurer = insurerValue;
+      }
+      await storage.updateClient(clientId, clientUpdate);
 
       res.json({ success: true, submissionId: submission.id });
     } catch (error) {

@@ -16,29 +16,28 @@ import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
 
-const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-const DAY_ABBREVS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const HOURS = ["07:00", "08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00", "21:00"];
-const HOUR_LABELS = ["7am", "8am", "9am", "10am", "11am", "12pm", "1pm", "2pm", "3pm", "4pm", "5pm", "6pm", "7pm", "8pm", "9pm"];
+const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+const DAY_ABBREVS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
+const TIME_PERIODS = ["Morning", "Afternoon", "Evening"];
 
 function AvailabilityPickerPreview({ field }: { field: any }) {
     const [selected, setSelected] = useState<Record<string, string[]>>({});
 
-    const toggleSlot = (day: string, hour: string) => {
+    const toggleSlot = (day: string, period: string) => {
         setSelected(prev => {
             const daySlots = prev[day] || [];
-            const isSelected = daySlots.includes(hour);
+            const isSelected = daySlots.includes(period);
             return {
                 ...prev,
                 [day]: isSelected 
-                    ? daySlots.filter(h => h !== hour)
-                    : [...daySlots, hour]
+                    ? daySlots.filter(p => p !== period)
+                    : [...daySlots, period]
             };
         });
     };
 
-    const isSlotSelected = (day: string, hour: string) => {
-        return (selected[day] || []).includes(hour);
+    const isSlotSelected = (day: string, period: string) => {
+        return (selected[day] || []).includes(period);
     };
 
     return (
@@ -52,30 +51,30 @@ function AvailabilityPickerPreview({ field }: { field: any }) {
                     Click on the time slots when you are available. Select all times that work for you.
                 </p>
                 <div className="overflow-x-auto">
-                    <div className="grid grid-cols-8 gap-1 text-xs min-w-[400px]">
+                    <div className="grid grid-cols-6 gap-2 text-sm min-w-[350px]">
                         <div></div>
                         {DAY_ABBREVS.map(d => (
                             <div key={d} className="text-center font-medium bg-slate-200 rounded p-2">{d}</div>
                         ))}
-                        {HOURS.map((hour, hourIdx) => (
+                        {TIME_PERIODS.map((period) => (
                             <>
-                                <div key={`${hour}-label`} className="text-right pr-2 text-muted-foreground flex items-center justify-end">
-                                    {HOUR_LABELS[hourIdx]}
+                                <div key={`${period}-label`} className="text-right pr-2 text-muted-foreground flex items-center justify-end">
+                                    {period}
                                 </div>
-                                {DAYS.map((day, dayIdx) => {
-                                    const isSelected = isSlotSelected(day, hour);
+                                {DAYS.map((day) => {
+                                    const isSelected = isSlotSelected(day, period);
                                     return (
                                         <button
-                                            key={`${hour}-${day}`}
+                                            key={`${period}-${day}`}
                                             type="button"
-                                            onClick={() => toggleSlot(day, hour)}
+                                            onClick={() => toggleSlot(day, period)}
                                             className={cn(
-                                                "border rounded p-2 text-center transition-colors cursor-pointer hover:bg-primary/10",
+                                                "border rounded-lg p-3 text-center transition-colors cursor-pointer hover:bg-primary/10",
                                                 isSelected 
                                                     ? "bg-primary text-primary-foreground border-primary" 
                                                     : "bg-white text-muted-foreground"
                                             )}
-                                            data-testid={`slot-${day}-${hour}`}
+                                            data-testid={`slot-${day}-${period}`}
                                         >
                                             {isSelected ? "✓" : "-"}
                                         </button>
@@ -89,8 +88,8 @@ function AvailabilityPickerPreview({ field }: { field: any }) {
                     Selected: {Object.entries(selected).filter(([_, slots]) => slots.length > 0).length > 0 
                         ? Object.entries(selected)
                             .filter(([_, slots]) => slots.length > 0)
-                            .map(([day, slots]) => `${day}: ${slots.length} slot${slots.length > 1 ? 's' : ''}`)
-                            .join(', ')
+                            .map(([day, slots]) => `${day}: ${slots.join(', ')}`)
+                            .join(' | ')
                         : 'None - click cells to select available times'}
                 </p>
             </div>

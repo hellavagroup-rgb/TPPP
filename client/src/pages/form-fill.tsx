@@ -23,23 +23,11 @@ import { cn } from "@/lib/utils";
 import logo from "@assets/xPerinatalPP-logo-large-digital.png.pagespeed.ic.wAjk_RUOnf_1766008188694.png";
 import type { FormTemplate, Client } from "@shared/schema";
 
-const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-const HOURS = [
-  { label: "7am", value: "07:00" },
-  { label: "8am", value: "08:00" },
-  { label: "9am", value: "09:00" },
-  { label: "10am", value: "10:00" },
-  { label: "11am", value: "11:00" },
-  { label: "12pm", value: "12:00" },
-  { label: "1pm", value: "13:00" },
-  { label: "2pm", value: "14:00" },
-  { label: "3pm", value: "15:00" },
-  { label: "4pm", value: "16:00" },
-  { label: "5pm", value: "17:00" },
-  { label: "6pm", value: "18:00" },
-  { label: "7pm", value: "19:00" },
-  { label: "8pm", value: "20:00" },
-  { label: "9pm", value: "21:00" },
+const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+const TIME_PERIODS = [
+  { label: "Morning", value: "Morning" },
+  { label: "Afternoon", value: "Afternoon" },
+  { label: "Evening", value: "Evening" },
 ];
 
 interface AvailabilityPickerProps {
@@ -49,13 +37,13 @@ interface AvailabilityPickerProps {
 }
 
 function AvailabilityPicker({ value, onChange, error }: AvailabilityPickerProps) {
-  const toggleSlot = (day: string, hour: string) => {
+  const toggleSlot = (day: string, period: string) => {
     const currentDaySlots = value[day] || [];
-    const isSelected = currentDaySlots.includes(hour);
+    const isSelected = currentDaySlots.includes(period);
     
     const newDaySlots = isSelected
-      ? currentDaySlots.filter(h => h !== hour)
-      : [...currentDaySlots, hour].sort();
+      ? currentDaySlots.filter(p => p !== period)
+      : [...currentDaySlots, period];
     
     const newValue = { ...value };
     if (newDaySlots.length === 0) {
@@ -76,35 +64,35 @@ function AvailabilityPicker({ value, onChange, error }: AvailabilityPickerProps)
       </p>
       
       <div className="overflow-x-auto">
-        <div className="min-w-[600px]">
-          <div className="grid grid-cols-8 gap-1">
-            <div className="p-2 text-xs font-medium text-center text-muted-foreground"></div>
+        <div className="min-w-[400px]">
+          <div className="grid grid-cols-6 gap-2">
+            <div className="p-2 text-sm font-medium text-center text-muted-foreground"></div>
             {DAYS.map(day => (
-              <div key={day} className="p-2 text-xs font-medium text-center bg-slate-100 rounded-t-md">
+              <div key={day} className="p-2 text-sm font-medium text-center bg-slate-100 rounded-t-md">
                 {day.slice(0, 3)}
               </div>
             ))}
           </div>
           
-          {HOURS.map(({ label, value: hour }) => (
-            <div key={hour} className="grid grid-cols-8 gap-1">
-              <div className="p-2 text-xs font-medium text-right text-muted-foreground pr-3">
+          {TIME_PERIODS.map(({ label, value: period }) => (
+            <div key={period} className="grid grid-cols-6 gap-2 mt-1">
+              <div className="p-2 text-sm font-medium text-right text-muted-foreground pr-3">
                 {label}
               </div>
               {DAYS.map(day => {
-                const isSelected = (value[day] || []).includes(hour);
+                const isSelected = (value[day] || []).includes(period);
                 return (
                   <button
-                    key={`${day}-${hour}`}
+                    key={`${day}-${period}`}
                     type="button"
-                    onClick={() => toggleSlot(day, hour)}
+                    onClick={() => toggleSlot(day, period)}
                     className={cn(
-                      "p-2 text-xs border rounded transition-all hover:scale-105",
+                      "p-3 text-sm border rounded-lg transition-all hover:scale-105",
                       isSelected
                         ? "bg-emerald-500 text-white border-emerald-600 shadow-sm"
                         : "bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50"
                     )}
-                    data-testid={`availability-slot-${day.toLowerCase()}-${hour}`}
+                    data-testid={`availability-slot-${day.toLowerCase()}-${period.toLowerCase()}`}
                   >
                     {isSelected ? "✓" : ""}
                   </button>
@@ -124,10 +112,7 @@ function AvailabilityPicker({ value, onChange, error }: AvailabilityPickerProps)
               if (!slots || slots.length === 0) return null;
               return (
                 <span key={day} className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 px-2 py-1 rounded text-xs">
-                  <strong>{day.slice(0, 3)}:</strong> {slots.map(s => {
-                    const hourLabel = HOURS.find(h => h.value === s)?.label || s;
-                    return hourLabel;
-                  }).join(", ")}
+                  <strong>{day.slice(0, 3)}:</strong> {slots.join(", ")}
                 </span>
               );
             })}

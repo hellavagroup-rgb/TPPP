@@ -8,7 +8,8 @@ import {
   Calendar, 
   AlertCircle, 
   Loader2,
-  Mail
+  Mail,
+  CheckCircle2
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { Client, Task, Clinician, TimeSlot } from "@shared/schema";
@@ -97,8 +98,8 @@ export default function Dashboard() {
   const stats = [
     {
       title: "Pending Intake",
-      value: clients.filter(c => c.status === "New" || c.status === "Forms Completed").length,
-      change: "Not yet allocated",
+      value: clients.filter(c => c.status === "New").length,
+      change: "New clients awaiting forms",
       icon: AlertCircle,
       color: "text-amber-600",
       bg: "bg-amber-100"
@@ -110,6 +111,14 @@ export default function Dashboard() {
       icon: FileText,
       color: "text-blue-600",
       bg: "bg-blue-100"
+    },
+    {
+      title: "Forms Completed",
+      value: clients.filter(c => c.status === "Forms Completed").length,
+      change: "Ready for allocation",
+      icon: CheckCircle2,
+      color: "text-teal-600",
+      bg: "bg-teal-100"
     },
     {
       title: "Allocated - Awaiting Confirmation",

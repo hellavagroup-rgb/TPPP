@@ -416,11 +416,13 @@ export default function Clients() {
     return matchesSearch && matchesStatus && !client.isArchived;
   });
 
-  // Display labels for statuses (shows "Allocated"/"Confirmed" but stores "Assigned"/"Scheduled")
+  // Display labels for statuses (UI labels differ from database values)
   const getStatusDisplayLabel = (status: string) => {
     switch(status) {
-      case "Assigned": return "Allocated";
-      case "Scheduled": return "Confirmed";
+      case "New": return "Pending Intake";
+      case "Forms Sent": return "Screen Booked/Sent";
+      case "Assigned": return "Allocated - Awaiting Confirmation";
+      case "Scheduled": return "Allocated";
       default: return status;
     }
   };
@@ -831,11 +833,11 @@ export default function Clients() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="All">All Statuses</SelectItem>
-              <SelectItem value="New">New</SelectItem>
-              <SelectItem value="Forms Sent">Forms Sent</SelectItem>
+              <SelectItem value="New">Pending Intake</SelectItem>
+              <SelectItem value="Forms Sent">Screen Booked/Sent</SelectItem>
               <SelectItem value="Forms Completed">Forms Completed</SelectItem>
-              <SelectItem value="Assigned">Allocated</SelectItem>
-              <SelectItem value="Scheduled">Confirmed</SelectItem>
+              <SelectItem value="Assigned">Allocated - Awaiting Confirmation</SelectItem>
+              <SelectItem value="Scheduled">Allocated</SelectItem>
               <SelectItem value="Waitlist">Waitlist</SelectItem>
               <SelectItem value="Archived">Archived</SelectItem>
             </SelectContent>

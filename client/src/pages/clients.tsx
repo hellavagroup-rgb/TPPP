@@ -44,7 +44,8 @@ import {
   Phone,
   FileText,
   Download,
-  Loader2
+  Loader2,
+  RotateCcw
 } from "lucide-react";
 import { useState } from "react";
 import { useLocation } from "wouter";
@@ -105,9 +106,15 @@ export default function Clients() {
   const [filterStatus, setFilterStatus] = useState<string>("All");
   const [selectedClient, setSelectedClient] = useState<ClientType | null>(null);
 
-  // Fetch data from API
+  // Fetch data from API - include archived when that filter is selected
   const { data: clients = [] } = useQuery<ClientType[]>({
-    queryKey: ["/api/clients"],
+    queryKey: ["/api/clients", filterStatus === "Archived"],
+    queryFn: async () => {
+      const includeArchived = filterStatus === "Archived";
+      const res = await fetch(`/api/clients?includeArchived=${includeArchived}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch clients");
+      return res.json();
+    },
   });
 
   const { data: clinicians = [] } = useQuery<(Clinician & { name: string; availability: any[] })[]>({
@@ -206,7 +213,7 @@ export default function Clients() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
-      toast({ title: "Client Archived", description: "This client record has been permanently archived." });
+      toast({ title: "Client Archived", description: "This client has been moved to the archive." });
       setIsArchiveDialogOpen(false);
       setClientToArchive(null);
     },
@@ -219,6 +226,20 @@ export default function Clients() {
     setClientToArchive(client);
     setIsArchiveDialogOpen(true);
   };
+
+  const restoreClientMutation = useMutation({
+    mutationFn: async (clientId: string) => {
+      const response = await apiRequest("POST", `/api/clients/${clientId}/restore`, {});
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      toast({ title: "Client Restored", description: "This client has been restored to the active list." });
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to restore client.", variant: "destructive" });
+    },
+  });
 
   const handleConfirmArchive = () => {
     if (clientToArchive) {
@@ -386,8 +407,13 @@ export default function Clients() {
   const filteredClients = clients.filter(client => {
     // Search now works on ID instead of Name
     const matchesSearch = client.displayId.toLowerCase().includes(searchTerm.toLowerCase());
+    // Handle "Archived" filter specially - check isArchived flag
+    if (filterStatus === "Archived") {
+      return matchesSearch && client.isArchived;
+    }
+    // For other filters, exclude archived clients
     const matchesStatus = filterStatus === "All" || client.status === filterStatus;
-    return matchesSearch && matchesStatus;
+    return matchesSearch && matchesStatus && !client.isArchived;
   });
 
   // Display labels for statuses (shows "Allocated"/"Confirmed" but stores "Assigned"/"Scheduled")
@@ -811,6 +837,7 @@ export default function Clients() {
               <SelectItem value="Assigned">Allocated</SelectItem>
               <SelectItem value="Scheduled">Confirmed</SelectItem>
               <SelectItem value="Waitlist">Waitlist</SelectItem>
+              <SelectItem value="Archived">Archived</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -1078,9 +1105,15 @@ export default function Clients() {
                           </DropdownMenuItem>
                         )}
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>
+                        {client.isArchived ? (
+                          <DropdownMenuItem onClick={() => restoreClientMutation.mutate(client.id)}>
+                            <RotateCcw className="h-4 w-4 mr-2" /> Restore
+                          </DropdownMenuItem>
+                        ) : (
+                          <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>
                             Archive
-                        </DropdownMenuItem>
+                          </DropdownMenuItem>
+                        )}
                         </DropdownMenuContent>
                     </DropdownMenu>
                 </div>
@@ -1510,12 +1543,10 @@ export default function Clients() {
           </DialogHeader>
           
           <div className="py-4">
-            <div className="p-4 bg-destructive/10 border border-destructive/30 rounded-lg">
-              <p className="text-sm font-medium text-destructive mb-2">Warning: This action cannot be undone</p>
+            <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
+              <p className="text-sm font-medium text-amber-800 mb-2">This client will be moved to the archive</p>
               <p className="text-sm text-muted-foreground">
-                Once archived, this client record will be permanently removed from the active client list
-                and cannot be retrieved. All associated data will remain in the system for audit purposes
-                but will no longer be accessible through the interface.
+                Archived clients can be restored later by selecting "Archived" from the status filter.
               </p>
             </div>
           </div>

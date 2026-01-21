@@ -42,12 +42,13 @@ export interface IStorage {
   deleteSpecificDateSlotsByClinicianId(clinicianId: string): Promise<number>;
   
   // ============ CLIENTS ============
-  getAllClients(): Promise<Client[]>;
+  getAllClients(includeArchived?: boolean): Promise<Client[]>;
   getClientById(id: string): Promise<Client | undefined>;
   getClientByDisplayId(displayId: string): Promise<Client | undefined>;
   createClient(client: InsertClient): Promise<Client>;
   updateClient(id: string, updates: Partial<InsertClient>): Promise<Client | undefined>;
   archiveClient(id: string): Promise<Client | undefined>;
+  restoreClient(id: string): Promise<Client | undefined>;
   assignClinicianToClient(clientId: string, clinicianId: string, slotId: string, allocationMethod?: "form" | "manual"): Promise<void>;
   reassignClient(clientId: string, newClinicianId: string | null, newSlotId: string | null, newStatus: string): Promise<Client | undefined>;
   
@@ -256,10 +257,22 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ============ CLIENTS ============
-  async getAllClients(): Promise<Client[]> {
+  async getAllClients(includeArchived?: boolean): Promise<Client[]> {
+    if (includeArchived) {
+      return await db.select().from(clients)
+        .orderBy(desc(clients.intakeDate));
+    }
     return await db.select().from(clients)
       .where(eq(clients.isArchived, false))
       .orderBy(desc(clients.intakeDate));
+  }
+
+  async restoreClient(id: string): Promise<Client | undefined> {
+    const [updated] = await db.update(clients)
+      .set({ isArchived: false, archivedAt: null, updatedAt: new Date() })
+      .where(eq(clients.id, id))
+      .returning();
+    return updated;
   }
 
   async archiveClient(id: string): Promise<Client | undefined> {

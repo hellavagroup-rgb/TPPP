@@ -391,10 +391,23 @@ export async function registerRoutes(
   // ============ CLIENT ROUTES (GDPR Protected) ============
   app.get("/api/clients", requireAdmin, auditLog("view", "client"), async (req, res) => {
     try {
-      const clients = await storage.getAllClients();
+      const includeArchived = req.query.includeArchived === "true";
+      const clients = await storage.getAllClients(includeArchived);
       res.json(clients);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch clients" });
+    }
+  });
+
+  app.post("/api/clients/:id/restore", requireAdmin, auditLog("update", "client"), async (req, res) => {
+    try {
+      const restored = await storage.restoreClient(req.params.id);
+      if (!restored) {
+        return res.status(404).json({ error: "Client not found" });
+      }
+      res.json(restored);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to restore client" });
     }
   });
 

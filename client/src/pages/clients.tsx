@@ -1242,11 +1242,11 @@ export default function Clients() {
                 >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="New">New</SelectItem>
-                    <SelectItem value="Forms Sent">Forms Sent</SelectItem>
+                    <SelectItem value="New">Pending Intake</SelectItem>
+                    <SelectItem value="Forms Sent">Screen Booked/Sent</SelectItem>
                     <SelectItem value="Forms Completed">Forms Completed</SelectItem>
-                    <SelectItem value="Assigned">Allocated</SelectItem>
-                    <SelectItem value="Scheduled">Confirmed</SelectItem>
+                    <SelectItem value="Assigned">Allocated - Awaiting Confirmation</SelectItem>
+                    <SelectItem value="Scheduled">Allocated</SelectItem>
                     <SelectItem value="Waitlist">Waitlist</SelectItem>
                   </SelectContent>
                 </Select>
@@ -1327,16 +1327,16 @@ export default function Clients() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="New">New</SelectItem>
-                    <SelectItem value="Forms Sent">Forms Sent</SelectItem>
+                    <SelectItem value="New">Pending Intake</SelectItem>
+                    <SelectItem value="Forms Sent">Screen Booked/Sent</SelectItem>
                     <SelectItem value="Forms Completed">Forms Completed</SelectItem>
-                    <SelectItem value="Assigned">Allocated</SelectItem>
-                    <SelectItem value="Scheduled">Confirmed</SelectItem>
+                    <SelectItem value="Assigned">Allocated - Awaiting Confirmation</SelectItem>
+                    <SelectItem value="Scheduled">Allocated</SelectItem>
                     <SelectItem value="Waitlist">Waitlist</SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
-                  Changing to New, Forms Sent, Forms Completed, or Waitlist will release the current time slot.
+                  Changing to Pending Intake, Screen Booked/Sent, Forms Completed, or Waitlist will release the current time slot.
                 </p>
               </div>
 

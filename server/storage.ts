@@ -182,12 +182,37 @@ export class DatabaseStorage implements IStorage {
   }
 
   async bulkUpdateTimeSlots(clinicianId: string, slots: TimeSlot[]): Promise<void> {
-    // Delete all existing slots for this clinician
-    await db.delete(timeSlots).where(eq(timeSlots.clinicianId, clinicianId));
+    // Only delete slots that are NOT booked (to avoid foreign key constraint with clients)
+    await db.delete(timeSlots).where(
+      and(
+        eq(timeSlots.clinicianId, clinicianId),
+        eq(timeSlots.isBooked, false)
+      )
+    );
+    
+    // Get remaining booked slots to avoid ID conflicts
+    const bookedSlots = await db.select().from(timeSlots).where(
+      and(
+        eq(timeSlots.clinicianId, clinicianId),
+        eq(timeSlots.isBooked, true)
+      )
+    );
+    const bookedSlotIds = new Set(bookedSlots.map(s => s.id));
+    
+    // Filter out slots that match existing booked slots (by day/time)
+    const newSlots = slots.filter(slot => {
+      // Keep the slot in the new list if it's not already booked
+      const matchingBooked = bookedSlots.find(bs => 
+        bs.day === slot.day && 
+        bs.startTime === slot.startTime && 
+        bs.endTime === slot.endTime
+      );
+      return !matchingBooked;
+    });
     
     // Insert new slots with fresh IDs to avoid conflicts
-    if (slots.length > 0) {
-      await db.insert(timeSlots).values(slots.map((slot, index) => ({
+    if (newSlots.length > 0) {
+      await db.insert(timeSlots).values(newSlots.map((slot, index) => ({
         id: `ts-${Date.now()}-${index}-${slot.day || slot.date || 'slot'}`,
         clinicianId,
         type: slot.type,

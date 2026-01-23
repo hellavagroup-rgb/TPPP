@@ -121,13 +121,51 @@ export default function Availability() {
     enabled: clinicians.length > 0,
   });
 
-  const updateSlotsMutation = useMutation({
-    mutationFn: async ({ clinicianId, slots }: { clinicianId: string; slots: TimeSlot[] }) => {
-      const response = await apiRequest("PUT", `/api/timeslots/${clinicianId}`, slots);
+  const addSlotsMutation = useMutation({
+    mutationFn: async ({ clinicianId, newSlots }: { clinicianId: string; newSlots: Partial<TimeSlot>[] }) => {
+      const response = await apiRequest("POST", `/api/timeslots/${clinicianId}`, newSlots);
       return response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/clinicians/with-slots"] });
+    },
+  });
+
+  const deleteSlotMutation = useMutation({
+    mutationFn: async ({ clinicianId, slotId }: { clinicianId: string; slotId: string }) => {
+      const response = await apiRequest("DELETE", `/api/timeslots/${clinicianId}/${slotId}`);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clinicians/with-slots"] });
+      toast({ title: "Slot Deleted", description: "Time slot has been removed." });
+      setIsDeleteOpen(false);
+      setDeletingSlot(null);
+    },
+    onError: (error: any) => {
+      toast({ 
+        title: "Cannot Delete", 
+        description: error.message || "This slot is assigned to a client and cannot be deleted.", 
+        variant: "destructive" 
+      });
+    },
+  });
+
+  const updateSlotMutation = useMutation({
+    mutationFn: async ({ clinicianId, slotId, updates }: { clinicianId: string; slotId: string; updates: Partial<TimeSlot> }) => {
+      const response = await apiRequest("PUT", `/api/timeslots/${clinicianId}/${slotId}`, updates);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clinicians/with-slots"] });
+      toast({ title: "Availability Updated", description: "Time slot has been updated." });
+      setIsDialogOpen(false);
+      resetForm();
+      setBatchCount(0);
+      setApplyToAllBatch(false);
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to update slot.", variant: "destructive" });
     },
   });
 
@@ -367,20 +405,19 @@ export default function Availability() {
       }
     }
 
-    const updatedSlots = [...clinician.slots, ...newSlots];
-    updateSlotsMutation.mutate({ clinicianId: dialogClinicianId, slots: updatedSlots }, {
+    addSlotsMutation.mutate({ clinicianId: dialogClinicianId, newSlots }, {
       onSuccess: () => {
         toast({
-          title: "Availability Updated",
+          title: "Availability Added",
           description: newSlotType === "Recurring"
             ? `Added recurring schedule for ${selectedDays.length} days/week`
-            : `Schedule updated (${newSlots.length} days)`,
+            : `Added ${newSlots.length} time slots`,
         });
         setIsDialogOpen(false);
         resetForm();
       },
       onError: () => {
-        toast({ title: "Error", description: "Failed to update availability.", variant: "destructive" });
+        toast({ title: "Error", description: "Failed to add availability.", variant: "destructive" });
       },
     });
   };
@@ -435,13 +472,12 @@ export default function Availability() {
       return;
     }
 
-    // For recurring slots with multiple days selected, create new slots for additional days
+    // For recurring slots with multiple days selected, update existing + add new slots
     if (newSlotType === "Recurring" && selectedDays.length > 1) {
       const batchId = `batch-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       
       // Update the original slot with first day
-      const updatedSlot: TimeSlot = {
-        ...editingSlot,
+      const slotUpdates: Partial<TimeSlot> = {
         type: newSlotType,
         day: selectedDays[0],
         date: null,
@@ -451,10 +487,15 @@ export default function Availability() {
         endTime: newEndTime,
         batchId: batchId,
       };
+      
+      updateSlotMutation.mutate({ 
+        clinicianId: dialogClinicianId, 
+        slotId: editingSlot.id, 
+        updates: slotUpdates 
+      });
 
       // Create new slots for additional days
-      const newSlots: TimeSlot[] = selectedDays.slice(1).map((day, index) => ({
-        id: `ts-${Date.now()}-${index}-${day}`,
+      const newSlots = selectedDays.slice(1).map((day) => ({
         clinicianId: dialogClinicianId,
         type: "Recurring" as const,
         day: day,
@@ -465,30 +506,16 @@ export default function Availability() {
         endTime: newEndTime,
         isBooked: false,
         batchId: batchId,
-        createdAt: new Date(),
       }));
 
-      const updatedSlots = [
-        ...clinician.slots.map(s => s.id === editingSlot.id ? updatedSlot : s),
-        ...newSlots
-      ];
-
-      updateSlotsMutation.mutate({ clinicianId: dialogClinicianId, slots: updatedSlots }, {
-        onSuccess: () => {
-          toast({ title: "Availability Updated", description: `Added recurring schedule for ${selectedDays.length} days.` });
-          setIsDialogOpen(false);
-          resetForm();
-        },
-        onError: () => {
-          toast({ title: "Error", description: "Failed to update slot.", variant: "destructive" });
-        },
-      });
+      if (newSlots.length > 0) {
+        addSlotsMutation.mutate({ clinicianId: dialogClinicianId, newSlots });
+      }
       return;
     }
 
     // Update single slot
-    const updatedSlot: TimeSlot = {
-      ...editingSlot,
+    const slotUpdates: Partial<TimeSlot> = {
       type: newSlotType,
       day: newSlotType === "Recurring" ? selectedDays[0] : format(parseISO(newDate), "EEEE"),
       date: newSlotType !== "Recurring" ? newDate : null,
@@ -498,18 +525,10 @@ export default function Availability() {
       endTime: newSlotType === "Vacation" ? "23:59" : newEndTime,
     };
 
-    const updatedSlots = clinician.slots.map(s => s.id === editingSlot.id ? updatedSlot : s);
-    updateSlotsMutation.mutate({ clinicianId: dialogClinicianId, slots: updatedSlots }, {
-      onSuccess: () => {
-        toast({ title: "Availability Updated", description: "Time slot has been updated." });
-        setIsDialogOpen(false);
-        resetForm();
-        setBatchCount(0);
-        setApplyToAllBatch(false);
-      },
-      onError: () => {
-        toast({ title: "Error", description: "Failed to update slot.", variant: "destructive" });
-      },
+    updateSlotMutation.mutate({ 
+      clinicianId: dialogClinicianId, 
+      slotId: editingSlot.id, 
+      updates: slotUpdates 
     });
   };
 
@@ -543,21 +562,14 @@ export default function Availability() {
       return;
     }
     
-    // Delete single slot
-    const clinician = allCliniciansData.find(c => c.id === deletingSlot.clinicianId);
-    if (!clinician) return;
-
-    const updatedSlots = clinician.slots.filter(s => s.id !== deletingSlot.slot.id);
-    updateSlotsMutation.mutate({ clinicianId: deletingSlot.clinicianId, slots: updatedSlots }, {
+    // Delete single slot using the new endpoint
+    deleteSlotMutation.mutate({ 
+      clinicianId: deletingSlot.clinicianId, 
+      slotId: deletingSlot.slot.id 
+    }, {
       onSuccess: () => {
-        toast({ title: "Slot Deleted", description: "Time slot has been removed." });
-        setIsDeleteOpen(false);
-        setDeletingSlot(null);
         setBatchCount(0);
         setApplyToAllBatch(false);
-      },
-      onError: () => {
-        toast({ title: "Error", description: "Failed to delete slot.", variant: "destructive" });
       },
     });
   };
@@ -766,9 +778,9 @@ export default function Availability() {
               <DialogFooter>
                 <Button 
                   onClick={isEditMode ? handleSaveEdit : handleAddAvailability} 
-                  disabled={!dialogClinicianId || updateSlotsMutation.isPending || updateBatchMutation.isPending}
+                  disabled={!dialogClinicianId || addSlotsMutation.isPending || updateSlotMutation.isPending || updateBatchMutation.isPending}
                 >
-                  {(updateSlotsMutation.isPending || updateBatchMutation.isPending) 
+                  {(addSlotsMutation.isPending || updateSlotMutation.isPending || updateBatchMutation.isPending) 
                     ? "Saving..." 
                     : isEditMode 
                       ? (applyToAllBatch ? `Update ${batchCount} Slots` : "Save Changes")
@@ -959,7 +971,7 @@ export default function Availability() {
               onClick={handleConfirmDelete}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {(updateSlotsMutation.isPending || deleteBatchMutation.isPending) 
+              {(deleteSlotMutation.isPending || deleteBatchMutation.isPending) 
                 ? "Deleting..." 
                 : applyToAllBatch 
                   ? `Delete ${batchCount} Slots` 

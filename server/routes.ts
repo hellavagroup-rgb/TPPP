@@ -313,7 +313,8 @@ export async function registerRoutes(
     }
   });
 
-  app.put("/api/timeslots/:clinicianId", requireAuth, async (req, res) => {
+  // Add new time slots (additive - does not delete existing slots)
+  app.post("/api/timeslots/:clinicianId", requireAuth, async (req, res) => {
     try {
       // Check authorization: Admin can edit any, Clinician can only edit their own
       if (req.user!.role === "clinician") {
@@ -323,14 +324,65 @@ export async function registerRoutes(
         }
       }
 
-      const slots = req.body; // Array of TimeSlot objects
-      await storage.bulkUpdateTimeSlots(req.params.clinicianId, slots);
+      const newSlots = req.body; // Array of new slots to add
+      const inserted = await storage.addTimeSlots(req.params.clinicianId, newSlots);
       
-      const updated = await storage.getTimeSlotsByClinicianId(req.params.clinicianId);
-      res.json(updated);
+      const allSlots = await storage.getTimeSlotsByClinicianId(req.params.clinicianId);
+      res.json(allSlots);
     } catch (error) {
-      console.error("Error updating time slots:", error);
-      res.status(500).json({ error: "Failed to update time slots" });
+      console.error("Error adding time slots:", error);
+      res.status(500).json({ error: "Failed to add time slots" });
+    }
+  });
+
+  // Delete a specific time slot
+  app.delete("/api/timeslots/:clinicianId/:slotId", requireAuth, async (req, res) => {
+    try {
+      // Check authorization: Admin can delete any, Clinician can only delete their own
+      if (req.user!.role === "clinician") {
+        const clinician = await storage.getClinicianByUserId(req.user!.id);
+        if (!clinician || clinician.id !== req.params.clinicianId) {
+          return res.status(403).json({ error: "Forbidden" });
+        }
+      }
+
+      await storage.deleteTimeSlotById(req.params.slotId);
+      const allSlots = await storage.getTimeSlotsByClinicianId(req.params.clinicianId);
+      res.json(allSlots);
+    } catch (error: any) {
+      console.error("Error deleting time slot:", error);
+      if (error.message?.includes("assigned to a client")) {
+        return res.status(400).json({ error: "Cannot delete slot that is assigned to a client" });
+      }
+      res.status(500).json({ error: "Failed to delete time slot" });
+    }
+  });
+
+  // Update a specific time slot
+  app.put("/api/timeslots/:clinicianId/:slotId", requireAuth, async (req, res) => {
+    try {
+      // Check authorization: Admin can update any, Clinician can only update their own
+      if (req.user!.role === "clinician") {
+        const clinician = await storage.getClinicianByUserId(req.user!.id);
+        if (!clinician || clinician.id !== req.params.clinicianId) {
+          return res.status(403).json({ error: "Forbidden" });
+        }
+      }
+
+      const updates = req.body;
+      const updated = await storage.updateTimeSlot(req.params.slotId, updates);
+      if (!updated) {
+        return res.status(404).json({ error: "Time slot not found" });
+      }
+      
+      // Update lastUpdatedAvailability - use empty update to trigger timestamp refresh
+      await storage.updateClinician(req.params.clinicianId, {});
+      
+      const allSlots = await storage.getTimeSlotsByClinicianId(req.params.clinicianId);
+      res.json(allSlots);
+    } catch (error) {
+      console.error("Error updating time slot:", error);
+      res.status(500).json({ error: "Failed to update time slot" });
     }
   });
 
@@ -571,7 +623,7 @@ export async function registerRoutes(
       }
 
       // Update client status to "Forms Completed" and insurer if found
-      const clientUpdate: { status: string; insurer?: string } = { status: "Forms Completed" };
+      const clientUpdate: { status: "Forms Completed"; insurer?: string } = { status: "Forms Completed" };
       if (insurerValue) {
         clientUpdate.insurer = insurerValue;
       }

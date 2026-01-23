@@ -34,7 +34,8 @@ export interface IStorage {
   createTimeSlot(slot: InsertTimeSlot): Promise<TimeSlot>;
   updateTimeSlot(id: string, updates: Partial<InsertTimeSlot>): Promise<TimeSlot | undefined>;
   deleteTimeSlot(id: string): Promise<void>;
-  bulkUpdateTimeSlots(clinicianId: string, slots: TimeSlot[]): Promise<void>;
+  addTimeSlots(clinicianId: string, newSlots: Omit<TimeSlot, 'id' | 'createdAt'>[]): Promise<TimeSlot[]>;
+  deleteTimeSlotById(id: string): Promise<boolean>;
   getSlotsByBatchId(batchId: string): Promise<TimeSlot[]>;
   updateSlotsByBatchId(batchId: string, updates: Partial<InsertTimeSlot>): Promise<number>;
   deleteSlotsByBatchId(batchId: string): Promise<number>;
@@ -181,56 +182,46 @@ export class DatabaseStorage implements IStorage {
     await db.delete(timeSlots).where(eq(timeSlots.id, id));
   }
 
-  async bulkUpdateTimeSlots(clinicianId: string, slots: TimeSlot[]): Promise<void> {
-    // Only delete slots that are NOT booked (to avoid foreign key constraint with clients)
-    await db.delete(timeSlots).where(
-      and(
-        eq(timeSlots.clinicianId, clinicianId),
-        eq(timeSlots.isBooked, false)
-      )
-    );
+  async addTimeSlots(clinicianId: string, newSlots: Omit<TimeSlot, 'id' | 'createdAt'>[]): Promise<TimeSlot[]> {
+    if (newSlots.length === 0) return [];
     
-    // Get remaining booked slots to avoid ID conflicts
-    const bookedSlots = await db.select().from(timeSlots).where(
-      and(
-        eq(timeSlots.clinicianId, clinicianId),
-        eq(timeSlots.isBooked, true)
-      )
-    );
-    const bookedSlotIds = new Set(bookedSlots.map(s => s.id));
-    
-    // Filter out slots that match existing booked slots (by day/time)
-    const newSlots = slots.filter(slot => {
-      // Keep the slot in the new list if it's not already booked
-      const matchingBooked = bookedSlots.find(bs => 
-        bs.day === slot.day && 
-        bs.startTime === slot.startTime && 
-        bs.endTime === slot.endTime
-      );
-      return !matchingBooked;
-    });
-    
-    // Insert new slots with fresh IDs to avoid conflicts
-    if (newSlots.length > 0) {
-      await db.insert(timeSlots).values(newSlots.map((slot, index) => ({
-        id: `ts-${Date.now()}-${index}-${slot.day || slot.date || 'slot'}`,
-        clinicianId,
-        type: slot.type,
-        day: slot.day,
-        date: slot.date,
-        startDate: slot.startDate,
-        endDate: slot.endDate,
-        startTime: slot.startTime,
-        endTime: slot.endTime,
-        isBooked: slot.isBooked,
-        batchId: slot.batchId,
-      })));
-    }
+    const insertedSlots = await db.insert(timeSlots).values(newSlots.map((slot, index) => ({
+      id: `ts-${Date.now()}-${index}-${slot.day || slot.date || 'slot'}`,
+      clinicianId,
+      type: slot.type,
+      day: slot.day,
+      date: slot.date,
+      startDate: slot.startDate,
+      endDate: slot.endDate,
+      startTime: slot.startTime,
+      endTime: slot.endTime,
+      isBooked: slot.isBooked || false,
+      batchId: slot.batchId,
+    }))).returning();
     
     // Update lastUpdatedAvailability
     await db.update(clinicians).set({
       lastUpdatedAvailability: new Date()
     }).where(eq(clinicians.id, clinicianId));
+    
+    return insertedSlots;
+  }
+
+  async deleteTimeSlotById(id: string): Promise<boolean> {
+    // Check if slot is booked/assigned to a client
+    const [slot] = await db.select().from(timeSlots).where(eq(timeSlots.id, id));
+    if (!slot) return false;
+    
+    if (slot.isBooked) {
+      // Check if any client references this slot
+      const clientsWithSlot = await db.select().from(clients).where(eq(clients.assignedSlotId, id));
+      if (clientsWithSlot.length > 0) {
+        throw new Error("Cannot delete slot that is assigned to a client");
+      }
+    }
+    
+    await db.delete(timeSlots).where(eq(timeSlots.id, id));
+    return true;
   }
 
   async getSlotsByBatchId(batchId: string): Promise<TimeSlot[]> {

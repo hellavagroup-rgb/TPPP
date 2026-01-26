@@ -316,13 +316,70 @@ export async function registerRoutes(
     }
   });
 
-  // Create new admin user
-  app.post("/api/admin-users", requireAdmin, async (req, res) => {
+  // Invite new admin user (sends email with setup link)
+  app.post("/api/admin-users/invite", requireAdmin, async (req, res) => {
     try {
-      const { name, email, password } = req.body;
+      const { name, email } = req.body;
       
-      if (!name || !email || !password) {
-        return res.status(400).json({ error: "Name, email, and password are required" });
+      if (!name || !email) {
+        return res.status(400).json({ error: "Name and email are required" });
+      }
+
+      // Check if email already exists
+      const existingUser = await storage.getUserByEmail(email);
+      if (existingUser) {
+        return res.status(400).json({ error: "Email already in use" });
+      }
+
+      // Create admin user with placeholder password (can't login until they set password)
+      const placeholderPassword = `PENDING_INVITE_${crypto.randomBytes(32).toString('hex')}`;
+      const user = await storage.createUser({
+        email,
+        name,
+        password: placeholderPassword,
+        role: "admin",
+      });
+
+      // Generate invite token (valid for 7 days)
+      const token = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      await storage.createInviteToken(user.id, token, expiresAt);
+
+      // Build invite URL
+      const protocol = req.headers['x-forwarded-proto'] || 'https';
+      const host = req.headers.host || 'localhost:5000';
+      const baseUrl = `${protocol}://${host}`;
+      const inviteUrl = `${baseUrl}/accept-invite?token=${token}`;
+
+      // Send invite email
+      const emailResult = await sendEmail({
+        to: email,
+        from: process.env.FROM_EMAIL || "onboarding@resend.dev",
+        subject: "You've been invited as an Admin - The Perinatal Psychology Practice",
+        text: `Hello ${name},\n\nYou have been invited to join The Perinatal Psychology Practice as an administrator.\n\nPlease click the link below to set up your password and activate your account:\n${inviteUrl}\n\nThis link will expire in 7 days.\n\nBest regards,\nThe Perinatal Psychology Practice`,
+        html: `<p>Hello ${name},</p><p>You have been invited to join The Perinatal Psychology Practice as an administrator.</p><p>Please click the link below to set up your password and activate your account:</p><p><a href="${inviteUrl}">${inviteUrl}</a></p><p>This link will expire in 7 days.</p><p>Best regards,<br>The Perinatal Psychology Practice</p>`,
+      });
+
+      if (!emailResult.success) {
+        // Delete the user if email failed
+        await storage.deleteUser(user.id);
+        return res.status(500).json({ error: "Failed to send invite email" });
+      }
+
+      res.json({ success: true, message: "Invite sent successfully" });
+    } catch (error) {
+      console.error("Failed to invite admin user:", error);
+      res.status(500).json({ error: "Failed to invite admin user" });
+    }
+  });
+
+  // Accept admin invite and set password (public endpoint)
+  app.post("/api/admin-users/accept-invite", async (req, res) => {
+    try {
+      const { token, password } = req.body;
+      
+      if (!token || !password) {
+        return res.status(400).json({ error: "Token and password are required" });
       }
 
       // Validate password meets security requirements
@@ -340,7 +397,7 @@ export async function registerRoutes(
         passwordErrors.push("one number");
       }
       if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) {
-        passwordErrors.push("one special character (!@#$%^&*(),.?\":{}|<>)");
+        passwordErrors.push("one special character");
       }
       if (passwordErrors.length > 0) {
         return res.status(400).json({ 
@@ -348,27 +405,58 @@ export async function registerRoutes(
         });
       }
 
-      // Check if email already exists
-      const existingUser = await storage.getUserByEmail(email);
-      if (existingUser) {
-        return res.status(400).json({ error: "Email already in use" });
+      // Find and validate token
+      const inviteToken = await storage.getInviteTokenByToken(token);
+      if (!inviteToken) {
+        return res.status(400).json({ error: "Invalid or expired invite link" });
+      }
+      if (inviteToken.usedAt) {
+        return res.status(400).json({ error: "This invite has already been used" });
+      }
+      if (new Date() > inviteToken.expiresAt) {
+        return res.status(400).json({ error: "This invite link has expired" });
       }
 
-      // Hash password
+      // Hash password and update user
       const hashedPassword = await hashPassword(password);
-      
-      // Create admin user
-      const user = await storage.createUser({
-        email,
-        name,
-        password: hashedPassword,
-        role: "admin",
-      });
+      await storage.updateUser(inviteToken.userId, { password: hashedPassword });
 
-      res.json({ id: user.id, name: user.name, email: user.email, role: user.role });
+      // Mark token as used
+      await storage.markInviteTokenUsed(inviteToken.id);
+
+      res.json({ success: true, message: "Account activated successfully. You can now log in." });
     } catch (error) {
-      console.error("Failed to create admin user:", error);
-      res.status(500).json({ error: "Failed to create admin user" });
+      console.error("Failed to accept invite:", error);
+      res.status(500).json({ error: "Failed to accept invite" });
+    }
+  });
+
+  // Get invite token info (public endpoint for the accept-invite page)
+  app.get("/api/admin-users/invite/:token", async (req, res) => {
+    try {
+      const { token } = req.params;
+      
+      const inviteToken = await storage.getInviteTokenByToken(token);
+      if (!inviteToken) {
+        return res.status(400).json({ error: "Invalid invite link", valid: false });
+      }
+      if (inviteToken.usedAt) {
+        return res.status(400).json({ error: "This invite has already been used", valid: false });
+      }
+      if (new Date() > inviteToken.expiresAt) {
+        return res.status(400).json({ error: "This invite link has expired", valid: false });
+      }
+
+      // Get user info for display
+      const user = await storage.getUserById(inviteToken.userId);
+      if (!user) {
+        return res.status(400).json({ error: "User not found", valid: false });
+      }
+
+      res.json({ valid: true, name: user.name, email: user.email });
+    } catch (error) {
+      console.error("Failed to validate invite:", error);
+      res.status(500).json({ error: "Failed to validate invite", valid: false });
     }
   });
 

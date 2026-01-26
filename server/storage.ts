@@ -1,5 +1,5 @@
 import { 
-  users, clients, clinicians, timeSlots, formTemplates, formSubmissions, tasks, auditLogs, emailTemplates,
+  users, clients, clinicians, timeSlots, formTemplates, formSubmissions, tasks, auditLogs, emailTemplates, inviteTokens,
   type User, type InsertUser, type SafeUser,
   type Client, type InsertClient,
   type Clinician, type InsertClinician,
@@ -8,7 +8,8 @@ import {
   type FormSubmission, type InsertFormSubmission,
   type Task, type InsertTask,
   type AuditLog, type InsertAuditLog,
-  type EmailTemplate, type InsertEmailTemplate
+  type EmailTemplate, type InsertEmailTemplate,
+  type InviteToken
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, or, desc, sql, isNull } from "drizzle-orm";
@@ -23,6 +24,11 @@ export interface IStorage {
   updateUser(id: string, updates: Partial<InsertUser>): Promise<User | undefined>;
   deleteUser(id: string): Promise<void>;
   getAdminUsers(): Promise<User[]>;
+  
+  // ============ INVITE TOKENS ============
+  createInviteToken(userId: string, token: string, expiresAt: Date): Promise<InviteToken>;
+  getInviteTokenByToken(token: string): Promise<InviteToken | undefined>;
+  markInviteTokenUsed(tokenId: string): Promise<void>;
   
   // ============ CLINICIANS ============
   getAllClinicians(): Promise<Clinician[]>;
@@ -121,6 +127,25 @@ export class DatabaseStorage implements IStorage {
 
   async getAdminUsers(): Promise<User[]> {
     return db.select().from(users).where(eq(users.role, "admin"));
+  }
+
+  // ============ INVITE TOKENS ============
+  async createInviteToken(userId: string, token: string, expiresAt: Date): Promise<InviteToken> {
+    const [inviteToken] = await db.insert(inviteTokens).values({
+      userId,
+      token,
+      expiresAt,
+    }).returning();
+    return inviteToken;
+  }
+
+  async getInviteTokenByToken(token: string): Promise<InviteToken | undefined> {
+    const [inviteToken] = await db.select().from(inviteTokens).where(eq(inviteTokens.token, token));
+    return inviteToken || undefined;
+  }
+
+  async markInviteTokenUsed(tokenId: string): Promise<void> {
+    await db.update(inviteTokens).set({ usedAt: new Date() }).where(eq(inviteTokens.id, tokenId));
   }
 
   // ============ CLINICIANS ============

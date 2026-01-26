@@ -232,3 +232,17 @@ export const selectEmailTemplateSchema = createSelectSchema(emailTemplates);
 
 export type InsertEmailTemplate = z.infer<typeof insertEmailTemplateSchema>;
 export type EmailTemplate = typeof emailTemplates.$inferSelect;
+
+// ============ INVITE TOKENS ============
+export const inviteTokens = pgTable("invite_tokens", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").references(() => users.id).notNull(),
+  token: text("token").notNull().unique(),
+  expiresAt: timestamp("expires_at").notNull(),
+  usedAt: timestamp("used_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertInviteTokenSchema = createInsertSchema(inviteTokens).omit({ id: true, createdAt: true, usedAt: true });
+export type InsertInviteToken = z.infer<typeof insertInviteTokenSchema>;
+export type InviteToken = typeof inviteTokens.$inferSelect;

@@ -155,6 +155,7 @@ export const formSubmissions = pgTable("form_submissions", {
   clientId: varchar("client_id").references(() => clients.id).notNull(),
   formTemplateId: varchar("form_template_id").references(() => formTemplates.id).notNull(),
   responses: json("responses").notNull(), // Encrypted sensitive health data
+  isDraft: boolean("is_draft").default(false).notNull(),
   submittedAt: timestamp("submitted_at").defaultNow().notNull(),
 });
 

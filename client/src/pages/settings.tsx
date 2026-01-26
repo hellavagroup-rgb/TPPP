@@ -9,7 +9,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { toast } from "sonner";
-import { Loader2, Save, Mail } from "lucide-react";
+import { Loader2, Save, Mail, Trash2, UserPlus, Eye, EyeOff } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { useAuth } from "@/lib/auth";
 
 interface EmailTemplate {
   id: string;
@@ -225,6 +227,197 @@ function EmailTemplatesTab() {
   );
 }
 
+interface AdminUser {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+}
+
+function AdminUsersTab() {
+  const queryClient = useQueryClient();
+  const { user: currentUser } = useAuth();
+  const [showAddDialog, setShowAddDialog] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [newAdmin, setNewAdmin] = useState({ name: "", email: "", password: "" });
+
+  const { data: admins, isLoading } = useQuery<AdminUser[]>({
+    queryKey: ["/api/admin-users"],
+  });
+
+  const createMutation = useMutation({
+    mutationFn: async (data: { name: string; email: string; password: string }) => {
+      const res = await apiRequest("POST", "/api/admin-users", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin-users"] });
+      toast.success("Admin user created successfully");
+      setShowAddDialog(false);
+      setNewAdmin({ name: "", email: "", password: "" });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to create admin user");
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("DELETE", `/api/admin-users/${id}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin-users"] });
+      toast.success("Admin user deleted");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to delete admin user");
+    },
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newAdmin.name || !newAdmin.email || !newAdmin.password) {
+      toast.error("All fields are required");
+      return;
+    }
+    if (newAdmin.password.length < 8) {
+      toast.error("Password must be at least 8 characters");
+      return;
+    }
+    createMutation.mutate(newAdmin);
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center py-8">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <Card className="border-none shadow-sm">
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle>Admin Users</CardTitle>
+              <CardDescription>Manage administrator accounts with full system access.</CardDescription>
+            </div>
+            <Button onClick={() => setShowAddDialog(true)} data-testid="button-add-admin">
+              <UserPlus className="h-4 w-4 mr-2" />
+              Add Admin
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-3">
+            {admins?.map((admin) => (
+              <div key={admin.id} className="flex items-center justify-between p-3 border rounded-lg" data-testid={`admin-user-${admin.id}`}>
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center text-sm font-bold text-primary">
+                    {admin.name.substring(0, 2).toUpperCase()}
+                  </div>
+                  <div>
+                    <p className="font-medium">{admin.name}</p>
+                    <p className="text-sm text-muted-foreground">{admin.email}</p>
+                  </div>
+                </div>
+                {admin.id !== currentUser?.id && (
+                  <Button 
+                    variant="ghost" 
+                    size="sm" 
+                    className="text-destructive hover:text-destructive"
+                    onClick={() => deleteMutation.mutate(admin.id)}
+                    disabled={deleteMutation.isPending}
+                    data-testid={`button-delete-admin-${admin.id}`}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                )}
+                {admin.id === currentUser?.id && (
+                  <span className="text-xs text-muted-foreground px-2 py-1 bg-muted rounded">You</span>
+                )}
+              </div>
+            ))}
+            {(!admins || admins.length === 0) && (
+              <p className="text-center text-muted-foreground py-4">No admin users found</p>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add Admin User</DialogTitle>
+            <DialogDescription>
+              Create a new administrator account with full system access.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleSubmit}>
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="admin-name">Name</Label>
+                <Input
+                  id="admin-name"
+                  value={newAdmin.name}
+                  onChange={(e) => setNewAdmin({ ...newAdmin, name: e.target.value })}
+                  placeholder="Full name"
+                  data-testid="input-admin-name"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="admin-email">Email</Label>
+                <Input
+                  id="admin-email"
+                  type="email"
+                  value={newAdmin.email}
+                  onChange={(e) => setNewAdmin({ ...newAdmin, email: e.target.value })}
+                  placeholder="email@example.com"
+                  data-testid="input-admin-email"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="admin-password">Password</Label>
+                <div className="relative">
+                  <Input
+                    id="admin-password"
+                    type={showPassword ? "text" : "password"}
+                    value={newAdmin.password}
+                    onChange={(e) => setNewAdmin({ ...newAdmin, password: e.target.value })}
+                    placeholder="Minimum 8 characters"
+                    data-testid="input-admin-password"
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="absolute right-0 top-0 h-full px-3"
+                    onClick={() => setShowPassword(!showPassword)}
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setShowAddDialog(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={createMutation.isPending} data-testid="button-submit-admin">
+                {createMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                Create Admin
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
 export default function Settings() {
   return (
     <div className="space-y-6">
@@ -298,28 +491,7 @@ export default function Settings() {
         </TabsContent>
 
         <TabsContent value="team">
-          <Card className="border-none shadow-sm">
-            <CardHeader>
-              <CardTitle>Team Management</CardTitle>
-              <CardDescription>Manage access for your staff.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                {["Sarah", "Rosie", "Suzanne"].map((member) => (
-                  <div key={member} className="flex items-center justify-between p-2 hover:bg-muted rounded-md">
-                    <div className="flex items-center gap-3">
-                      <div className="h-8 w-8 rounded-full bg-secondary flex items-center justify-center text-xs font-bold">
-                        {member.charAt(0)}
-                      </div>
-                      <span className="font-medium">{member}</span>
-                    </div>
-                    <Button variant="ghost" size="sm">Edit</Button>
-                  </div>
-                ))}
-                <Button variant="outline" className="w-full mt-2">+ Add Team Member</Button>
-              </div>
-            </CardContent>
-          </Card>
+          <AdminUsersTab />
         </TabsContent>
       </Tabs>
     </div>

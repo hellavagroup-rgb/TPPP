@@ -303,6 +303,74 @@ export async function registerRoutes(
     }
   });
 
+  // ============ ADMIN USERS ============
+  // Get all admin users
+  app.get("/api/admin-users", requireAdmin, async (req, res) => {
+    try {
+      const admins = await storage.getAdminUsers();
+      res.json(admins);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch admin users" });
+    }
+  });
+
+  // Create new admin user
+  app.post("/api/admin-users", requireAdmin, async (req, res) => {
+    try {
+      const { name, email, password } = req.body;
+      
+      if (!name || !email || !password) {
+        return res.status(400).json({ error: "Name, email, and password are required" });
+      }
+
+      if (password.length < 8) {
+        return res.status(400).json({ error: "Password must be at least 8 characters" });
+      }
+
+      // Check if email already exists
+      const existingUser = await storage.getUserByEmail(email);
+      if (existingUser) {
+        return res.status(400).json({ error: "Email already in use" });
+      }
+
+      // Hash password
+      const hashedPassword = await hashPassword(password);
+      
+      // Create admin user
+      const user = await storage.createUser({
+        email,
+        name,
+        password: hashedPassword,
+        role: "admin",
+      });
+
+      res.json({ id: user.id, name: user.name, email: user.email, role: user.role });
+    } catch (error) {
+      console.error("Failed to create admin user:", error);
+      res.status(500).json({ error: "Failed to create admin user" });
+    }
+  });
+
+  // Delete admin user
+  app.delete("/api/admin-users/:id", requireAdmin, async (req, res) => {
+    try {
+      // Prevent deleting yourself
+      if (req.params.id === req.user!.id) {
+        return res.status(400).json({ error: "Cannot delete your own account" });
+      }
+
+      const user = await storage.getUserById(req.params.id);
+      if (!user || user.role !== "admin") {
+        return res.status(404).json({ error: "Admin user not found" });
+      }
+
+      await storage.deleteUser(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete admin user" });
+    }
+  });
+
   // ============ AVAILABILITY / TIME SLOTS ============
   app.get("/api/timeslots/:clinicianId", requireAuth, async (req, res) => {
     try {

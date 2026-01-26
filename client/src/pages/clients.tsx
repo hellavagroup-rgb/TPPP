@@ -45,7 +45,8 @@ import {
   FileText,
   Download,
   Loader2,
-  RotateCcw
+  RotateCcw,
+  Users
 } from "lucide-react";
 import { useState } from "react";
 import { useLocation } from "wouter";
@@ -55,6 +56,8 @@ import { useToast } from "@/hooks/use-toast";
 import { format, parseISO, isSameDay } from "date-fns";
 import { apiRequest } from "@/lib/queryClient";
 import type { Client as ClientType, Clinician, FormTemplate as FormTemplateType, TimeSlot } from "@shared/schema";
+
+type ClinicianWithAvailability = Clinician & { name: string; availability: TimeSlot[] };
 
 function isSlotPending(slot: TimeSlot): boolean {
   const today = new Date();
@@ -209,6 +212,7 @@ export default function Clients() {
   const [isArchiveDialogOpen, setIsArchiveDialogOpen] = useState(false);
   const [clientToArchive, setClientToArchive] = useState<ClientType | null>(null);
   const [isAllocateDialogOpen, setIsAllocateDialogOpen] = useState(false);
+  const [isManualAllocation, setIsManualAllocation] = useState(false); // Track if current allocation is manual
 
   const archiveClientMutation = useMutation({
     mutationFn: async (clientId: string) => {
@@ -448,7 +452,9 @@ export default function Clients() {
   };
 
   const handleAssign = (clinicianId: string, slotId: string, allocationMethod: "form" | "manual" = "form") => {
-    const clientToAssign = allocationMethod === "manual" ? manualAllocateClient : selectedClient;
+    // For unified dialog, always use selectedClient
+    // For legacy manual dialog (isManualAllocateOpen), use manualAllocateClient
+    const clientToAssign = isManualAllocateOpen ? manualAllocateClient : selectedClient;
     if (clientToAssign) {
       assignClientMutation.mutate({ 
         clientId: clientToAssign.id, 
@@ -460,7 +466,11 @@ export default function Clients() {
   };
 
   const handleOpenManualAllocate = (client: ClientType) => {
-    setLocation(`/availability?allocate=${client.id}`);
+    // Open the same allocation dialog as the "Allocate" button, but mark as manual
+    setSelectedClient(client);
+    setIsManualAllocation(true);
+    fetchClientAvailability(client.id);
+    setIsAllocateDialogOpen(true);
   };
 
   const handleOpenEditClient = (client: ClientType) => {
@@ -688,10 +698,49 @@ export default function Clients() {
     }
   };
 
+  // Calculate how many slots match client availability for ranking
+  const countMatchingSlots = (clinician: ClinicianWithAvailability, clientAvail: Record<string, string[]> | null): number => {
+    if (!clientAvail || Object.keys(clientAvail).length === 0) return 0;
+    if (!clinician.availability) return 0;
+    
+    let matchCount = 0;
+    clinician.availability.forEach(slot => {
+      if (slot.type === "Vacation" || slot.isBooked) return;
+      const day = slot.day || "";
+      const clientSlots = clientAvail[day] || [];
+      if (clientSlots.length === 0) return;
+      
+      // Check if any client slot overlaps with clinician slot
+      const slotStart = parseInt(slot.startTime?.split(":")[0] || "0");
+      const slotEnd = parseInt(slot.endTime?.split(":")[0] || "0");
+      
+      for (const cs of clientSlots) {
+        const clientHour = parseInt(cs.split(":")[0]);
+        if (clientHour >= slotStart && clientHour < slotEnd) {
+          matchCount++;
+          break;
+        }
+      }
+    });
+    return matchCount;
+  };
+
   const getCliniciansForAllocation = (client: ClientType) => {
-      if (showAllClinicians) return clinicians;
-      // Filter by match logic
-      return clinicians.filter(c => isClinicianMatch(c, client));
+    let filtered = showAllClinicians ? clinicians : clinicians.filter(c => isClinicianMatch(c, client));
+    
+    // Sort by availability match count (most matches first), then by capacity
+    return [...filtered].sort((a, b) => {
+      const matchA = countMatchingSlots(a, clientAvailabilityForAllocation);
+      const matchB = countMatchingSlots(b, clientAvailabilityForAllocation);
+      
+      // More matches = higher rank
+      if (matchB !== matchA) return matchB - matchA;
+      
+      // Secondary: prefer clinicians with more capacity
+      const capacityA = (a.capacity || 20) - (a.currentLoad || 0);
+      const capacityB = (b.capacity || 20) - (b.currentLoad || 0);
+      return capacityB - capacityA;
+    });
   };
 
   return (
@@ -1003,7 +1052,7 @@ export default function Clients() {
                     {client.insurer && client.insurer !== "Private" && (
                       <Badge variant="outline" className="text-[10px] mb-2">{client.insurer}</Badge>
                     )}
-                    <Button size="sm" className="w-full gap-1 text-xs mt-2 bg-primary hover:bg-primary/90" onClick={() => { setSelectedClient(client); fetchClientAvailability(client.id); setIsAllocateDialogOpen(true); }}>
+                    <Button size="sm" className="w-full gap-1 text-xs mt-2 bg-primary hover:bg-primary/90" onClick={() => { setSelectedClient(client); setIsManualAllocation(false); fetchClientAvailability(client.id); setIsAllocateDialogOpen(true); }}>
                       <UserCheck className="h-3 w-3" /> Allocate
                     </Button>
                   </CardContent>
@@ -1188,7 +1237,7 @@ export default function Clients() {
       )}
 
       {/* Allocate Dialog (from Kanban board) */}
-      <Dialog open={isAllocateDialogOpen} onOpenChange={setIsAllocateDialogOpen}>
+      <Dialog open={isAllocateDialogOpen} onOpenChange={(open) => { setIsAllocateDialogOpen(open); if (!open) setIsManualAllocation(false); }}>
         <DialogContent className="sm:max-w-[600px] max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Allocate Clinician Slot</DialogTitle>
@@ -1200,14 +1249,33 @@ export default function Clients() {
             <div className="p-3 bg-muted/30 rounded border border-border space-y-2">
               <div className="flex items-center justify-between">
                 <p className="text-xs text-muted-foreground font-medium">CLIENT PROFILE</p>
-                <Badge variant={(selectedClient?.insurer || "Private") === "Private" ? "outline" : "default"} className="text-[10px]">
-                  {selectedClient?.insurer || "Private"}
-                </Badge>
+                <div className="flex items-center gap-2">
+                  <Badge variant={(selectedClient?.insurer || "Private") === "Private" ? "outline" : "default"} className="text-[10px]">
+                    {selectedClient?.insurer || "Private"}
+                  </Badge>
+                  <Button 
+                    variant="ghost" 
+                    size="sm" 
+                    className="h-6 text-xs gap-1"
+                    onClick={() => {
+                      if (selectedClient) {
+                        handleOpenViewResponses(selectedClient);
+                      }
+                    }}
+                  >
+                    <Eye className="h-3 w-3" /> View Form
+                  </Button>
+                </div>
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap">
                 {(selectedClient?.presentingIssues || []).map(i => <Badge key={i} variant="secondary">{i}</Badge>)}
               </div>
-              <p className="text-sm italic">"{selectedClient?.notes}"</p>
+              {selectedClient?.notes && (
+                <p className="text-sm italic">"{selectedClient.notes}"</p>
+              )}
+              {selectedClient?.referralSource && (
+                <p className="text-xs text-muted-foreground">Referral: {selectedClient.referralSource}</p>
+              )}
             </div>
             
             <div className="space-y-4">
@@ -1281,7 +1349,21 @@ export default function Clients() {
                           )}
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap justify-end">
+                        {/* Client capacity indicator */}
+                        <div className="flex items-center text-[10px] text-muted-foreground bg-muted/50 px-2 py-0.5 rounded" title="Client Capacity">
+                          <Users className="h-3 w-3 mr-1" />
+                          {clinician.currentLoad || 0}/{clinician.capacity || 20}
+                        </div>
+                        
+                        {/* Bupa allocation indicator */}
+                        {clinician.allocateForBupa && (
+                          <div className="flex items-center text-[10px] text-blue-600 bg-blue-50 px-2 py-0.5 rounded" title="Allocate for Bupa">
+                            <CheckCircle2 className="h-3 w-3 mr-1" />
+                            Bupa
+                          </div>
+                        )}
+                        
                         {(clinician.maxNewClients || 0) <= (clinician.currentLoad % 5) && (
                           <div className="flex items-center text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded" title="Capacity Limit Reached">
                             <Briefcase className="h-3 w-3 mr-1" />
@@ -1321,7 +1403,7 @@ export default function Clients() {
                                       ? "opacity-60 border-slate-200" 
                                       : "hover:border-primary hover:bg-primary/5"
                             }`}
-                            onClick={() => { handleAssign(clinician.id, slot.id); setIsAllocateDialogOpen(false); }}
+                            onClick={() => { handleAssign(clinician.id, slot.id, isManualAllocation ? "manual" : "form"); setIsAllocateDialogOpen(false); setIsManualAllocation(false); }}
                           >
                             {slotIsMatch && !isPending && <span className="absolute -top-1 -right-1 bg-emerald-500 text-white text-[8px] px-1 rounded">Match</span>}
                             {isPending && <span className="absolute -top-1 -right-1 bg-amber-500 text-white text-[8px] px-1 rounded">Pending</span>}

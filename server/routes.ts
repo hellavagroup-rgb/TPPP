@@ -98,6 +98,29 @@ export async function registerRoutes(
     }
   });
 
+  // Update current user profile
+  app.patch("/api/auth/profile", requireAuth, async (req, res) => {
+    try {
+      const { name } = req.body;
+      const userId = (req.user as any).id;
+      
+      if (!name || !name.trim()) {
+        return res.status(400).json({ error: "Name is required" });
+      }
+
+      const updatedUser = await storage.updateUser(userId, { name: name.trim() });
+      if (!updatedUser) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      const { password: _, ...safeUser } = updatedUser;
+      res.json(safeUser);
+    } catch (error) {
+      console.error("Failed to update profile:", error);
+      res.status(500).json({ error: "Failed to update profile" });
+    }
+  });
+
   // ============ CLINICIAN ROUTES ============
   app.get("/api/clinicians", requireAuth, async (req, res) => {
     try {

@@ -234,6 +234,68 @@ interface AdminUser {
   role: string;
 }
 
+function AccountTab() {
+  const { user, refreshUser } = useAuth();
+  const [name, setName] = useState(user?.name || "");
+  const [isSaving, setIsSaving] = useState(false);
+
+  const handleSave = async () => {
+    if (!name.trim()) {
+      toast.error("Name is required");
+      return;
+    }
+    setIsSaving(true);
+    try {
+      const res = await apiRequest("PATCH", "/api/auth/profile", { name: name.trim() });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to update profile");
+      }
+      await refreshUser();
+      toast.success("Profile updated successfully");
+    } catch (error: any) {
+      toast.error(error.message || "Failed to update profile");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <Card className="border-none shadow-sm">
+      <CardHeader>
+        <CardTitle>Profile</CardTitle>
+        <CardDescription>Manage your account settings.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid gap-2">
+          <Label htmlFor="profile-name">Name</Label>
+          <Input 
+            id="profile-name" 
+            value={name} 
+            onChange={(e) => setName(e.target.value)}
+            data-testid="input-profile-name"
+          />
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="profile-email">Email</Label>
+          <Input 
+            id="profile-email" 
+            value={user?.email || ""} 
+            disabled 
+            className="bg-muted"
+            data-testid="input-profile-email"
+          />
+          <p className="text-xs text-muted-foreground">Email cannot be changed.</p>
+        </div>
+        <Button onClick={handleSave} disabled={isSaving} data-testid="button-save-profile">
+          {isSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+          Save Changes
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
 function AdminUsersTab() {
   const queryClient = useQueryClient();
   const { user: currentUser } = useAuth();
@@ -449,23 +511,7 @@ export default function Settings() {
         </TabsContent>
 
         <TabsContent value="account">
-          <Card className="border-none shadow-sm">
-            <CardHeader>
-              <CardTitle>Profile</CardTitle>
-              <CardDescription>Manage your account settings.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-2">
-                <Label htmlFor="name">Name</Label>
-                <Input id="name" defaultValue={user?.name || ""} disabled className="bg-muted" />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="email">Email</Label>
-                <Input id="email" defaultValue={user?.email || ""} disabled className="bg-muted" />
-              </div>
-              <p className="text-sm text-muted-foreground">Contact an administrator to update your profile information.</p>
-            </CardContent>
-          </Card>
+          <AccountTab />
         </TabsContent>
 
         <TabsContent value="team">

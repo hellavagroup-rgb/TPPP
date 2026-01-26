@@ -308,7 +308,9 @@ export async function registerRoutes(
   app.get("/api/admin-users", requireAdmin, async (req, res) => {
     try {
       const admins = await storage.getAdminUsers();
-      res.json(admins);
+      // Strip password hashes for security
+      const safeAdmins = admins.map(({ password, ...admin }) => admin);
+      res.json(safeAdmins);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch admin users" });
     }

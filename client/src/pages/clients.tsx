@@ -728,17 +728,21 @@ export default function Clients() {
   const getCliniciansForAllocation = (client: ClientType) => {
     let filtered = showAllClinicians ? clinicians : clinicians.filter(c => isClinicianMatch(c, client));
     
-    // Sort by availability match count (most matches first), then by capacity
+    // Sort by: 1) Has capacity (0 capacity goes to bottom), 2) availability match, 3) new client capacity
     return [...filtered].sort((a, b) => {
-      const matchA = countMatchingSlots(a, clientAvailabilityForAllocation);
-      const matchB = countMatchingSlots(b, clientAvailabilityForAllocation);
-      
-      // More matches = higher rank
-      if (matchB !== matchA) return matchB - matchA;
-      
-      // Secondary: prefer clinicians with more new client capacity
       const capacityA = a.maxNewClients ?? 0;
       const capacityB = b.maxNewClients ?? 0;
+      
+      // Primary: clinicians with 0 capacity go to the bottom
+      if (capacityA === 0 && capacityB > 0) return 1;
+      if (capacityB === 0 && capacityA > 0) return -1;
+      
+      // Secondary: availability match count (most matches first)
+      const matchA = countMatchingSlots(a, clientAvailabilityForAllocation);
+      const matchB = countMatchingSlots(b, clientAvailabilityForAllocation);
+      if (matchB !== matchA) return matchB - matchA;
+      
+      // Tertiary: prefer clinicians with more new client capacity
       return capacityB - capacityA;
     });
   };
@@ -1351,9 +1355,13 @@ export default function Clients() {
                       </div>
                       <div className="flex items-center gap-2 flex-wrap justify-end">
                         {/* New client capacity indicator */}
-                        <div className="flex items-center text-[10px] text-muted-foreground bg-muted/50 px-2 py-0.5 rounded" title="New Client Capacity">
+                        <div className={`flex items-center text-[10px] px-2 py-0.5 rounded ${
+                          (clinician.maxNewClients ?? 0) === 0 
+                            ? "text-red-600 bg-red-50" 
+                            : "text-muted-foreground bg-muted/50"
+                        }`} title="New Client Capacity">
                           <Users className="h-3 w-3 mr-1" />
-                          {clinician.maxNewClients ?? 0} available
+                          {(clinician.maxNewClients ?? 0) === 0 ? "No capacity" : `${clinician.maxNewClients} available`}
                         </div>
                         
                         {/* Bupa allocation indicator */}
@@ -1361,13 +1369,6 @@ export default function Clients() {
                           <div className="flex items-center text-[10px] text-blue-600 bg-blue-50 px-2 py-0.5 rounded" title="Allocate for Bupa">
                             <CheckCircle2 className="h-3 w-3 mr-1" />
                             Bupa
-                          </div>
-                        )}
-                        
-                        {(clinician.maxNewClients || 0) <= (clinician.currentLoad % 5) && (
-                          <div className="flex items-center text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded" title="Capacity Limit Reached">
-                            <Briefcase className="h-3 w-3 mr-1" />
-                            Cap Reached
                           </div>
                         )}
                         {hasVacationConflict(clinician) && (
@@ -1391,10 +1392,10 @@ export default function Clients() {
                           <Button 
                             key={slot.id}
                             variant={slot.isBooked ? "ghost" : "outline"}
-                            disabled={slot.isBooked}
+                            disabled={slot.isBooked || (clinician.maxNewClients ?? 0) === 0}
                             className={`justify-start h-auto py-2 px-3 text-xs relative ${
-                              slot.isBooked 
-                                ? "opacity-50 line-through decoration-destructive" 
+                              slot.isBooked || (clinician.maxNewClients ?? 0) === 0
+                                ? "opacity-50 cursor-not-allowed" 
                                 : isPending
                                   ? "bg-amber-50 border-amber-300 hover:border-amber-400 hover:bg-amber-100"
                                   : slotIsMatch 

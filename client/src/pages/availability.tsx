@@ -261,8 +261,19 @@ export default function Availability() {
     }
   }, [isDialogOpen, clinicians, user, dialogClinicianId]);
 
-  const tierOrder: Record<string, number> = { "High": 0, "Mid": 1, "Low": 2 };
+  // Sort clinicians by most availability first (number of slots), then by tier
   const allCliniciansData = [...(cliniciansWithSlots.data || [])].sort((a, b) => {
+    // Count active slots (non-vacation slots)
+    const slotsA = a.slots?.filter(s => s.type !== "Vacation").length || 0;
+    const slotsB = b.slots?.filter(s => s.type !== "Vacation").length || 0;
+    
+    // Sort by most slots first
+    if (slotsB !== slotsA) {
+      return slotsB - slotsA;
+    }
+    
+    // Secondary sort by tier
+    const tierOrder: Record<string, number> = { "High": 0, "Mid": 1, "Low": 2 };
     const tierA = tierOrder[a.tier || "Mid"] ?? 1;
     const tierB = tierOrder[b.tier || "Mid"] ?? 1;
     return tierA - tierB;

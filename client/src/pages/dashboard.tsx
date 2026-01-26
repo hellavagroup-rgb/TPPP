@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { 
   Users, 
   FileText, 
-  Calendar, 
   AlertCircle, 
   Loader2,
   Mail,
@@ -127,14 +126,6 @@ export default function Dashboard() {
       icon: Users,
       color: "text-purple-600",
       bg: "bg-purple-100"
-    },
-    {
-      title: "Allocated",
-      value: clients.filter(c => c.status === "Scheduled").length,
-      change: "Confirmed allocations",
-      icon: Calendar,
-      color: "text-emerald-600",
-      bg: "bg-emerald-100"
     },
     {
       title: "Waitlist",

@@ -18,6 +18,7 @@ import Layout from "@/components/layout";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import Login from "@/pages/login";
 import ClinicianProfile from "@/pages/clinician-profile";
+import AcceptInvite from "@/pages/accept-invite";
 import { useEffect } from "react";
 
 function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
@@ -50,6 +51,10 @@ function Router() {
 
   if (location === "/login") {
       return <Login />;
+  }
+
+  if (location.startsWith("/accept-invite")) {
+      return <AcceptInvite />;
   }
 
   return (

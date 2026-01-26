@@ -103,15 +103,17 @@ export default function Clients() {
   const { toast } = useToast();
   const [, setLocation] = useLocation();
   const [searchTerm, setSearchTerm] = useState("");
-  const [filterStatus, setFilterStatus] = useState<string>("All");
   const [selectedClient, setSelectedClient] = useState<ClientType | null>(null);
 
-  // Fetch data from API - include archived when that filter is selected
+  // View toggle states - defined early for query dependency
+  const [showConfirmedState, setShowConfirmedState] = useState(false);
+  const [showArchivedState, setShowArchivedState] = useState(false);
+
+  // Fetch data from API - include archived when that toggle is enabled
   const { data: clients = [] } = useQuery<ClientType[]>({
-    queryKey: ["/api/clients", filterStatus === "Archived"],
+    queryKey: ["/api/clients", showArchivedState],
     queryFn: async () => {
-      const includeArchived = filterStatus === "Archived";
-      const res = await fetch(`/api/clients?includeArchived=${includeArchived}`, { credentials: "include" });
+      const res = await fetch(`/api/clients?includeArchived=${showArchivedState}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch clients");
       return res.json();
     },
@@ -171,6 +173,7 @@ export default function Clients() {
       toast({ title: "Client Assigned", description: "Client has been allocated a slot." });
       setSelectedClient(null);
       setIsManualAllocateOpen(false);
+      setIsAllocateDialogOpen(false);
     },
     onError: () => {
       toast({ title: "Error", description: "Failed to assign client.", variant: "destructive" });
@@ -205,6 +208,7 @@ export default function Clients() {
   // Archive Client State
   const [isArchiveDialogOpen, setIsArchiveDialogOpen] = useState(false);
   const [clientToArchive, setClientToArchive] = useState<ClientType | null>(null);
+  const [isAllocateDialogOpen, setIsAllocateDialogOpen] = useState(false);
 
   const archiveClientMutation = useMutation({
     mutationFn: async (clientId: string) => {
@@ -404,16 +408,20 @@ export default function Clients() {
     }
   };
 
+  // Unified filtering based on toggle states and search term
   const filteredClients = clients.filter(client => {
-    // Search now works on ID instead of Name
-    const matchesSearch = client.displayId.toLowerCase().includes(searchTerm.toLowerCase());
-    // Handle "Archived" filter specially - check isArchived flag
-    if (filterStatus === "Archived") {
+    const matchesSearch = searchTerm === "" || client.displayId.toLowerCase().includes(searchTerm.toLowerCase());
+    
+    if (showArchivedState) {
+      // Show only archived clients
       return matchesSearch && client.isArchived;
     }
-    // For other filters, exclude archived clients
-    const matchesStatus = filterStatus === "All" || client.status === filterStatus;
-    return matchesSearch && matchesStatus && !client.isArchived;
+    if (showConfirmedState) {
+      // Show only Scheduled (Confirmed) clients that are not archived
+      return matchesSearch && client.status === "Scheduled" && !client.isArchived;
+    }
+    // Kanban view: show non-archived clients (all statuses for Kanban columns)
+    return matchesSearch && !client.isArchived;
   });
 
   // Display labels for statuses (UI labels differ from database values)
@@ -814,7 +822,7 @@ export default function Clients() {
         </Dialog>
       </div>
 
-      {/* Filters and Search */}
+      {/* Search and View Toggle */}
       <div className="flex flex-col sm:flex-row gap-4 items-center bg-card p-4 rounded-lg shadow-sm border border-border">
         <div className="relative flex-1 w-full">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -825,287 +833,281 @@ export default function Clients() {
             onChange={(e) => setSearchTerm(e.target.value)}
           />
         </div>
-        <div className="flex items-center gap-2 w-full sm:w-auto">
-          <Filter className="h-4 w-4 text-muted-foreground" />
-          <Select value={filterStatus} onValueChange={setFilterStatus}>
-            <SelectTrigger className="w-[180px]">
-              <SelectValue placeholder="Filter Status" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="All">All Statuses</SelectItem>
-              <SelectItem value="New">Pending Intake</SelectItem>
-              <SelectItem value="Forms Sent">Screen Booked/Sent</SelectItem>
-              <SelectItem value="Forms Completed">Forms Completed</SelectItem>
-              <SelectItem value="Assigned">Allocated - Awaiting Confirmation</SelectItem>
-              <SelectItem value="Scheduled">Allocated</SelectItem>
-              <SelectItem value="Waitlist">Waitlist</SelectItem>
-              <SelectItem value="Archived">Archived</SelectItem>
-            </SelectContent>
-          </Select>
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <Switch 
+              id="show-confirmed"
+              checked={showConfirmedState}
+              onCheckedChange={(checked) => { setShowConfirmedState(checked); if (checked) setShowArchivedState(false); }}
+            />
+            <Label htmlFor="show-confirmed" className="text-sm cursor-pointer">Show Confirmed</Label>
+          </div>
+          <div className="flex items-center gap-2">
+            <Switch 
+              id="show-archived"
+              checked={showArchivedState}
+              onCheckedChange={(checked) => { setShowArchivedState(checked); if (checked) setShowConfirmedState(false); }}
+            />
+            <Label htmlFor="show-archived" className="text-sm cursor-pointer">Show Archived</Label>
+          </div>
         </div>
       </div>
 
-      {/* Client List */}
-      <div className="grid gap-4">
-        {filteredClients.map((client) => (
-          <Card key={client.id} className="overflow-hidden border-none shadow-sm hover:shadow-md transition-all group">
-            <CardContent className="p-0">
-              <div className="flex flex-col md:flex-row items-center p-4 gap-4">
-                
-                {/* Status Indicator Strip */}
-                <div className={`w-full md:w-1 h-1 md:h-12 rounded-full ${getStatusColor(client.status).split(" ")[0].replace("bg-", "bg-opacity-100 bg-")}`}></div>
-
-                <div className="flex-1 min-w-0 grid gap-1">
-                  <div className="flex items-center gap-2">
-                    <Shield className="h-4 w-4 text-muted-foreground" />
-                    <h3 className="font-semibold text-lg leading-none font-mono tracking-tight">{client.displayId}</h3>
-                    <Badge variant="secondary" className={getStatusColor(client.status)}>
-                      {getStatusDisplayLabel(client.status)}
-                    </Badge>
-                  </div>
-                  <p className="text-sm text-muted-foreground flex items-center gap-2">
-                    <Clock className="h-3 w-3" /> Intake: {formatDateUK(client.intakeDate)}
-                    {client.referralSource && (
-                        <>
-                            <span className="text-border mx-1">|</span>
-                            <span>{client.referralSource}</span>
-                        </>
-                    )}
-                    {client.insurer && (
-                        <>
-                            <span className="text-border mx-1">|</span>
-                            <span className="text-primary font-medium">{client.insurer}</span>
-                        </>
-                    )}
-                  </p>
-                </div>
-
-                {/* Presenting Issues */}
-                <div className="hidden md:flex gap-2">
-                    {(client.presentingIssues || []).map(issue => (
-                        <Badge key={issue} variant="outline" className="text-xs font-normal">
-                            {issue}
-                        </Badge>
-                    ))}
-                </div>
-
-                {/* Assigned Clinician (if any) */}
-                {client.assignedClinicianId && (
-                   <div className="flex items-center gap-2 text-sm text-muted-foreground bg-secondary/50 px-3 py-1.5 rounded-full">
-                      <UserCheck className="h-4 w-4" />
-                      {clinicians.find(c => c.id === client.assignedClinicianId)?.name.split(",")[0]}
-                      {client.assignedSlot && (
-                          <span className="text-xs font-mono border-l border-foreground/10 pl-2 ml-1">
-                              {client.assignedSlot}
-                          </span>
-                      )}
-                   </div>
-                )}
-
-                {/* Actions */}
-                <div className="flex items-center gap-2 ml-auto">
-                    {client.status === "New" && (
-                        <Button size="sm" variant="outline" className="gap-2" onClick={() => handleOpenSendForms(client)}>
-                            <Mail className="h-4 w-4" /> Send Forms
-                        </Button>
-                    )}
-                    
-                    {client.status === "Forms Completed" && (
-                         <Dialog>
-                            <DialogTrigger asChild>
-                                <Button size="sm" className="gap-2 bg-primary hover:bg-primary/90" onClick={() => { setSelectedClient(client); fetchClientAvailability(client.id); }}>
-                                    <UserCheck className="h-4 w-4" /> Allocate
-                                </Button>
-                            </DialogTrigger>
-                            <DialogContent className="sm:max-w-[600px] max-h-[80vh] overflow-y-auto">
-                                <DialogHeader>
-                                    <DialogTitle>Allocate Clinician Slot</DialogTitle>
-                                    <DialogDescription>
-                                        Assign {client.displayId} to an available time slot.
-                                    </DialogDescription>
-                                </DialogHeader>
-                                <div className="grid gap-6 py-4">
-                                    <div className="p-3 bg-muted/30 rounded border border-border space-y-2">
-                                        <div className="flex items-center justify-between">
-                                            <p className="text-xs text-muted-foreground font-medium">CLIENT PROFILE</p>
-                                            <Badge variant={(client.insurer || "Private") === "Private" ? "outline" : "default"} className="text-[10px]">
-                                                {client.insurer || "Private"}
-                                            </Badge>
-                                        </div>
-                                        <div className="flex gap-2">
-                                            {(client.presentingIssues || []).map(i => <Badge key={i} variant="secondary">{i}</Badge>)}
-                                        </div>
-                                        <p className="text-sm italic">"{client.notes}"</p>
-                                    </div>
-                                    
-                                    <div className="space-y-4">
-                                        {clientAvailabilityForAllocation && Object.keys(clientAvailabilityForAllocation).length > 0 && (
-                                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                                                <p className="text-xs font-medium text-blue-800 mb-2">Client's Stated Availability:</p>
-                                                <div className="flex flex-wrap gap-1">
-                                                    {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map(day => {
-                                                        const slots = clientAvailabilityForAllocation[day];
-                                                        if (!slots || slots.length === 0) return null;
-                                                        const hourLabels = slots.map(s => {
-                                                            const h = parseInt(s.split(":")[0]);
-                                                            return h < 12 ? `${h}am` : h === 12 ? "12pm" : `${h - 12}pm`;
-                                                        }).join(", ");
-                                                        return (
-                                                            <span key={day} className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-[10px]">
-                                                                {day.slice(0, 3)}: {hourLabels}
-                                                            </span>
-                                                        );
-                                                    })}
-                                                </div>
-                                                <p className="text-[10px] text-blue-600 mt-2">Slots with green "Match" badges align with client availability</p>
-                                            </div>
-                                        )}
-
-                                        <div className="flex items-center justify-between">
-                                            <p className="text-sm font-medium text-muted-foreground">AVAILABLE SLOTS</p>
-                                            <div className="flex items-center gap-2">
-                                                <Label htmlFor="override-mode" className="text-xs text-muted-foreground cursor-pointer">Admin Override</Label>
-                                                <Switch id="override-mode" checked={showAllClinicians} onCheckedChange={setShowAllClinicians} />
-                                            </div>
-                                        </div>
-                                        
-                                        {getCliniciansForAllocation(client).length === 0 && (
-                                            <div className="text-center py-8 text-muted-foreground border rounded-md bg-slate-50">
-                                                <AlertTriangle className="h-8 w-8 mx-auto mb-2 text-amber-500" />
-                                                <p>No matching clinicians found.</p>
-                                                <p className="text-xs mt-1">Try enabling "Admin Override" to see all schedules.</p>
-                                            </div>
-                                        )}
-
-                                        {getCliniciansForAllocation(client).map(clinician => {
-                                            const isMatch = isClinicianMatch(clinician, client);
-                                            return (
-                                            <div key={clinician.id} className={!isMatch ? "opacity-75" : ""}>
-                                                <div className="flex items-center justify-between mb-2">
-                                                    <div className="flex items-center gap-2">
-                                                        <div className="h-6 w-6 rounded-full bg-secondary flex items-center justify-center text-[10px] font-bold">
-                                                            {clinician.avatar}
-                                                        </div>
-                                                        <div>
-                                                            <p className="font-medium text-sm">
-                                                                {clinician.name}
-                                                                {!isMatch && <span className="text-xs text-muted-foreground ml-2 font-normal italic">(Override)</span>}
-                                                            </p>
-                                                            {clinician.insurers && clinician.insurers.length > 0 && (
-                                                                <div className="flex flex-wrap gap-1 mt-0.5">
-                                                                    {clinician.insurers.map(ins => (
-                                                                        <span 
-                                                                            key={ins} 
-                                                                            className={`text-[9px] px-1.5 py-0.5 rounded ${
-                                                                                ins === (client.insurer || "Private") 
-                                                                                    ? "bg-green-100 text-green-700 font-medium" 
-                                                                                    : "bg-muted text-muted-foreground"
-                                                                            }`}
-                                                                        >
-                                                                            {ins}
-                                                                        </span>
-                                                                    ))}
-                                                                </div>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                    <div className="flex items-center gap-2">
-                                                        {(clinician.maxNewClients || 0) <= (clinician.currentLoad % 5) && (
-                                                            <div className="flex items-center text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded" title="Capacity Limit Reached">
-                                                                <Briefcase className="h-3 w-3 mr-1" />
-                                                                Cap Reached
-                                                            </div>
-                                                        )}
-                                                        {hasVacationConflict(clinician) && (
-                                                            <div className="flex items-center text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded">
-                                                                <AlertTriangle className="h-3 w-3 mr-1" />
-                                                                Vacation
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                                
-                                                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pl-8">
-                                                    {clinician.availability.filter(s => s.type !== "Vacation").map(slot => {
-                                                        const isPending = isSlotPending(slot);
-                                                        const pendingDate = getSlotPendingDate(slot);
-                                                        const availMatch = doesSlotMatchClientAvailability(slot, clientAvailabilityForAllocation);
-                                                        const isMatch = availMatch === true && !slot.isBooked;
-                                                        const noMatch = availMatch === false;
-                                                        
-                                                        return (
-                                                        <Button 
-                                                            key={slot.id}
-                                                            variant={slot.isBooked ? "ghost" : "outline"}
-                                                            disabled={slot.isBooked}
-                                                            className={`justify-start h-auto py-2 px-3 text-xs relative ${
-                                                                slot.isBooked 
-                                                                    ? "opacity-50 line-through decoration-destructive" 
-                                                                    : isPending
-                                                                        ? "bg-amber-50 border-amber-300 hover:border-amber-400 hover:bg-amber-100"
-                                                                        : isMatch 
-                                                                            ? "border-emerald-400 bg-emerald-50 hover:border-emerald-500 hover:bg-emerald-100 ring-1 ring-emerald-200" 
-                                                                            : noMatch 
-                                                                                ? "opacity-60 border-slate-200" 
-                                                                                : "hover:border-primary hover:bg-primary/5"
-                                                            }`}
-                                                            onClick={() => handleAssign(clinician.id, slot.id)}
-                                                        >
-                                                            {isMatch && !isPending && <span className="absolute -top-1 -right-1 bg-emerald-500 text-white text-[8px] px-1 rounded">Match</span>}
-                                                            {isPending && <span className="absolute -top-1 -right-1 bg-amber-500 text-white text-[8px] px-1 rounded">Pending</span>}
-                                                            <CalendarCheck className={`h-3 w-3 mr-2 ${isMatch && !isPending ? "text-emerald-600" : isPending ? "text-amber-600" : ""}`} />
-                                                            <div className="text-left">
-                                                                <div className={`font-medium ${isMatch && !isPending ? "text-emerald-700" : isPending ? "text-amber-700" : ""}`}>{slot.day || format(parseISO(slot.date!), "EEE")}</div>
-                                                                <div className={`text-[10px] ${isMatch && !isPending ? "text-emerald-600" : isPending ? "text-amber-600" : "text-muted-foreground"}`}>
-                                                                    {isPending ? `From ${pendingDate}` : `${slot.startTime} - ${slot.endTime}`}
-                                                                </div>
-                                                            </div>
-                                                        </Button>
-                                                    )})}
-                                                    {clinician.availability.filter(s => s.type !== "Vacation").length === 0 && (
-                                                        <div className="col-span-3 text-xs text-muted-foreground italic p-2 border border-dashed rounded bg-slate-50/50 text-center">
-                                                            No availability set.
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        )})}
-                                    </div>
-                                </div>
-                            </DialogContent>
-                         </Dialog>
-                    )}
-
-                    <DropdownMenu>
+      {/* Kanban Board */}
+      {!showConfirmedState && !showArchivedState ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Column 1: Pending Intake */}
+          <div className="bg-blue-50/50 rounded-lg p-3 min-h-[400px]">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold text-blue-800 text-sm">Pending Intake</h3>
+              <Badge variant="secondary" className="bg-blue-100 text-blue-700">{filteredClients.filter(c => c.status === "New").length}</Badge>
+            </div>
+            <div className="space-y-2">
+              {filteredClients.filter(c => c.status === "New").map(client => (
+                <Card key={client.id} className="bg-white shadow-sm hover:shadow-md transition-shadow cursor-pointer" data-testid={`kanban-card-${client.id}`}>
+                  <CardContent className="p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-mono font-semibold text-sm">{client.displayId}</span>
+                      <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon">
-                            <MoreHorizontal className="h-4 w-4" />
-                        </Button>
+                          <Button variant="ghost" size="icon" className="h-6 w-6">
+                            <MoreHorizontal className="h-3 w-3" />
+                          </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => handleOpenEditClient(client)}>
+                          <DropdownMenuItem onClick={() => handleOpenEditClient(client)}>
                             <Edit className="h-4 w-4 mr-2" /> Edit Details
-                        </DropdownMenuItem>
-                        {client.status !== "Assigned" && client.status !== "Scheduled" && (
+                          </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => handleOpenManualAllocate(client)}>
                             <CalendarCheck className="h-4 w-4 mr-2" /> Allocate to Clinician
                           </DropdownMenuItem>
-                        )}
-                        {(client.status === "Assigned" || client.status === "Scheduled") && (
-                          <DropdownMenuItem onClick={() => handleOpenEditStatus(client)}>
-                            <CalendarCheck className="h-4 w-4 mr-2" /> Edit Status
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>
+                            Archive
                           </DropdownMenuItem>
-                        )}
-                        {client.status !== "New" && (
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      <Clock className="h-3 w-3 inline mr-1" />
+                      {formatDateUK(client.intakeDate)}
+                    </p>
+                    {client.insurer && client.insurer !== "Private" && (
+                      <Badge variant="outline" className="text-[10px] mb-2">{client.insurer}</Badge>
+                    )}
+                    <Button size="sm" variant="outline" className="w-full gap-1 text-xs mt-2" onClick={() => handleOpenSendForms(client)}>
+                      <Mail className="h-3 w-3" /> Send Forms
+                    </Button>
+                  </CardContent>
+                </Card>
+              ))}
+              {filteredClients.filter(c => c.status === "New").length === 0 && (
+                <p className="text-xs text-muted-foreground text-center py-4">No clients</p>
+              )}
+            </div>
+          </div>
+
+          {/* Column 2: Screen Booked/Sent */}
+          <div className="bg-amber-50/50 rounded-lg p-3 min-h-[400px]">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold text-amber-800 text-sm">Screen Booked/Sent</h3>
+              <Badge variant="secondary" className="bg-amber-100 text-amber-700">{filteredClients.filter(c => c.status === "Forms Sent").length}</Badge>
+            </div>
+            <div className="space-y-2">
+              {filteredClients.filter(c => c.status === "Forms Sent").map(client => (
+                <Card key={client.id} className="bg-white shadow-sm hover:shadow-md transition-shadow cursor-pointer" data-testid={`kanban-card-${client.id}`}>
+                  <CardContent className="p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-mono font-semibold text-sm">{client.displayId}</span>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon" className="h-6 w-6">
+                            <MoreHorizontal className="h-3 w-3" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => handleOpenEditClient(client)}>
+                            <Edit className="h-4 w-4 mr-2" /> Edit Details
+                          </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => handleOpenSendForms(client)}>
                             <Mail className="h-4 w-4 mr-2" /> Resend Forms
                           </DropdownMenuItem>
-                        )}
-                        {client.status !== "New" && client.status !== "Forms Sent" && (
+                          <DropdownMenuItem onClick={() => handleOpenManualAllocate(client)}>
+                            <CalendarCheck className="h-4 w-4 mr-2" /> Allocate to Clinician
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>
+                            Archive
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      <Clock className="h-3 w-3 inline mr-1" />
+                      {formatDateUK(client.intakeDate)}
+                    </p>
+                    {client.insurer && client.insurer !== "Private" && (
+                      <Badge variant="outline" className="text-[10px]">{client.insurer}</Badge>
+                    )}
+                    <p className="text-[10px] text-amber-600 mt-2 flex items-center gap-1">
+                      <Mail className="h-3 w-3" /> Awaiting response
+                    </p>
+                  </CardContent>
+                </Card>
+              ))}
+              {filteredClients.filter(c => c.status === "Forms Sent").length === 0 && (
+                <p className="text-xs text-muted-foreground text-center py-4">No clients</p>
+              )}
+            </div>
+          </div>
+
+          {/* Column 3: Forms Completed */}
+          <div className="bg-emerald-50/50 rounded-lg p-3 min-h-[400px]">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold text-emerald-800 text-sm">Forms Completed</h3>
+              <Badge variant="secondary" className="bg-emerald-100 text-emerald-700">{filteredClients.filter(c => c.status === "Forms Completed").length}</Badge>
+            </div>
+            <div className="space-y-2">
+              {filteredClients.filter(c => c.status === "Forms Completed").map(client => (
+                <Card key={client.id} className="bg-white shadow-sm hover:shadow-md transition-shadow cursor-pointer" data-testid={`kanban-card-${client.id}`}>
+                  <CardContent className="p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-mono font-semibold text-sm">{client.displayId}</span>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon" className="h-6 w-6">
+                            <MoreHorizontal className="h-3 w-3" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => handleOpenEditClient(client)}>
+                            <Edit className="h-4 w-4 mr-2" /> Edit Details
+                          </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => handleOpenViewResponses(client)}>
                             <Eye className="h-4 w-4 mr-2" /> View Responses
                           </DropdownMenuItem>
-                        )}
+                          <DropdownMenuItem onClick={() => handleOpenManualAllocate(client)}>
+                            <CalendarCheck className="h-4 w-4 mr-2" /> Allocate to Clinician
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>
+                            Archive
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      <Clock className="h-3 w-3 inline mr-1" />
+                      {formatDateUK(client.intakeDate)}
+                    </p>
+                    {client.insurer && client.insurer !== "Private" && (
+                      <Badge variant="outline" className="text-[10px] mb-2">{client.insurer}</Badge>
+                    )}
+                    <Button size="sm" className="w-full gap-1 text-xs mt-2 bg-primary hover:bg-primary/90" onClick={() => { setSelectedClient(client); fetchClientAvailability(client.id); setIsAllocateDialogOpen(true); }}>
+                      <UserCheck className="h-3 w-3" /> Allocate
+                    </Button>
+                  </CardContent>
+                </Card>
+              ))}
+              {filteredClients.filter(c => c.status === "Forms Completed").length === 0 && (
+                <p className="text-xs text-muted-foreground text-center py-4">No clients</p>
+              )}
+            </div>
+          </div>
+
+          {/* Column 4: Allocated - Awaiting Confirmation */}
+          <div className="bg-indigo-50/50 rounded-lg p-3 min-h-[400px]">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold text-indigo-800 text-sm">Allocated - Awaiting</h3>
+              <Badge variant="secondary" className="bg-indigo-100 text-indigo-700">{filteredClients.filter(c => c.status === "Assigned").length}</Badge>
+            </div>
+            <div className="space-y-2">
+              {filteredClients.filter(c => c.status === "Assigned").map(client => (
+                <Card key={client.id} className="bg-white shadow-sm hover:shadow-md transition-shadow cursor-pointer" data-testid={`kanban-card-${client.id}`}>
+                  <CardContent className="p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-mono font-semibold text-sm">{client.displayId}</span>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon" className="h-6 w-6">
+                            <MoreHorizontal className="h-3 w-3" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => handleOpenEditClient(client)}>
+                            <Edit className="h-4 w-4 mr-2" /> Edit Details
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleOpenEditStatus(client)}>
+                            <CalendarCheck className="h-4 w-4 mr-2" /> Edit Status
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleOpenViewResponses(client)}>
+                            <Eye className="h-4 w-4 mr-2" /> View Responses
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>
+                            Archive
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                    {client.assignedClinicianId && (
+                      <div className="flex items-center gap-1 text-xs text-indigo-700 bg-indigo-100 px-2 py-1 rounded mb-2">
+                        <UserCheck className="h-3 w-3" />
+                        {clinicians.find(c => c.id === client.assignedClinicianId)?.name.split(",")[0]}
+                      </div>
+                    )}
+                    {client.assignedSlot && (
+                      <p className="text-[10px] text-muted-foreground font-mono">{client.assignedSlot}</p>
+                    )}
+                  </CardContent>
+                </Card>
+              ))}
+              {filteredClients.filter(c => c.status === "Assigned").length === 0 && (
+                <p className="text-xs text-muted-foreground text-center py-4">No clients</p>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* List view for Confirmed and Archived clients */
+        <div className="space-y-3">
+          <h3 className="font-semibold text-lg">{showConfirmedState ? "Confirmed Clients" : "Archived Clients"}</h3>
+          {filteredClients.map(client => (
+            <Card key={client.id} className="shadow-sm">
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <span className="font-mono font-semibold">{client.displayId}</span>
+                    <Badge variant="secondary" className={getStatusColor(client.status)}>
+                      {getStatusDisplayLabel(client.status)}
+                    </Badge>
+                    {client.insurer && client.insurer !== "Private" && (
+                      <Badge variant="outline">{client.insurer}</Badge>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {client.assignedClinicianId && (
+                      <span className="text-sm text-muted-foreground">
+                        <UserCheck className="h-4 w-4 inline mr-1" />
+                        {clinicians.find(c => c.id === client.assignedClinicianId)?.name.split(",")[0]}
+                      </span>
+                    )}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" size="icon">
+                          <MoreHorizontal className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => handleOpenEditClient(client)}>
+                          <Edit className="h-4 w-4 mr-2" /> Edit Details
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => handleOpenEditStatus(client)}>
+                          <CalendarCheck className="h-4 w-4 mr-2" /> Edit Status
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => handleOpenViewResponses(client)}>
+                          <Eye className="h-4 w-4 mr-2" /> View Responses
+                        </DropdownMenuItem>
                         <DropdownMenuSeparator />
                         {client.isArchived ? (
                           <DropdownMenuItem onClick={() => restoreClientMutation.mutate(client.id)}>
@@ -1116,20 +1118,18 @@ export default function Clients() {
                             Archive
                           </DropdownMenuItem>
                         )}
-                        </DropdownMenuContent>
+                      </DropdownMenuContent>
                     </DropdownMenu>
+                  </div>
                 </div>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-
-        {filteredClients.length === 0 && (
-            <div className="text-center py-12 text-muted-foreground">
-                <p>No clients found matching your search.</p>
-            </div>
-        )}
-      </div>
+              </CardContent>
+            </Card>
+          ))}
+          {filteredClients.length === 0 && (
+            <p className="text-center py-8 text-muted-foreground">No {showConfirmedState ? "confirmed" : "archived"} clients found.</p>
+          )}
+        </div>
+      )}
 
       <Dialog open={isSendFormsOpen} onOpenChange={setIsSendFormsOpen}>
         <DialogContent className="sm:max-w-[500px]">
@@ -1186,6 +1186,168 @@ export default function Clients() {
             onOpenChange={setIsPreviewOpen} 
         />
       )}
+
+      {/* Allocate Dialog (from Kanban board) */}
+      <Dialog open={isAllocateDialogOpen} onOpenChange={setIsAllocateDialogOpen}>
+        <DialogContent className="sm:max-w-[600px] max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Allocate Clinician Slot</DialogTitle>
+            <DialogDescription>
+              Assign {selectedClient?.displayId} to an available time slot.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-6 py-4">
+            <div className="p-3 bg-muted/30 rounded border border-border space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-muted-foreground font-medium">CLIENT PROFILE</p>
+                <Badge variant={(selectedClient?.insurer || "Private") === "Private" ? "outline" : "default"} className="text-[10px]">
+                  {selectedClient?.insurer || "Private"}
+                </Badge>
+              </div>
+              <div className="flex gap-2">
+                {(selectedClient?.presentingIssues || []).map(i => <Badge key={i} variant="secondary">{i}</Badge>)}
+              </div>
+              <p className="text-sm italic">"{selectedClient?.notes}"</p>
+            </div>
+            
+            <div className="space-y-4">
+              {clientAvailabilityForAllocation && Object.keys(clientAvailabilityForAllocation).length > 0 && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                  <p className="text-xs font-medium text-blue-800 mb-2">Client's Stated Availability:</p>
+                  <div className="flex flex-wrap gap-1">
+                    {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map(day => {
+                      const slots = clientAvailabilityForAllocation[day];
+                      if (!slots || slots.length === 0) return null;
+                      const hourLabels = slots.map(s => {
+                        const h = parseInt(s.split(":")[0]);
+                        return h < 12 ? `${h}am` : h === 12 ? "12pm" : `${h - 12}pm`;
+                      }).join(", ");
+                      return (
+                        <span key={day} className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-[10px]">
+                          {day.slice(0, 3)}: {hourLabels}
+                        </span>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[10px] text-blue-600 mt-2">Slots with green "Match" badges align with client availability</p>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-medium text-muted-foreground">AVAILABLE SLOTS</p>
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="override-mode-allocate" className="text-xs text-muted-foreground cursor-pointer">Admin Override</Label>
+                  <Switch id="override-mode-allocate" checked={showAllClinicians} onCheckedChange={setShowAllClinicians} />
+                </div>
+              </div>
+              
+              {selectedClient && getCliniciansForAllocation(selectedClient).length === 0 && (
+                <div className="text-center py-8 text-muted-foreground border rounded-md bg-slate-50">
+                  <AlertTriangle className="h-8 w-8 mx-auto mb-2 text-amber-500" />
+                  <p>No matching clinicians found.</p>
+                  <p className="text-xs mt-1">Try enabling "Admin Override" to see all schedules.</p>
+                </div>
+              )}
+
+              {selectedClient && getCliniciansForAllocation(selectedClient).map(clinician => {
+                const isMatch = isClinicianMatch(clinician, selectedClient);
+                return (
+                  <div key={clinician.id} className={!isMatch ? "opacity-75" : ""}>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <div className="h-6 w-6 rounded-full bg-secondary flex items-center justify-center text-[10px] font-bold">
+                          {clinician.avatar}
+                        </div>
+                        <div>
+                          <p className="font-medium text-sm">
+                            {clinician.name}
+                            {!isMatch && <span className="text-xs text-muted-foreground ml-2 font-normal italic">(Override)</span>}
+                          </p>
+                          {clinician.insurers && clinician.insurers.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-0.5">
+                              {clinician.insurers.map(ins => (
+                                <span 
+                                  key={ins} 
+                                  className={`text-[9px] px-1.5 py-0.5 rounded ${
+                                    ins === (selectedClient?.insurer || "Private") 
+                                      ? "bg-green-100 text-green-700 font-medium" 
+                                      : "bg-muted text-muted-foreground"
+                                  }`}
+                                >
+                                  {ins}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {(clinician.maxNewClients || 0) <= (clinician.currentLoad % 5) && (
+                          <div className="flex items-center text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded" title="Capacity Limit Reached">
+                            <Briefcase className="h-3 w-3 mr-1" />
+                            Cap Reached
+                          </div>
+                        )}
+                        {hasVacationConflict(clinician) && (
+                          <div className="flex items-center text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded">
+                            <AlertTriangle className="h-3 w-3 mr-1" />
+                            Vacation
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pl-8">
+                      {clinician.availability.filter(s => s.type !== "Vacation").map(slot => {
+                        const isPending = isSlotPending(slot);
+                        const pendingDate = getSlotPendingDate(slot);
+                        const availMatch = doesSlotMatchClientAvailability(slot, clientAvailabilityForAllocation);
+                        const slotIsMatch = availMatch === true && !slot.isBooked;
+                        const noMatch = availMatch === false;
+                        
+                        return (
+                          <Button 
+                            key={slot.id}
+                            variant={slot.isBooked ? "ghost" : "outline"}
+                            disabled={slot.isBooked}
+                            className={`justify-start h-auto py-2 px-3 text-xs relative ${
+                              slot.isBooked 
+                                ? "opacity-50 line-through decoration-destructive" 
+                                : isPending
+                                  ? "bg-amber-50 border-amber-300 hover:border-amber-400 hover:bg-amber-100"
+                                  : slotIsMatch 
+                                    ? "border-emerald-400 bg-emerald-50 hover:border-emerald-500 hover:bg-emerald-100 ring-1 ring-emerald-200" 
+                                    : noMatch 
+                                      ? "opacity-60 border-slate-200" 
+                                      : "hover:border-primary hover:bg-primary/5"
+                            }`}
+                            onClick={() => { handleAssign(clinician.id, slot.id); setIsAllocateDialogOpen(false); }}
+                          >
+                            {slotIsMatch && !isPending && <span className="absolute -top-1 -right-1 bg-emerald-500 text-white text-[8px] px-1 rounded">Match</span>}
+                            {isPending && <span className="absolute -top-1 -right-1 bg-amber-500 text-white text-[8px] px-1 rounded">Pending</span>}
+                            <CalendarCheck className={`h-3 w-3 mr-2 ${slotIsMatch && !isPending ? "text-emerald-600" : isPending ? "text-amber-600" : ""}`} />
+                            <div className="text-left">
+                              <div className={`font-medium ${slotIsMatch && !isPending ? "text-emerald-700" : isPending ? "text-amber-700" : ""}`}>{slot.day || format(parseISO(slot.date!), "EEE")}</div>
+                              <div className={`text-[10px] ${slotIsMatch && !isPending ? "text-emerald-600" : isPending ? "text-amber-600" : "text-muted-foreground"}`}>
+                                {isPending ? `From ${pendingDate}` : `${slot.startTime} - ${slot.endTime}`}
+                              </div>
+                            </div>
+                          </Button>
+                        );
+                      })}
+                      {clinician.availability.filter(s => s.type !== "Vacation").length === 0 && (
+                        <div className="col-span-3 text-xs text-muted-foreground italic p-2 border border-dashed rounded bg-slate-50/50 text-center">
+                          No availability set.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Edit Client Dialog */}
       <Dialog open={isEditClientOpen} onOpenChange={setIsEditClientOpen}>

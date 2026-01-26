@@ -63,6 +63,9 @@ export interface IStorage {
   // ============ FORM SUBMISSIONS ============
   getFormSubmissionsByClientId(clientId: string): Promise<FormSubmission[]>;
   createFormSubmission(submission: InsertFormSubmission): Promise<FormSubmission>;
+  getDraftSubmission(clientId: string, formTemplateId: string): Promise<FormSubmission | undefined>;
+  saveOrUpdateDraft(clientId: string, formTemplateId: string, responses: any): Promise<FormSubmission>;
+  submitDraft(submissionId: string, responses: any): Promise<FormSubmission | undefined>;
   
   // ============ TASKS ============
   getAllTasks(): Promise<Task[]>;
@@ -580,6 +583,52 @@ export class DatabaseStorage implements IStorage {
   async createFormSubmission(submission: InsertFormSubmission): Promise<FormSubmission> {
     const [newSubmission] = await db.insert(formSubmissions).values(submission).returning();
     return newSubmission;
+  }
+
+  async getDraftSubmission(clientId: string, formTemplateId: string): Promise<FormSubmission | undefined> {
+    const [draft] = await db.select().from(formSubmissions).where(
+      and(
+        eq(formSubmissions.clientId, clientId),
+        eq(formSubmissions.formTemplateId, formTemplateId),
+        eq(formSubmissions.isDraft, true)
+      )
+    );
+    return draft || undefined;
+  }
+
+  async saveOrUpdateDraft(clientId: string, formTemplateId: string, responses: any): Promise<FormSubmission> {
+    // Check if a draft already exists
+    const existingDraft = await this.getDraftSubmission(clientId, formTemplateId);
+    
+    if (existingDraft) {
+      // Update existing draft
+      const [updated] = await db.update(formSubmissions)
+        .set({ responses, submittedAt: new Date() })
+        .where(eq(formSubmissions.id, existingDraft.id))
+        .returning();
+      return updated;
+    } else {
+      // Create new draft
+      const [newDraft] = await db.insert(formSubmissions).values({
+        clientId,
+        formTemplateId,
+        responses,
+        isDraft: true,
+      }).returning();
+      return newDraft;
+    }
+  }
+
+  async submitDraft(submissionId: string, responses: any): Promise<FormSubmission | undefined> {
+    const [submitted] = await db.update(formSubmissions)
+      .set({ 
+        responses, 
+        isDraft: false, 
+        submittedAt: new Date() 
+      })
+      .where(eq(formSubmissions.id, submissionId))
+      .returning();
+    return submitted || undefined;
   }
 
   // ============ TASKS ============

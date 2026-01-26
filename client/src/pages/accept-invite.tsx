@@ -198,9 +198,30 @@ export default function AcceptInvite() {
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </Button>
               </div>
-              <p className="text-xs text-muted-foreground">
-                Must be at least 8 characters with uppercase, lowercase, number, and special character.
-              </p>
+              {password.length > 0 && (
+                <div className="space-y-1">
+                  <p className={`text-xs ${password.length >= 8 ? "text-green-600" : "text-red-600"}`}>
+                    {password.length >= 8 ? "✓" : "✗"} At least 8 characters
+                  </p>
+                  <p className={`text-xs ${/[A-Z]/.test(password) ? "text-green-600" : "text-red-600"}`}>
+                    {/[A-Z]/.test(password) ? "✓" : "✗"} One uppercase letter
+                  </p>
+                  <p className={`text-xs ${/[a-z]/.test(password) ? "text-green-600" : "text-red-600"}`}>
+                    {/[a-z]/.test(password) ? "✓" : "✗"} One lowercase letter
+                  </p>
+                  <p className={`text-xs ${/[0-9]/.test(password) ? "text-green-600" : "text-red-600"}`}>
+                    {/[0-9]/.test(password) ? "✓" : "✗"} One number
+                  </p>
+                  <p className={`text-xs ${/[!@#$%^&*(),.?":{}|<>]/.test(password) ? "text-green-600" : "text-red-600"}`}>
+                    {/[!@#$%^&*(),.?":{}|<>]/.test(password) ? "✓" : "✗"} One special character
+                  </p>
+                </div>
+              )}
+              {password.length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Must be at least 8 characters with uppercase, lowercase, number, and special character.
+                </p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="confirm-password">Confirm Password</Label>

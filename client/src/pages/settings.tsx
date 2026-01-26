@@ -395,6 +395,8 @@ function AdminUsersTab() {
 }
 
 export default function Settings() {
+  const { user } = useAuth();
+  
   return (
     <div className="space-y-6">
       <div>
@@ -455,13 +457,13 @@ export default function Settings() {
             <CardContent className="space-y-4">
               <div className="grid gap-2">
                 <Label htmlFor="name">Name</Label>
-                <Input id="name" defaultValue="Admin User" />
+                <Input id="name" defaultValue={user?.name || ""} disabled className="bg-muted" />
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="email">Email</Label>
-                <Input id="email" defaultValue="admin@mindfulpath.com" />
+                <Input id="email" defaultValue={user?.email || ""} disabled className="bg-muted" />
               </div>
-              <Button>Save Changes</Button>
+              <p className="text-sm text-muted-foreground">Contact an administrator to update your profile information.</p>
             </CardContent>
           </Card>
         </TabsContent>

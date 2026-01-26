@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { toast } from "sonner";
-import { Loader2, Save, Mail, Trash2, UserPlus, Eye, EyeOff } from "lucide-react";
+import { Loader2, Save, Mail, Trash2, UserPlus } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useAuth } from "@/lib/auth";
 
@@ -238,26 +238,25 @@ function AdminUsersTab() {
   const queryClient = useQueryClient();
   const { user: currentUser } = useAuth();
   const [showAddDialog, setShowAddDialog] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
-  const [newAdmin, setNewAdmin] = useState({ name: "", email: "", password: "" });
+  const [newAdmin, setNewAdmin] = useState({ name: "", email: "" });
 
   const { data: admins, isLoading } = useQuery<AdminUser[]>({
     queryKey: ["/api/admin-users"],
   });
 
-  const createMutation = useMutation({
-    mutationFn: async (data: { name: string; email: string; password: string }) => {
-      const res = await apiRequest("POST", "/api/admin-users", data);
+  const inviteMutation = useMutation({
+    mutationFn: async (data: { name: string; email: string }) => {
+      const res = await apiRequest("POST", "/api/admin-users/invite", data);
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin-users"] });
-      toast.success("Admin user created successfully");
+      toast.success("Invite sent! The new admin will receive an email to set up their account.");
       setShowAddDialog(false);
-      setNewAdmin({ name: "", email: "", password: "" });
+      setNewAdmin({ name: "", email: "" });
     },
     onError: (error: Error) => {
-      toast.error(error.message || "Failed to create admin user");
+      toast.error(error.message || "Failed to send invite");
     },
   });
 
@@ -275,28 +274,13 @@ function AdminUsersTab() {
     },
   });
 
-  const validatePassword = (password: string): string[] => {
-    const errors: string[] = [];
-    if (password.length < 8) errors.push("at least 8 characters");
-    if (!/[A-Z]/.test(password)) errors.push("one uppercase letter");
-    if (!/[a-z]/.test(password)) errors.push("one lowercase letter");
-    if (!/[0-9]/.test(password)) errors.push("one number");
-    if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) errors.push("one special character");
-    return errors;
-  };
-
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newAdmin.name || !newAdmin.email || !newAdmin.password) {
-      toast.error("All fields are required");
+    if (!newAdmin.name || !newAdmin.email) {
+      toast.error("Name and email are required");
       return;
     }
-    const passwordErrors = validatePassword(newAdmin.password);
-    if (passwordErrors.length > 0) {
-      toast.error(`Password must contain: ${passwordErrors.join(", ")}`);
-      return;
-    }
-    createMutation.mutate(newAdmin);
+    inviteMutation.mutate(newAdmin);
   };
 
   if (isLoading) {
@@ -362,9 +346,9 @@ function AdminUsersTab() {
       <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Add Admin User</DialogTitle>
+            <DialogTitle>Invite Admin User</DialogTitle>
             <DialogDescription>
-              Create a new administrator account with full system access.
+              Send an invite email to a new administrator. They will set their own password.
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit}>
@@ -390,39 +374,17 @@ function AdminUsersTab() {
                   data-testid="input-admin-email"
                 />
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="admin-password">Password</Label>
-                <div className="relative">
-                  <Input
-                    id="admin-password"
-                    type={showPassword ? "text" : "password"}
-                    value={newAdmin.password}
-                    onChange={(e) => setNewAdmin({ ...newAdmin, password: e.target.value })}
-                    placeholder="Enter secure password"
-                    data-testid="input-admin-password"
-                  />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="absolute right-0 top-0 h-full px-3"
-                    onClick={() => setShowPassword(!showPassword)}
-                  >
-                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </Button>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Must be at least 8 characters with uppercase, lowercase, number, and special character.
-                </p>
-              </div>
+              <p className="text-sm text-muted-foreground">
+                An email will be sent with a link to set up their account. The link expires in 7 days.
+              </p>
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setShowAddDialog(false)}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={createMutation.isPending} data-testid="button-submit-admin">
-                {createMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                Create Admin
+              <Button type="submit" disabled={inviteMutation.isPending} data-testid="button-submit-admin">
+                {inviteMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                Send Invite
               </Button>
             </DialogFooter>
           </form>

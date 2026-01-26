@@ -327,8 +327,8 @@ export async function registerRoutes(
 
       // Validate password meets security requirements
       const passwordErrors: string[] = [];
-      if (password.length < 12) {
-        passwordErrors.push("at least 12 characters");
+      if (password.length < 8) {
+        passwordErrors.push("at least 8 characters");
       }
       if (!/[A-Z]/.test(password)) {
         passwordErrors.push("one uppercase letter");

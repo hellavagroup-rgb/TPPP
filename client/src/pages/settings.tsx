@@ -277,7 +277,7 @@ function AdminUsersTab() {
 
   const validatePassword = (password: string): string[] => {
     const errors: string[] = [];
-    if (password.length < 12) errors.push("at least 12 characters");
+    if (password.length < 8) errors.push("at least 8 characters");
     if (!/[A-Z]/.test(password)) errors.push("one uppercase letter");
     if (!/[a-z]/.test(password)) errors.push("one lowercase letter");
     if (!/[0-9]/.test(password)) errors.push("one number");
@@ -412,7 +412,7 @@ function AdminUsersTab() {
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Must be at least 12 characters with uppercase, lowercase, number, and special character.
+                  Must be at least 8 characters with uppercase, lowercase, number, and special character.
                 </p>
               </div>
             </div>

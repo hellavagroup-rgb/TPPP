@@ -1,6 +1,8 @@
 # The Perinatal Psychology Practice - Client Management System
 
 ## Recent Changes (January 2026)
+- **Security hardening**: Added rate limiting (5 login attempts/15min, 100 API requests/15min), helmet security headers, SESSION_SECRET production enforcement
+- **Secure token storage**: Password reset tokens now stored in database with 7-day expiry (never logged)
 - Added secure admin user invitation flow: new admins receive email invite to set their own password (7-day token expiry)
 - Added admin-editable email templates in Settings > Email Templates (form invite, password reset, task reminder, availability reminder)
 - UI labels updated: "Assigned" displays as "Allocated", "Scheduled" displays as "Confirmed" (database values unchanged)
@@ -113,6 +115,23 @@ Core entities:
 
 ### Environment Variables Required
 - `DATABASE_URL` - PostgreSQL connection string
-- `SESSION_SECRET` - Secret key for session encryption (defaults to insecure value in development)
+- `SESSION_SECRET` - Secret key for session encryption (required in production, warns in development)
 - `RESEND_API_KEY` - Resend API key for transactional emails
 - `FROM_EMAIL` (optional) - Sender email address (defaults to Resend sandbox)
+
+## Security Implementation
+
+### Current Security Measures
+- **Rate limiting**: Login endpoints limited to 5 attempts per 15 minutes; general API limited to 100 requests per 15 minutes
+- **Security headers**: Helmet middleware provides HSTS, X-Frame-Options, X-Content-Type-Options, and other security headers
+- **Session security**: SESSION_SECRET required in production (throws error if missing); development uses random fallback with warning
+- **Password security**: Scrypt hashing with salt via Node.js crypto module
+- **Token management**: Password reset and invite tokens stored in database with 7-day expiry, never logged
+
+### Planned Security Enhancements
+- **PII encryption at rest**: Email and phone fields in clients table should be encrypted at rest. Implementation requires:
+  - Encryption key management (secure storage, rotation strategy)
+  - Deterministic encryption or hash-based lookup index for email uniqueness
+  - Database migration to add encrypted columns (email_encrypted, email_hash, phone_encrypted)
+  - Storage layer updates to encrypt on write, decrypt on read
+  - Backfill script for existing data

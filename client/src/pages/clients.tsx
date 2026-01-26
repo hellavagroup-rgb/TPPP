@@ -736,9 +736,9 @@ export default function Clients() {
       // More matches = higher rank
       if (matchB !== matchA) return matchB - matchA;
       
-      // Secondary: prefer clinicians with more capacity
-      const capacityA = (a.capacity || 20) - (a.currentLoad || 0);
-      const capacityB = (b.capacity || 20) - (b.currentLoad || 0);
+      // Secondary: prefer clinicians with more new client capacity
+      const capacityA = a.maxNewClients ?? 0;
+      const capacityB = b.maxNewClients ?? 0;
       return capacityB - capacityA;
     });
   };
@@ -1350,10 +1350,10 @@ export default function Clients() {
                         </div>
                       </div>
                       <div className="flex items-center gap-2 flex-wrap justify-end">
-                        {/* Client capacity indicator */}
-                        <div className="flex items-center text-[10px] text-muted-foreground bg-muted/50 px-2 py-0.5 rounded" title="Client Capacity">
+                        {/* New client capacity indicator */}
+                        <div className="flex items-center text-[10px] text-muted-foreground bg-muted/50 px-2 py-0.5 rounded" title="New Client Capacity">
                           <Users className="h-3 w-3 mr-1" />
-                          {clinician.currentLoad || 0}/{clinician.capacity || 20}
+                          {clinician.maxNewClients ?? 0} available
                         </div>
                         
                         {/* Bupa allocation indicator */}

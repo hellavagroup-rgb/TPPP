@@ -325,8 +325,27 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Name, email, and password are required" });
       }
 
-      if (password.length < 8) {
-        return res.status(400).json({ error: "Password must be at least 8 characters" });
+      // Validate password meets security requirements
+      const passwordErrors: string[] = [];
+      if (password.length < 12) {
+        passwordErrors.push("at least 12 characters");
+      }
+      if (!/[A-Z]/.test(password)) {
+        passwordErrors.push("one uppercase letter");
+      }
+      if (!/[a-z]/.test(password)) {
+        passwordErrors.push("one lowercase letter");
+      }
+      if (!/[0-9]/.test(password)) {
+        passwordErrors.push("one number");
+      }
+      if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) {
+        passwordErrors.push("one special character (!@#$%^&*(),.?\":{}|<>)");
+      }
+      if (passwordErrors.length > 0) {
+        return res.status(400).json({ 
+          error: `Password must contain: ${passwordErrors.join(", ")}` 
+        });
       }
 
       // Check if email already exists

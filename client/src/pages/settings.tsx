@@ -275,14 +275,25 @@ function AdminUsersTab() {
     },
   });
 
+  const validatePassword = (password: string): string[] => {
+    const errors: string[] = [];
+    if (password.length < 12) errors.push("at least 12 characters");
+    if (!/[A-Z]/.test(password)) errors.push("one uppercase letter");
+    if (!/[a-z]/.test(password)) errors.push("one lowercase letter");
+    if (!/[0-9]/.test(password)) errors.push("one number");
+    if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) errors.push("one special character");
+    return errors;
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newAdmin.name || !newAdmin.email || !newAdmin.password) {
       toast.error("All fields are required");
       return;
     }
-    if (newAdmin.password.length < 8) {
-      toast.error("Password must be at least 8 characters");
+    const passwordErrors = validatePassword(newAdmin.password);
+    if (passwordErrors.length > 0) {
+      toast.error(`Password must contain: ${passwordErrors.join(", ")}`);
       return;
     }
     createMutation.mutate(newAdmin);
@@ -387,7 +398,7 @@ function AdminUsersTab() {
                     type={showPassword ? "text" : "password"}
                     value={newAdmin.password}
                     onChange={(e) => setNewAdmin({ ...newAdmin, password: e.target.value })}
-                    placeholder="Minimum 8 characters"
+                    placeholder="Enter secure password"
                     data-testid="input-admin-password"
                   />
                   <Button
@@ -400,6 +411,9 @@ function AdminUsersTab() {
                     {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </Button>
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  Must be at least 12 characters with uppercase, lowercase, number, and special character.
+                </p>
               </div>
             </div>
             <DialogFooter>

@@ -3,12 +3,43 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { seedDatabaseIfEmpty } from "./seed";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 
 const app = express();
 
 // Trust proxy for production (Replit runs behind HTTPS proxy)
 // This is required for secure cookies to work properly
 app.set("trust proxy", 1);
+
+// Security headers via helmet (with CSP disabled for development compatibility)
+app.use(helmet({
+  contentSecurityPolicy: false, // Disabled to allow inline scripts in development
+  crossOriginEmbedderPolicy: false,
+}));
+
+// Rate limiting - protect against brute force attacks
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests, please try again later" },
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // limit each IP to 5 login attempts per windowMs
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many login attempts, please try again after 15 minutes" },
+  skipSuccessfulRequests: true,
+});
+
+// Apply rate limiters
+app.use("/api/auth/login", authLimiter);
+app.use("/api/auth/forgot-password", authLimiter);
+app.use("/api", generalLimiter);
 
 const httpServer = createServer(app);
 

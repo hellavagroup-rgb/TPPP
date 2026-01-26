@@ -377,10 +377,9 @@ export async function registerRoutes(
       // Send invite email
       const emailResult = await sendEmail({
         to: email,
-        from: process.env.FROM_EMAIL || "onboarding@resend.dev",
         subject: "You've been invited as an Admin - The Perinatal Psychology Practice",
-        text: `Hello ${name},\n\nYou have been invited to join The Perinatal Psychology Practice as an administrator.\n\nPlease click the link below to set up your password and activate your account:\n${inviteUrl}\n\nThis link will expire in 7 days.\n\nBest regards,\nThe Perinatal Psychology Practice`,
         html: `<p>Hello ${name},</p><p>You have been invited to join The Perinatal Psychology Practice as an administrator.</p><p>Please click the link below to set up your password and activate your account:</p><p><a href="${inviteUrl}">${inviteUrl}</a></p><p>This link will expire in 7 days.</p><p>Best regards,<br>The Perinatal Psychology Practice</p>`,
+        text: `Hello ${name},\n\nYou have been invited to join The Perinatal Psychology Practice as an administrator.\n\nPlease click the link below to set up your password and activate your account:\n${inviteUrl}\n\nThis link will expire in 7 days.\n\nBest regards,\nThe Perinatal Psychology Practice`,
       });
 
       if (!emailResult.success) {
@@ -1226,11 +1225,12 @@ export async function registerRoutes(
         return res.json({ success: true, message: "If the email exists, a reset link will be sent" });
       }
 
-      // Generate reset token (in production, store this with expiry)
+      // Generate reset token and store with expiry (7 days)
       const resetToken = require('crypto').randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
       
-      // For now, we'll log the token - in production, store it in DB with expiry
-      console.log(`Password reset token for ${email}: ${resetToken}`);
+      // Store token securely in database (do not log tokens)
+      await storage.createPasswordResetToken(user.id, resetToken, expiresAt);
 
       const protocol = req.headers['x-forwarded-proto'] || 'https';
       const host = req.headers.host || 'localhost:5000';

@@ -37,9 +37,16 @@ declare global {
 }
 
 export function setupAuth(app: Express) {
-  // Session configuration
+  // Session configuration - require SESSION_SECRET in production
+  if (!process.env.SESSION_SECRET) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("SESSION_SECRET environment variable is required in production");
+    }
+    console.warn("⚠️  WARNING: Using insecure default session secret. Set SESSION_SECRET environment variable.");
+  }
+  
   const sessionSettings: session.SessionOptions = {
-    secret: process.env.SESSION_SECRET || "perinatal-psych-secret-key-change-in-production",
+    secret: process.env.SESSION_SECRET || "dev-only-insecure-secret-" + Date.now(),
     resave: false,
     saveUninitialized: false,
     cookie: {

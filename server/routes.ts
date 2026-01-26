@@ -636,6 +636,77 @@ export async function registerRoutes(
     }
   });
 
+  // Get existing draft for a client/form (public)
+  app.get("/api/form-drafts/:clientId/:formId", async (req, res) => {
+    try {
+      const { clientId, formId } = req.params;
+      
+      // Verify client exists
+      const client = await storage.getClientById(clientId);
+      if (!client) {
+        return res.status(404).json({ error: "Client not found" });
+      }
+
+      // Get draft if it exists
+      const draft = await storage.getDraftSubmission(clientId, formId);
+      
+      if (draft) {
+        res.json({ 
+          hasDraft: true, 
+          draftId: draft.id,
+          responses: draft.responses,
+          savedAt: draft.submittedAt 
+        });
+      } else {
+        res.json({ hasDraft: false });
+      }
+    } catch (error) {
+      console.error("Error checking for draft:", error);
+      res.status(500).json({ error: "Failed to check for draft" });
+    }
+  });
+
+  // Save form progress as draft (public)
+  app.post("/api/form-drafts", async (req, res) => {
+    try {
+      const { formId, clientId, data } = req.body;
+      
+      // Validate required fields
+      if (!formId || !clientId || !data || typeof data !== "object") {
+        return res.status(400).json({ error: "Missing or invalid required fields" });
+      }
+
+      // Verify client exists
+      const client = await storage.getClientById(clientId);
+      if (!client) {
+        return res.status(404).json({ error: "Client not found" });
+      }
+
+      // Prevent saving draft if already submitted
+      if (client.status === "Forms Completed") {
+        return res.status(400).json({ error: "Form already submitted" });
+      }
+
+      // Verify form exists
+      const form = await storage.getFormTemplateById(formId);
+      if (!form) {
+        return res.status(404).json({ error: "Form not found" });
+      }
+
+      // Save or update draft
+      const draft = await storage.saveOrUpdateDraft(clientId, formId, data);
+
+      res.json({ 
+        success: true, 
+        draftId: draft.id,
+        savedAt: draft.submittedAt 
+      });
+    } catch (error) {
+      console.error("Draft save error:", error);
+      res.status(500).json({ error: "Failed to save draft" });
+    }
+  });
+
   // Get form submissions for a client (admin only)
   app.get("/api/clients/:id/submissions", requireAdmin, async (req, res) => {
     try {

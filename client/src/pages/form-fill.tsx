@@ -17,9 +17,10 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { CalendarIcon, CheckCircle2, Lock, Loader2 } from "lucide-react";
+import { CalendarIcon, CheckCircle2, Lock, Loader2, Save, Clock } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import logo from "@assets/xPerinatalPP-logo-large-digital.png.pagespeed.ic.wAjk_RUOnf_1766008188694.png";
 import type { FormTemplate, Client } from "@shared/schema";
 
@@ -128,6 +129,9 @@ export default function FormFill() {
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [formState, setFormState] = useState<Record<string, any>>({});
   const [errors, setErrors] = useState<Record<string, boolean>>({});
+  const [draftLoaded, setDraftLoaded] = useState(false);
+  const [lastSaved, setLastSaved] = useState<Date | null>(null);
+  const [showSaveSuccess, setShowSaveSuccess] = useState(false);
 
   const { data: form, isLoading: formLoading } = useQuery<FormTemplate>({
     queryKey: [`/api/forms/${params?.formId}`],
@@ -139,7 +143,54 @@ export default function FormFill() {
     enabled: !!params?.clientId,
   });
 
+  // Check for existing draft
+  const { data: draftData, isLoading: draftLoading } = useQuery<{
+    hasDraft: boolean;
+    draftId?: string;
+    responses?: Record<string, any>;
+    savedAt?: string;
+  }>({
+    queryKey: [`/api/form-drafts/${params?.clientId}/${params?.formId}`],
+    enabled: !!params?.clientId && !!params?.formId,
+  });
+
+  // Load draft data into form state when available
+  useEffect(() => {
+    if (draftData?.hasDraft && draftData.responses && !draftLoaded) {
+      setFormState(draftData.responses as Record<string, any>);
+      if (draftData.savedAt) {
+        setLastSaved(new Date(draftData.savedAt));
+      }
+      setDraftLoaded(true);
+    }
+  }, [draftData, draftLoaded]);
+
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // Save draft mutation
+  const saveDraftMutation = useMutation({
+    mutationFn: async (data: Record<string, any>) => {
+      const response = await fetch(`/api/form-drafts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          formId: params?.formId,
+          clientId: params?.clientId,
+          data,
+        }),
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || "Failed to save");
+      }
+      return response.json();
+    },
+    onSuccess: (data) => {
+      setLastSaved(new Date(data.savedAt));
+      setShowSaveSuccess(true);
+      setTimeout(() => setShowSaveSuccess(false), 3000);
+    },
+  });
 
   const submitMutation = useMutation({
     mutationFn: async (data: Record<string, any>) => {
@@ -233,6 +284,10 @@ export default function FormFill() {
     handleValueChange(fieldId, newValue);
   };
 
+  const handleSaveDraft = () => {
+    saveDraftMutation.mutate(formState);
+  };
+
   if (isSubmitted) {
       return (
           <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
@@ -252,7 +307,7 @@ export default function FormFill() {
       );
   }
 
-  if (formLoading || clientLoading) {
+  if (formLoading || clientLoading || draftLoading) {
       return (
         <div className="min-h-screen bg-slate-50 flex items-center justify-center">
           <div className="flex flex-col items-center gap-4">
@@ -323,6 +378,15 @@ export default function FormFill() {
                 <p className="text-slate-600 max-w-lg mx-auto">{form.description}</p>
             </div>
         </div>
+
+        {draftData?.hasDraft && (
+            <Alert className="bg-blue-50 border-blue-200">
+                <Clock className="h-4 w-4 text-blue-600" />
+                <AlertDescription className="text-blue-800">
+                    We've restored your previously saved progress. Continue where you left off, or start fresh by clearing the fields.
+                </AlertDescription>
+            </Alert>
+        )}
 
         <Card className="shadow-lg border-0 ring-1 ring-slate-200">
             <CardContent className="p-6 sm:p-10 space-y-8">
@@ -471,18 +535,55 @@ export default function FormFill() {
                         <strong>Error:</strong> {submitError}
                     </div>
                 )}
-                <div className="w-full flex justify-between items-center">
+                
+                {showSaveSuccess && (
+                    <Alert className="bg-emerald-50 border-emerald-200">
+                        <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                        <AlertDescription className="text-emerald-800">
+                            Your progress has been saved. You can close this page and return later to complete the form.
+                        </AlertDescription>
+                    </Alert>
+                )}
+                
+                {lastSaved && !showSaveSuccess && (
+                    <div className="w-full flex items-center gap-2 text-sm text-muted-foreground">
+                        <Clock className="h-4 w-4" />
+                        <span>Last saved: {format(lastSaved, "d MMM yyyy 'at' h:mm a")}</span>
+                    </div>
+                )}
+                
+                <div className="w-full flex flex-col sm:flex-row justify-between items-center gap-4">
                     <p className="text-sm text-muted-foreground">Securely powered by Perinatal Psychology Practice</p>
-                    <Button size="lg" onClick={handleSubmit} disabled={submitMutation.isPending} className="px-8">
-                        {submitMutation.isPending ? (
-                            <>
-                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                                Submitting...
-                            </>
-                        ) : (
-                            "Submit Form"
-                        )}
-                    </Button>
+                    <div className="flex gap-3">
+                        <Button 
+                            variant="outline" 
+                            size="lg" 
+                            onClick={handleSaveDraft} 
+                            disabled={saveDraftMutation.isPending || submitMutation.isPending}
+                        >
+                            {saveDraftMutation.isPending ? (
+                                <>
+                                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                    Saving...
+                                </>
+                            ) : (
+                                <>
+                                    <Save className="h-4 w-4 mr-2" />
+                                    Save Progress
+                                </>
+                            )}
+                        </Button>
+                        <Button size="lg" onClick={handleSubmit} disabled={submitMutation.isPending || saveDraftMutation.isPending} className="px-8">
+                            {submitMutation.isPending ? (
+                                <>
+                                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                    Submitting...
+                                </>
+                            ) : (
+                                "Submit Form"
+                            )}
+                        </Button>
+                    </div>
                 </div>
             </CardFooter>
         </Card>

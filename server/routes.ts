@@ -604,12 +604,25 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Form submission not allowed for this client status" });
       }
 
-      // Create submission
-      const submission = await storage.createFormSubmission({
-        formTemplateId: formId,
-        clientId,
-        responses: data,
-      });
+      // Check for existing draft and convert it, or create new submission
+      const existingDraft = await storage.getDraftSubmission(clientId, formId);
+      let submission;
+      
+      if (existingDraft) {
+        // Convert draft to final submission
+        const converted = await storage.submitDraft(existingDraft.id, data);
+        if (!converted) {
+          throw new Error("Failed to convert draft to submission");
+        }
+        submission = converted;
+      } else {
+        // Create new submission
+        submission = await storage.createFormSubmission({
+          formTemplateId: formId,
+          clientId,
+          responses: data,
+        });
+      }
 
       // Extract insurer from form data if present
       // Look for common field IDs that might contain insurer info
@@ -645,6 +658,11 @@ export async function registerRoutes(
       const client = await storage.getClientById(clientId);
       if (!client) {
         return res.status(404).json({ error: "Client not found" });
+      }
+
+      // Don't return drafts for already-submitted forms
+      if (client.status === "Forms Completed") {
+        return res.json({ hasDraft: false });
       }
 
       // Get draft if it exists

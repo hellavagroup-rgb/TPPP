@@ -502,6 +502,32 @@ export async function registerRoutes(
     }
   });
 
+  // Link admin to clinician profile
+  app.patch("/api/admin-users/:id/link-clinician", requireAdmin, async (req, res) => {
+    try {
+      const { clinicianId } = req.body;
+      
+      const user = await storage.getUserById(req.params.id);
+      if (!user || user.role !== "admin") {
+        return res.status(404).json({ error: "Admin user not found" });
+      }
+
+      // Validate clinician exists if provided
+      if (clinicianId) {
+        const clinician = await storage.getClinicianById(clinicianId);
+        if (!clinician) {
+          return res.status(404).json({ error: "Clinician not found" });
+        }
+      }
+
+      await storage.updateUser(req.params.id, { linkedClinicianId: clinicianId || null });
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Failed to link admin to clinician:", error);
+      res.status(500).json({ error: "Failed to link admin to clinician" });
+    }
+  });
+
   // ============ AVAILABILITY / TIME SLOTS ============
   app.get("/api/timeslots/:clinicianId", requireAuth, async (req, res) => {
     try {

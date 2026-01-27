@@ -528,6 +528,40 @@ export async function registerRoutes(
     }
   });
 
+  // Promote clinician to admin (keeps clinician profile linked)
+  app.post("/api/clinicians/:id/promote-to-admin", requireAdmin, async (req, res) => {
+    try {
+      const clinician = await storage.getClinicianById(req.params.id);
+      if (!clinician) {
+        return res.status(404).json({ error: "Clinician not found" });
+      }
+
+      if (!clinician.userId) {
+        return res.status(400).json({ error: "Clinician has no user account" });
+      }
+
+      const user = await storage.getUserById(clinician.userId);
+      if (!user) {
+        return res.status(404).json({ error: "User account not found" });
+      }
+
+      if (user.role === "admin") {
+        return res.status(400).json({ error: "User is already an admin" });
+      }
+
+      // Update role to admin and link to their clinician profile
+      await storage.updateUser(clinician.userId, { 
+        role: "admin",
+        linkedClinicianId: clinician.id
+      });
+
+      res.json({ success: true, message: "Clinician promoted to admin" });
+    } catch (error) {
+      console.error("Failed to promote clinician to admin:", error);
+      res.status(500).json({ error: "Failed to promote clinician to admin" });
+    }
+  });
+
   // ============ AVAILABILITY / TIME SLOTS ============
   app.get("/api/timeslots/:clinicianId", requireAuth, async (req, res) => {
     try {

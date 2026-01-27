@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { toast } from "sonner";
-import { Loader2, Save, Mail, Trash2, UserPlus, Link2, Unlink } from "lucide-react";
+import { Loader2, Save, Mail, Trash2, UserPlus, Link2, Unlink, ShieldCheck } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useAuth } from "@/lib/auth";
@@ -267,6 +267,7 @@ interface Clinician {
   id: string;
   name: string;
   avatar: string;
+  userId?: string | null;
 }
 
 function AccountTab() {
@@ -395,6 +396,31 @@ function AdminUsersTab() {
     },
   });
 
+  const promoteMutation = useMutation({
+    mutationFn: async (clinicianId: string) => {
+      const res = await apiRequest("POST", `/api/clinicians/${clinicianId}/promote-to-admin`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin-users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/clinicians"] });
+      toast.success("Clinician promoted to admin with their profile linked");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to promote clinician");
+    },
+  });
+
+  // Get clinicians who have user accounts but aren't admins yet
+  const promotableClinicians = clinicians?.filter(c => {
+    if (!c.userId) return false;
+    // Check if this clinician's user is already an admin
+    const isAlreadyAdmin = admins?.some(a => a.linkedClinicianId === c.id);
+    // Also check if their userId matches any admin
+    const userIsAdmin = admins?.some(a => a.id === c.userId);
+    return !isAlreadyAdmin && !userIsAdmin;
+  }) || [];
+
   const handleOpenLinkDialog = (admin: AdminUser) => {
     setLinkingAdmin(admin);
     setSelectedClinicianId(admin.linkedClinicianId || "none");
@@ -503,6 +529,47 @@ function AdminUsersTab() {
           </div>
         </CardContent>
       </Card>
+
+      {promotableClinicians.length > 0 && (
+        <Card className="border-none shadow-sm mt-6">
+          <CardHeader>
+            <div>
+              <CardTitle>Promote Clinician to Admin</CardTitle>
+              <CardDescription>
+                These clinicians have user accounts and can be promoted to admin while keeping their clinician profile linked.
+              </CardDescription>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {promotableClinicians.map((clinician) => (
+                <div key={clinician.id} className="flex items-center justify-between p-3 border rounded-lg" data-testid={`promotable-clinician-${clinician.id}`}>
+                  <div className="flex items-center gap-3">
+                    <div className="h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center text-sm font-bold text-blue-600">
+                      {clinician.name.substring(0, 2).toUpperCase()}
+                    </div>
+                    <div>
+                      <p className="font-medium">{clinician.name}</p>
+                      <p className="text-xs text-muted-foreground">Clinician account</p>
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => promoteMutation.mutate(clinician.id)}
+                    disabled={promoteMutation.isPending}
+                    data-testid={`button-promote-${clinician.id}`}
+                  >
+                    {promoteMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                    <ShieldCheck className="h-4 w-4 mr-2" />
+                    Promote to Admin
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
         <DialogContent>

@@ -291,14 +291,35 @@ export default function FormFill() {
   if (isSubmitted) {
       return (
           <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
-              <Card className="max-w-md w-full text-center p-6 shadow-lg border-t-4 border-t-emerald-500">
+              <Card className="max-w-xl w-full text-center p-6 shadow-lg border-t-4 border-t-emerald-500">
                   <div className="mx-auto w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mb-4 text-emerald-600">
                       <CheckCircle2 className="h-8 w-8" />
                   </div>
-                  <h1 className="text-2xl font-serif font-bold text-slate-900 mb-2">Thank You</h1>
-                  <p className="text-slate-600 mb-6">
-                      Your form has been successfully submitted to The Perinatal Psychology Practice. We will review your information and be in touch shortly.
-                  </p>
+                  <h1 className="text-2xl font-serif font-bold text-slate-900 mb-4">Thank you for completing our intake form.</h1>
+                  <div className="text-slate-600 text-left space-y-4 mb-6">
+                      <p>
+                          A senior clinician will review your responses within 2-3 working days. This helps us understand your needs, consider any preferences or adjustments, and suggest the most suitable Psychologist for you.
+                      </p>
+                      <p>
+                          We will be in touch soon with next steps.
+                      </p>
+                      <p>
+                          If you have any questions in the meantime, you can contact us at{" "}
+                          <a href="mailto:pa@perinatalpsychologypractice.co.uk" className="text-primary hover:underline">
+                              pa@perinatalpsychologypractice.co.uk
+                          </a>.
+                      </p>
+                      <p>
+                          If you need urgent support, please contact your GP or a trusted healthcare provider. In the UK, you can also receive immediate support from: the Samaritans (Call 116 123 lines open 24/7 365 days a year or email{" "}
+                          <a href="mailto:jo@samaritans.org" className="text-primary hover:underline">jo@samaritans.org</a>); or contact CALM (<a href="https://www.thecalmzone.net/" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">https://www.thecalmzone.net/</a>) on their national helpline 0800 585858 (5pm to midnight).
+                      </p>
+                      <p className="pt-2">
+                          Warm regards,
+                      </p>
+                      <p className="font-medium">
+                          The Perinatal Psychology Practice Team
+                      </p>
+                  </div>
                   <Button variant="outline" onClick={() => window.close()}>
                       Close Window
                   </Button>

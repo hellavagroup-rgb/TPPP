@@ -8,9 +8,13 @@ import {
   AlertCircle, 
   Loader2,
   Mail,
-  CheckCircle2
+  CheckCircle2,
+  Calendar,
+  Clock
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/lib/auth";
+import { Link } from "wouter";
 import type { Client, Task, Clinician, TimeSlot } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
 
@@ -53,6 +57,7 @@ function getSlotCounts(availability?: TimeSlot[]) {
 
 export default function Dashboard() {
   const { toast } = useToast();
+  const { user } = useAuth();
   const [sendingReminders, setSendingReminders] = useState(false);
 
   const { data: clients = [] } = useQuery<Client[]>({
@@ -66,6 +71,14 @@ export default function Dashboard() {
   const { data: clinicians = [] } = useQuery<ClinicianWithAvailability[]>({
     queryKey: ["/api/clinicians"],
   });
+
+  // Get linked clinician data for admins who are also clinicians
+  const linkedClinician = user?.linkedClinicianId 
+    ? clinicians.find(c => c.id === user.linkedClinicianId) 
+    : null;
+  const linkedClinicianSlots = linkedClinician 
+    ? getSlotCounts(linkedClinician.availability) 
+    : null;
 
   const sendRemindersMutation = useMutation({
     mutationFn: async () => {
@@ -162,6 +175,45 @@ export default function Dashboard() {
           </Card>
         ))}
       </div>
+
+      {/* My Availability section for admins linked to a clinician profile */}
+      {linkedClinician && (
+        <Card className="border-l-4 border-l-primary">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Calendar className="h-5 w-5" />
+              My Availability
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <p className="text-sm text-muted-foreground">
+                  Your clinician profile: <span className="font-medium text-foreground">{linkedClinician.name}</span>
+                </p>
+                <div className="flex items-center gap-4 text-sm">
+                  <div className="flex items-center gap-1">
+                    <Clock className="h-4 w-4 text-emerald-600" />
+                    <span className="font-medium text-emerald-600">{linkedClinicianSlots?.available || 0}</span>
+                    <span className="text-muted-foreground">available slots</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Clock className="h-4 w-4 text-amber-600" />
+                    <span className="font-medium text-amber-600">{linkedClinicianSlots?.pending || 0}</span>
+                    <span className="text-muted-foreground">pending</span>
+                  </div>
+                </div>
+              </div>
+              <Link href={`/availability?clinicianId=${linkedClinician.id}`}>
+                <Button>
+                  <Calendar className="h-4 w-4 mr-2" />
+                  Manage My Availability
+                </Button>
+              </Link>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         <div className="col-span-2 space-y-6">

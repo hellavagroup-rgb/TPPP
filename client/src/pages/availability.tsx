@@ -253,6 +253,19 @@ export default function Availability() {
     }
   }, [user, clinicians]);
 
+  // Handle clinicianId query parameter (for linked admins)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const clinicianId = params.get("clinicianId");
+    if (clinicianId && clinicians.length > 0) {
+      const clinician = clinicians.find(c => c.id === clinicianId);
+      if (clinician) {
+        setDialogClinicianId(clinicianId);
+        setIsDialogOpen(true);
+      }
+    }
+  }, [clinicians]);
+
   useEffect(() => {
     if (isDialogOpen && user?.role !== "clinician") {
       if (clinicians.length > 0 && !dialogClinicianId) {

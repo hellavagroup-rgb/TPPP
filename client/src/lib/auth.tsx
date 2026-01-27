@@ -11,6 +11,7 @@ export interface User {
   name: string;
   email: string;
   role: UserRole;
+  linkedClinicianId?: string | null;
 }
 
 interface AuthContextType {

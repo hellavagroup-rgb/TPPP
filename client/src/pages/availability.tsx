@@ -69,7 +69,7 @@ export default function Availability() {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   
   const [weekStart, setWeekStart] = useState(startOfWeek(new Date(), { weekStartsOn: 1 }));
-  const DAYS_TO_SHOW = 7;
+  const DAYS_TO_SHOW = 6;
 
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
@@ -822,7 +822,7 @@ export default function Availability() {
             <ChevronLeft className="h-4 w-4 mr-1" /> Previous
           </Button>
           <div className="text-sm font-medium text-muted-foreground">
-            {format(weekStart, "d MMM")} - {format(addDays(weekStart, 6), "d MMM yyyy")}
+            {format(weekStart, "d MMM")} - {format(addDays(weekStart, 5), "d MMM yyyy")}
           </div>
           <Button variant="outline" size="sm" onClick={handleScrollRight}>
             Next <ChevronRight className="h-4 w-4 ml-1" />

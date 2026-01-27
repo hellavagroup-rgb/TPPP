@@ -397,7 +397,7 @@ function AdminUsersTab() {
 
   const handleOpenLinkDialog = (admin: AdminUser) => {
     setLinkingAdmin(admin);
-    setSelectedClinicianId(admin.linkedClinicianId || "");
+    setSelectedClinicianId(admin.linkedClinicianId || "none");
     setShowLinkDialog(true);
   };
 
@@ -405,7 +405,7 @@ function AdminUsersTab() {
     if (!linkingAdmin) return;
     linkMutation.mutate({ 
       adminId: linkingAdmin.id, 
-      clinicianId: selectedClinicianId || null 
+      clinicianId: selectedClinicianId === "none" ? null : selectedClinicianId 
     });
   };
 
@@ -573,7 +573,7 @@ function AdminUsersTab() {
                   <SelectValue placeholder="Select a clinician (or none to unlink)" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">None (unlink)</SelectItem>
+                  <SelectItem value="none">None (unlink)</SelectItem>
                   {clinicians?.map((clinician) => (
                     <SelectItem key={clinician.id} value={clinician.id}>
                       {clinician.name}
@@ -592,7 +592,7 @@ function AdminUsersTab() {
             </Button>
             <Button onClick={handleLinkSubmit} disabled={linkMutation.isPending} data-testid="button-save-clinician-link">
               {linkMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-              {selectedClinicianId ? "Link" : "Unlink"}
+              {selectedClinicianId && selectedClinicianId !== "none" ? "Link" : "Unlink"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -9,7 +9,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { toast } from "sonner";
-import { Loader2, Save, Mail, Trash2, UserPlus } from "lucide-react";
+import { Loader2, Save, Mail, Trash2, UserPlus, Link2, Unlink } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useAuth } from "@/lib/auth";
 
@@ -259,6 +260,13 @@ interface AdminUser {
   name: string;
   email: string;
   role: string;
+  linkedClinicianId?: string | null;
+}
+
+interface Clinician {
+  id: string;
+  name: string;
+  avatar: string;
 }
 
 function AccountTab() {
@@ -327,10 +335,17 @@ function AdminUsersTab() {
   const queryClient = useQueryClient();
   const { user: currentUser } = useAuth();
   const [showAddDialog, setShowAddDialog] = useState(false);
+  const [showLinkDialog, setShowLinkDialog] = useState(false);
+  const [linkingAdmin, setLinkingAdmin] = useState<AdminUser | null>(null);
+  const [selectedClinicianId, setSelectedClinicianId] = useState<string>("");
   const [newAdmin, setNewAdmin] = useState({ name: "", email: "" });
 
   const { data: admins, isLoading } = useQuery<AdminUser[]>({
     queryKey: ["/api/admin-users"],
+  });
+
+  const { data: clinicians } = useQuery<Clinician[]>({
+    queryKey: ["/api/clinicians"],
   });
 
   const inviteMutation = useMutation({
@@ -362,6 +377,43 @@ function AdminUsersTab() {
       toast.error(error.message || "Failed to delete admin user");
     },
   });
+
+  const linkMutation = useMutation({
+    mutationFn: async ({ adminId, clinicianId }: { adminId: string; clinicianId: string | null }) => {
+      const res = await apiRequest("PATCH", `/api/admin-users/${adminId}/link-clinician`, { clinicianId });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin-users"] });
+      toast.success(selectedClinicianId ? "Admin linked to clinician profile" : "Admin unlinked from clinician profile");
+      setShowLinkDialog(false);
+      setLinkingAdmin(null);
+      setSelectedClinicianId("");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to link admin to clinician");
+    },
+  });
+
+  const handleOpenLinkDialog = (admin: AdminUser) => {
+    setLinkingAdmin(admin);
+    setSelectedClinicianId(admin.linkedClinicianId || "");
+    setShowLinkDialog(true);
+  };
+
+  const handleLinkSubmit = () => {
+    if (!linkingAdmin) return;
+    linkMutation.mutate({ 
+      adminId: linkingAdmin.id, 
+      clinicianId: selectedClinicianId || null 
+    });
+  };
+
+  const getLinkedClinicianName = (clinicianId: string | null | undefined) => {
+    if (!clinicianId || !clinicians) return null;
+    const clinician = clinicians.find(c => c.id === clinicianId);
+    return clinician?.name || null;
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -397,34 +449,54 @@ function AdminUsersTab() {
         </CardHeader>
         <CardContent>
           <div className="space-y-3">
-            {admins?.map((admin) => (
-              <div key={admin.id} className="flex items-center justify-between p-3 border rounded-lg" data-testid={`admin-user-${admin.id}`}>
-                <div className="flex items-center gap-3">
-                  <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center text-sm font-bold text-primary">
-                    {admin.name.substring(0, 2).toUpperCase()}
+            {admins?.map((admin) => {
+              const linkedName = getLinkedClinicianName(admin.linkedClinicianId);
+              return (
+                <div key={admin.id} className="flex items-center justify-between p-3 border rounded-lg" data-testid={`admin-user-${admin.id}`}>
+                  <div className="flex items-center gap-3">
+                    <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center text-sm font-bold text-primary">
+                      {admin.name.substring(0, 2).toUpperCase()}
+                    </div>
+                    <div>
+                      <p className="font-medium">{admin.name}</p>
+                      <p className="text-sm text-muted-foreground">{admin.email}</p>
+                      {linkedName && (
+                        <p className="text-xs text-emerald-600 flex items-center gap-1 mt-0.5">
+                          <Link2 className="h-3 w-3" />
+                          Linked to {linkedName}
+                        </p>
+                      )}
+                    </div>
                   </div>
-                  <div>
-                    <p className="font-medium">{admin.name}</p>
-                    <p className="text-sm text-muted-foreground">{admin.email}</p>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleOpenLinkDialog(admin)}
+                      title={linkedName ? "Change clinician link" : "Link to clinician"}
+                      data-testid={`button-link-admin-${admin.id}`}
+                    >
+                      {linkedName ? <Link2 className="h-4 w-4 text-emerald-600" /> : <Link2 className="h-4 w-4" />}
+                    </Button>
+                    {admin.id !== currentUser?.id && (
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className="text-destructive hover:text-destructive"
+                        onClick={() => deleteMutation.mutate(admin.id)}
+                        disabled={deleteMutation.isPending}
+                        data-testid={`button-delete-admin-${admin.id}`}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
+                    {admin.id === currentUser?.id && (
+                      <span className="text-xs text-muted-foreground px-2 py-1 bg-muted rounded">You</span>
+                    )}
                   </div>
                 </div>
-                {admin.id !== currentUser?.id && (
-                  <Button 
-                    variant="ghost" 
-                    size="sm" 
-                    className="text-destructive hover:text-destructive"
-                    onClick={() => deleteMutation.mutate(admin.id)}
-                    disabled={deleteMutation.isPending}
-                    data-testid={`button-delete-admin-${admin.id}`}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                )}
-                {admin.id === currentUser?.id && (
-                  <span className="text-xs text-muted-foreground px-2 py-1 bg-muted rounded">You</span>
-                )}
-              </div>
-            ))}
+              );
+            })}
             {(!admins || admins.length === 0) && (
               <p className="text-center text-muted-foreground py-4">No admin users found</p>
             )}
@@ -477,6 +549,52 @@ function AdminUsersTab() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showLinkDialog} onOpenChange={setShowLinkDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Link to Clinician Profile</DialogTitle>
+            <DialogDescription>
+              Link this admin to a clinician profile to allow them to manage their own availability.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Admin User</Label>
+              <p className="text-sm font-medium">{linkingAdmin?.name}</p>
+              <p className="text-xs text-muted-foreground">{linkingAdmin?.email}</p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="clinician-select">Clinician Profile</Label>
+              <Select value={selectedClinicianId} onValueChange={setSelectedClinicianId}>
+                <SelectTrigger id="clinician-select" data-testid="select-clinician-link">
+                  <SelectValue placeholder="Select a clinician (or none to unlink)" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">None (unlink)</SelectItem>
+                  {clinicians?.map((clinician) => (
+                    <SelectItem key={clinician.id} value={clinician.id}>
+                      {clinician.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                When linked, this admin will see "My Availability" in the dashboard to manage their own slots.
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setShowLinkDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleLinkSubmit} disabled={linkMutation.isPending} data-testid="button-save-clinician-link">
+              {linkMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              {selectedClinicianId ? "Link" : "Unlink"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </>

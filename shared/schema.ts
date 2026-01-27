@@ -11,6 +11,7 @@ export const users = pgTable("users", {
   password: text("password").notNull(), // Will be hashed with bcrypt
   role: text("role", { enum: ["admin", "clinician"] }).notNull(),
   name: text("name").notNull(),
+  linkedClinicianId: varchar("linked_clinician_id"), // For admins who are also clinicians
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

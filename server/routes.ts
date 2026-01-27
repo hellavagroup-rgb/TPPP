@@ -9,7 +9,7 @@ import {
   insertFormTemplateSchema, insertTaskSchema, insertUserSchema 
 } from "@shared/schema";
 import { z } from "zod";
-import { sendEmail, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail } from "./email";
+import { sendEmail, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail } from "./email";
 import { forceReseedDatabase } from "./seed";
 
 export async function registerRoutes(
@@ -840,6 +840,19 @@ export async function registerRoutes(
         clientUpdate.insurer = insurerValue;
       }
       await storage.updateClient(clientId, clientUpdate);
+
+      // Send confirmation email to client if they have an email address
+      if (client.email) {
+        try {
+          const emailOptions = await generateFormCompletionEmail();
+          emailOptions.to = client.email;
+          await sendEmail(emailOptions);
+          console.log(`Form completion email sent to client ${clientId}`);
+        } catch (emailError) {
+          // Log but don't fail the submission if email fails
+          console.error("Failed to send form completion email:", emailError);
+        }
+      }
 
       res.json({ success: true, submissionId: submission.id });
     } catch (error) {

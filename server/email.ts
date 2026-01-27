@@ -335,3 +335,95 @@ export async function generateAvailabilityReminderEmail(clinicianName: string, l
     text: `Hello ${clinicianName},\n\nThis is a friendly reminder to update your availability in the practice management system.\n\nPlease log in at: ${loginUrl}\n\nKeeping your availability current helps us efficiently allocate new clients.\n\nThank you!\nThe Perinatal Psychology Practice`,
   };
 }
+
+export async function generateFormCompletionEmail(): Promise<EmailOptions> {
+  const storedTemplate = await getStoredTemplate('form_completion');
+  
+  if (storedTemplate) {
+    return {
+      to: '',
+      subject: storedTemplate.subject,
+      html: wrapInHtmlTemplate(storedTemplate.bodyText, 'Thank You'),
+      text: storedTemplate.bodyText,
+    };
+  }
+
+  const defaultBodyText = `Thank you for completing our intake form. We know that sharing this information can sometimes feel difficult, and we really appreciate you taking the time to share it with us.
+
+One of our senior clinicians will carefully review the information you've shared within 2-3 working days. Your form helps us to:
+
+Better understand what you are experiencing and what support you might need
+
+Take into account any preferences or adjustments that would help you feel comfortable in therapy
+
+Recommend a Clinical or Counselling Psychologist whose experience and availability best fits what you're looking for
+
+All of our clinicians are HCPC registered Psychologists with specialist expertise in perinatal mental health, and we take care to make thoughtful, individualised recommendations.
+
+Once your form has been reviewed, we'll be in touch with next steps.
+
+If you have any questions in the meantime, please don't hesitate to contact us at pa@perinatalpsychologypractice.co.uk.
+
+Warm regards,
+
+The Perinatal Psychology Practice Team
+
+
+If you need urgent support, please contact your GP or a trusted healthcare provider. In the UK, you can also receive immediate support from: the Samaritans (Call 116 123 lines open 24/7 365 days a year or email jo@samaritans.org); or contact CALM (https://www.thecalmzone.net/) on their national helpline 0800 585858 (5pm to midnight).`;
+
+  return {
+    to: '',
+    subject: 'Thank You for Completing Your Intake Form - The Perinatal Psychology Practice',
+    html: `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8">
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+            .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+            .content { background: #f8f9fa; padding: 30px; border-radius: 0 0 8px 8px; }
+            .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
+            .urgent-support { background: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 6px; margin-top: 20px; font-size: 13px; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1>Thank You</h1>
+            </div>
+            <div class="content">
+              <p>Thank you for completing our intake form. We know that sharing this information can sometimes feel difficult, and we really appreciate you taking the time to share it with us.</p>
+              
+              <p>One of our senior clinicians will carefully review the information you've shared within 2-3 working days. Your form helps us to:</p>
+              
+              <ul>
+                <li>Better understand what you are experiencing and what support you might need</li>
+                <li>Take into account any preferences or adjustments that would help you feel comfortable in therapy</li>
+                <li>Recommend a Clinical or Counselling Psychologist whose experience and availability best fits what you're looking for</li>
+              </ul>
+              
+              <p>All of our clinicians are HCPC registered Psychologists with specialist expertise in perinatal mental health, and we take care to make thoughtful, individualised recommendations.</p>
+              
+              <p>Once your form has been reviewed, we'll be in touch with next steps.</p>
+              
+              <p>If you have any questions in the meantime, please don't hesitate to contact us at <a href="mailto:pa@perinatalpsychologypractice.co.uk">pa@perinatalpsychologypractice.co.uk</a>.</p>
+              
+              <p>Warm regards,</p>
+              <p><strong>The Perinatal Psychology Practice Team</strong></p>
+              
+              <div class="urgent-support">
+                <strong>If you need urgent support</strong>, please contact your GP or a trusted healthcare provider. In the UK, you can also receive immediate support from: the Samaritans (Call 116 123, lines open 24/7 365 days a year, or email <a href="mailto:jo@samaritans.org">jo@samaritans.org</a>); or contact CALM (<a href="https://www.thecalmzone.net/">https://www.thecalmzone.net/</a>) on their national helpline 0800 585858 (5pm to midnight).
+              </div>
+            </div>
+            <div class="footer">
+              <p>The Perinatal Psychology Practice</p>
+            </div>
+          </div>
+        </body>
+      </html>
+    `,
+    text: defaultBodyText,
+  };
+}

@@ -51,7 +51,7 @@ interface SlotForDate {
   validUntil?: string;
 }
 
-const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 const TIME_OPTIONS = Array.from({ length: 13 * 4 + 1 }, (_, i) => {
   const hour = Math.floor(i / 4) + 7;

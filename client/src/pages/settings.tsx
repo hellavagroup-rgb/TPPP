@@ -116,6 +116,34 @@ The Perinatal Psychology Practice Team
 
 If you need urgent support, please contact your GP or a trusted healthcare provider. In the UK, you can also receive immediate support from: the Samaritans (Call 116 123 lines open 24/7 365 days a year or email jo@samaritans.org); or contact CALM (https://www.thecalmzone.net/) on their national helpline 0800 585858 (5pm to midnight).`,
   },
+  {
+    templateKey: "new_referral",
+    name: "New Referral Notification",
+    subject: "New Referral Received - {{clientDisplayId}}",
+    bodyText: `A new client referral has been received.
+
+Client ID: {{clientDisplayId}}
+Name: {{clientName}}
+
+Please log in to the practice management system to review and process this referral.
+
+The Perinatal Psychology Practice`,
+  },
+  {
+    templateKey: "waitlist_update",
+    name: "Waitlist Status Update",
+    subject: "Client Status Updated - {{clientDisplayId}}",
+    bodyText: `A client's status has been updated.
+
+Client ID: {{clientDisplayId}}
+Name: {{clientName}}
+Previous Status: {{oldStatus}}
+New Status: {{newStatus}}
+
+Please log in to the practice management system to review this update.
+
+The Perinatal Psychology Practice`,
+  },
 ];
 
 function NotificationsTab() {

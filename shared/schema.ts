@@ -12,6 +12,11 @@ export const users = pgTable("users", {
   role: text("role", { enum: ["admin", "clinician"] }).notNull(),
   name: text("name").notNull(),
   linkedClinicianId: varchar("linked_clinician_id"), // For admins who are also clinicians
+  notificationPrefs: json("notification_prefs").$type<{
+    newReferrals?: boolean;
+    waitlistUpdates?: boolean;
+    taskAssignments?: boolean;
+  }>().default({ newReferrals: true, waitlistUpdates: true, taskAssignments: true }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

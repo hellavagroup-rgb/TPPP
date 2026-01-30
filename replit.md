@@ -13,6 +13,10 @@
 - Added "Add Task" feature with priority levels and due dates
 - Updated form-fill page to use real API endpoints with proper conditional field logic (showWhen support)
 - Added public form submission endpoint that updates client status automatically
+- Added notification preferences in Settings allowing users to toggle email notifications for new referrals, waitlist updates, and task assignments
+- Task assignment emails now respect user notification preferences (taskAssignments toggle)
+- Added "Promote to Admin" feature for clinicians to become admins while keeping their clinician profile linked
+- Availability calendar now shows Monday-Saturday only (Sunday removed)
 
 ## Overview
 

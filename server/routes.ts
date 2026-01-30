@@ -1128,6 +1128,34 @@ export async function registerRoutes(
       }
       const validated = insertTaskSchema.parse(body);
       const task = await storage.createTask(validated);
+
+      // Send email notification if assignee has task notifications enabled
+      if (validated.assignee) {
+        try {
+          const assigneeUser = await storage.getUserByName(validated.assignee);
+          if (assigneeUser) {
+            const prefs = assigneeUser.notificationPrefs as { taskAssignments?: boolean } | null;
+            if (prefs?.taskAssignments !== false) {
+              const dueDateStr = validated.dueDate ? 
+                new Date(validated.dueDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 
+                'Not specified';
+              const emailOptions = await generateTaskReminderEmail(
+                assigneeUser.name,
+                validated.title,
+                validated.description || '',
+                dueDateStr
+              );
+              await sendEmail({
+                ...emailOptions,
+                to: assigneeUser.email
+              });
+            }
+          }
+        } catch (emailError) {
+          console.error("Failed to send task assignment email:", emailError);
+        }
+      }
+
       res.json(task);
     } catch (error) {
       if (error instanceof z.ZodError) {

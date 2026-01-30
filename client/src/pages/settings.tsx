@@ -118,6 +118,80 @@ If you need urgent support, please contact your GP or a trusted healthcare provi
   },
 ];
 
+function NotificationsTab() {
+  const { user, refreshUser } = useAuth();
+  const [saving, setSaving] = useState(false);
+  
+  const defaultPrefs = {
+    newReferrals: true,
+    waitlistUpdates: true,
+    taskAssignments: true,
+  };
+  
+  const prefs = user?.notificationPrefs || defaultPrefs;
+
+  const handleToggle = async (key: keyof typeof defaultPrefs, value: boolean) => {
+    setSaving(true);
+    try {
+      const newPrefs = { ...prefs, [key]: value };
+      const res = await apiRequest("PATCH", "/api/auth/notifications", { notificationPrefs: newPrefs });
+      if (res.ok) {
+        await refreshUser();
+        toast.success("Notification preference saved");
+      } else {
+        toast.error("Failed to save preference");
+      }
+    } catch (error) {
+      toast.error("Failed to save preference");
+    }
+    setSaving(false);
+  };
+
+  return (
+    <Card className="border-none shadow-sm">
+      <CardHeader>
+        <CardTitle>Email Notifications</CardTitle>
+        <CardDescription>Configure when you receive emails.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="space-y-0.5">
+            <Label>New Referrals</Label>
+            <p className="text-sm text-muted-foreground">Receive an email when a new client form is submitted.</p>
+          </div>
+          <Switch 
+            checked={prefs.newReferrals !== false}
+            onCheckedChange={(checked) => handleToggle("newReferrals", checked)}
+            disabled={saving}
+          />
+        </div>
+        <div className="flex items-center justify-between">
+          <div className="space-y-0.5">
+            <Label>Waitlist Updates</Label>
+            <p className="text-sm text-muted-foreground">Weekly summary of waitlisted clients.</p>
+          </div>
+          <Switch 
+            checked={prefs.waitlistUpdates !== false}
+            onCheckedChange={(checked) => handleToggle("waitlistUpdates", checked)}
+            disabled={saving}
+          />
+        </div>
+        <div className="flex items-center justify-between">
+          <div className="space-y-0.5">
+            <Label>Task Assignments</Label>
+            <p className="text-sm text-muted-foreground">When a task is assigned to you.</p>
+          </div>
+          <Switch 
+            checked={prefs.taskAssignments !== false}
+            onCheckedChange={(checked) => handleToggle("taskAssignments", checked)}
+            disabled={saving}
+          />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function EmailTemplatesTab() {
   const queryClient = useQueryClient();
   const [editingTemplate, setEditingTemplate] = useState<string | null>(null);
@@ -687,35 +761,7 @@ export default function Settings() {
         </TabsList>
 
         <TabsContent value="notifications" className="space-y-4">
-          <Card className="border-none shadow-sm">
-            <CardHeader>
-              <CardTitle>Email Notifications</CardTitle>
-              <CardDescription>Configure when you receive emails.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>New Referrals</Label>
-                  <p className="text-sm text-muted-foreground">Receive an email when a new client form is submitted.</p>
-                </div>
-                <Switch defaultChecked />
-              </div>
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>Waitlist Updates</Label>
-                  <p className="text-sm text-muted-foreground">Weekly summary of waitlisted clients.</p>
-                </div>
-                <Switch defaultChecked />
-              </div>
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>Task Assignments</Label>
-                  <p className="text-sm text-muted-foreground">When a task is assigned to you.</p>
-                </div>
-                <Switch defaultChecked />
-              </div>
-            </CardContent>
-          </Card>
+          <NotificationsTab />
         </TabsContent>
 
         <TabsContent value="email-templates">

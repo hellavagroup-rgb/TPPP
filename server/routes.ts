@@ -121,6 +121,25 @@ export async function registerRoutes(
     }
   });
 
+  // Update notification preferences
+  app.patch("/api/auth/notifications", requireAuth, async (req, res) => {
+    try {
+      const { notificationPrefs } = req.body;
+      const userId = (req.user as any).id;
+
+      const updatedUser = await storage.updateUser(userId, { notificationPrefs });
+      if (!updatedUser) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      const { password: _, ...safeUser } = updatedUser;
+      res.json(safeUser);
+    } catch (error) {
+      console.error("Failed to update notification preferences:", error);
+      res.status(500).json({ error: "Failed to update notification preferences" });
+    }
+  });
+
   // ============ CLINICIAN ROUTES ============
   app.get("/api/clinicians", requireAuth, async (req, res) => {
     try {

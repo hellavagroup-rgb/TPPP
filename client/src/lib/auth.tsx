@@ -6,12 +6,19 @@ import type { SafeUser } from "@shared/schema";
 
 export type UserRole = "admin" | "clinician";
 
+export interface NotificationPrefs {
+  newReferrals?: boolean;
+  waitlistUpdates?: boolean;
+  taskAssignments?: boolean;
+}
+
 export interface User {
   id: string;
   name: string;
   email: string;
   role: UserRole;
   linkedClinicianId?: string | null;
+  notificationPrefs?: NotificationPrefs;
 }
 
 interface AuthContextType {

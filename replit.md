@@ -14,7 +14,10 @@
 - Updated form-fill page to use real API endpoints with proper conditional field logic (showWhen support)
 - Added public form submission endpoint that updates client status automatically
 - Added notification preferences in Settings allowing users to toggle email notifications for new referrals, waitlist updates, and task assignments
-- Task assignment emails now respect user notification preferences (taskAssignments toggle)
+- All three notification types now send automatic emails based on user preferences:
+  - **New Referrals**: Emails sent to admins when new clients are created
+  - **Waitlist Updates**: Emails sent to admins when client status changes
+  - **Task Assignments**: Emails sent to assignee when tasks are created
 - Added "Promote to Admin" feature for clinicians to become admins while keeping their clinician profile linked
 - Availability calendar now shows Monday-Saturday only (Sunday removed)
 

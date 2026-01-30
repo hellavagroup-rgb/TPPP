@@ -9,7 +9,7 @@ import {
   insertFormTemplateSchema, insertTaskSchema, insertUserSchema 
 } from "@shared/schema";
 import { z } from "zod";
-import { sendEmail, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail } from "./email";
+import { sendEmail, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateNewReferralEmail, generateWaitlistUpdateEmail } from "./email";
 import { forceReseedDatabase } from "./seed";
 
 export async function registerRoutes(
@@ -757,6 +757,25 @@ export async function registerRoutes(
     try {
       const validated = insertClientSchema.parse(req.body);
       const client = await storage.createClient(validated);
+
+      // Send new referral notification to admins with newReferrals enabled
+      try {
+        const adminUsers = await storage.getAdminUsers();
+        const clientName = `${validated.firstName || ''} ${validated.lastName || ''}`.trim() || 'Unknown';
+        for (const admin of adminUsers) {
+          const prefs = admin.notificationPrefs as { newReferrals?: boolean } | null;
+          if (prefs?.newReferrals !== false) {
+            const emailOptions = await generateNewReferralEmail(client.displayId, clientName);
+            await sendEmail({
+              ...emailOptions,
+              to: admin.email
+            });
+          }
+        }
+      } catch (emailError) {
+        console.error("Failed to send new referral notifications:", emailError);
+      }
+
       res.json(client);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -768,10 +787,40 @@ export async function registerRoutes(
 
   app.patch("/api/clients/:id", requireAdmin, auditLog("edit", "client"), async (req, res) => {
     try {
+      // Get current client to check for status change
+      const currentClient = await storage.getClient(req.params.id);
+      const oldStatus = currentClient?.status;
+      
       const updated = await storage.updateClient(req.params.id, req.body);
       if (!updated) {
         return res.status(404).json({ error: "Client not found" });
       }
+
+      // Send waitlist update notification if status changed
+      if (req.body.status && oldStatus && req.body.status !== oldStatus) {
+        try {
+          const adminUsers = await storage.getAdminUsers();
+          const clientName = `${updated.firstName || ''} ${updated.lastName || ''}`.trim() || 'Unknown';
+          for (const admin of adminUsers) {
+            const prefs = admin.notificationPrefs as { waitlistUpdates?: boolean } | null;
+            if (prefs?.waitlistUpdates !== false) {
+              const emailOptions = await generateWaitlistUpdateEmail(
+                updated.displayId,
+                clientName,
+                oldStatus,
+                req.body.status
+              );
+              await sendEmail({
+                ...emailOptions,
+                to: admin.email
+              });
+            }
+          }
+        } catch (emailError) {
+          console.error("Failed to send waitlist update notifications:", emailError);
+        }
+      }
+
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "Failed to update client" });

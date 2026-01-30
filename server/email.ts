@@ -427,3 +427,55 @@ If you need urgent support, please contact your GP or a trusted healthcare provi
     text: defaultBodyText,
   };
 }
+
+export async function generateNewReferralEmail(clientDisplayId: string, clientName: string): Promise<EmailOptions> {
+  const storedTemplate = await getStoredTemplate('new_referral');
+  
+  if (storedTemplate) {
+    const bodyText = storedTemplate.bodyText
+      .replace(/\{\{clientDisplayId\}\}/g, clientDisplayId)
+      .replace(/\{\{clientName\}\}/g, clientName);
+    return {
+      to: '',
+      subject: storedTemplate.subject.replace(/\{\{clientDisplayId\}\}/g, clientDisplayId),
+      html: wrapInHtmlTemplate(bodyText, 'New Referral'),
+      text: bodyText,
+    };
+  }
+
+  const bodyText = `A new client referral has been received.\n\nClient ID: ${clientDisplayId}\nName: ${clientName}\n\nPlease log in to the practice management system to review and process this referral.\n\nThe Perinatal Psychology Practice`;
+
+  return {
+    to: '',
+    subject: `New Referral Received - ${clientDisplayId}`,
+    html: wrapInHtmlTemplate(bodyText, 'New Referral'),
+    text: bodyText,
+  };
+}
+
+export async function generateWaitlistUpdateEmail(clientDisplayId: string, clientName: string, oldStatus: string, newStatus: string): Promise<EmailOptions> {
+  const storedTemplate = await getStoredTemplate('waitlist_update');
+  
+  if (storedTemplate) {
+    const bodyText = storedTemplate.bodyText
+      .replace(/\{\{clientDisplayId\}\}/g, clientDisplayId)
+      .replace(/\{\{clientName\}\}/g, clientName)
+      .replace(/\{\{oldStatus\}\}/g, oldStatus)
+      .replace(/\{\{newStatus\}\}/g, newStatus);
+    return {
+      to: '',
+      subject: storedTemplate.subject.replace(/\{\{clientDisplayId\}\}/g, clientDisplayId),
+      html: wrapInHtmlTemplate(bodyText, 'Waitlist Update'),
+      text: bodyText,
+    };
+  }
+
+  const bodyText = `A client's status has been updated.\n\nClient ID: ${clientDisplayId}\nName: ${clientName}\nPrevious Status: ${oldStatus}\nNew Status: ${newStatus}\n\nPlease log in to the practice management system to review this update.\n\nThe Perinatal Psychology Practice`;
+
+  return {
+    to: '',
+    subject: `Client Status Updated - ${clientDisplayId}`,
+    html: wrapInHtmlTemplate(bodyText, 'Waitlist Update'),
+    text: bodyText,
+  };
+}

@@ -1133,7 +1133,7 @@ export default function Clients() {
                       onClick={() => {
                         updateClientMutation.mutate({ 
                           id: client.id, 
-                          updates: { status: "AwaitingConfirmation", awaitingConfirmationAt: new Date().toISOString() } 
+                          updates: { status: "AwaitingConfirmation" } 
                         });
                       }}
                     >

@@ -840,6 +840,7 @@ export async function registerRoutes(
 
       res.json(updated);
     } catch (error) {
+      console.error("Failed to update client:", error);
       res.status(500).json({ error: "Failed to update client" });
     }
   });

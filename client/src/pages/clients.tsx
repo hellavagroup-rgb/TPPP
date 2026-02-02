@@ -1131,9 +1131,11 @@ export default function Clients() {
                       variant="outline" 
                       className="w-full gap-1 text-[10px] mt-2 border-purple-300 text-purple-700 hover:bg-purple-50 h-auto py-2 whitespace-normal"
                       onClick={() => {
-                        updateClientMutation.mutate({ 
-                          id: client.id, 
-                          updates: { status: "AwaitingConfirmation" } 
+                        reassignClientMutation.mutate({ 
+                          clientId: client.id, 
+                          clinicianId: client.assignedClinicianId,
+                          slotId: client.assignedSlotId,
+                          status: "AwaitingConfirmation"
                         });
                       }}
                     >

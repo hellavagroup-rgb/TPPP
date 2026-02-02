@@ -20,6 +20,8 @@
   - **Task Assignments**: Emails sent to assignee when tasks are created
 - Added "Promote to Admin" feature for clinicians to become admins while keeping their clinician profile linked
 - Availability calendar now shows Monday-Saturday only (Sunday removed)
+- Added workflow stage timestamps: formsSentAt, formsCompletedAt, allocatedAt, confirmedAt track when clients move through each stage
+- Kanban board now displays relevant timestamps for each column (Created, Sent, Completed, Allocated, Confirmed dates)
 
 ## Overview
 

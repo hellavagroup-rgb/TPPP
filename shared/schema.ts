@@ -113,6 +113,11 @@ export const clients = pgTable("clients", {
   allocationMethod: text("allocation_method", { enum: ["form", "manual"] }), // How client was allocated
   isArchived: boolean("is_archived").default(false).notNull(), // Soft delete - archived clients are hidden
   archivedAt: timestamp("archived_at"), // When the client was archived
+  // Workflow Stage Timestamps
+  formsSentAt: timestamp("forms_sent_at"), // When forms were sent to client
+  formsCompletedAt: timestamp("forms_completed_at"), // When client completed forms
+  allocatedAt: timestamp("allocated_at"), // When client was allocated to clinician
+  confirmedAt: timestamp("confirmed_at"), // When appointment was confirmed
   // Timestamps
   intakeDate: timestamp("intake_date").defaultNow().notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),

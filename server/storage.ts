@@ -468,6 +468,7 @@ export class DatabaseStorage implements IStorage {
         assignedSlotId: slotId,
         assignedSlot: slotString,
         allocationMethod: allocationMethod,
+        allocatedAt: new Date(),
         updatedAt: new Date()
       }).where(eq(clients.id, clientId));
 
@@ -564,13 +565,19 @@ export class DatabaseStorage implements IStorage {
           : `${newSlot.day} ${newSlot.startTime}`;
 
         // Update client with new assignment
-        await tx.update(clients).set({
+        const clientUpdates: any = {
           status: newStatus as any,
           assignedClinicianId: newClinicianId,
           assignedSlotId: newSlotId,
           assignedSlot: slotString,
           updatedAt: new Date()
-        }).where(eq(clients.id, clientId));
+        };
+        if (newStatus === "Assigned") {
+          clientUpdates.allocatedAt = new Date();
+        } else if (newStatus === "Scheduled") {
+          clientUpdates.confirmedAt = new Date();
+        }
+        await tx.update(clients).set(clientUpdates).where(eq(clients.id, clientId));
 
         // Mark new slot as booked
         await tx.update(timeSlots).set({ isBooked: true }).where(eq(timeSlots.id, newSlotId));

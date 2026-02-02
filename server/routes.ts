@@ -791,7 +791,22 @@ export async function registerRoutes(
       const currentClient = await storage.getClient(req.params.id);
       const oldStatus = currentClient?.status;
       
-      const updated = await storage.updateClient(req.params.id, req.body);
+      // Add workflow timestamps based on status change
+      const updateData = { ...req.body };
+      if (req.body.status && req.body.status !== oldStatus) {
+        const now = new Date();
+        if (req.body.status === "Forms Sent") {
+          updateData.formsSentAt = now;
+        } else if (req.body.status === "Forms Completed") {
+          updateData.formsCompletedAt = now;
+        } else if (req.body.status === "Assigned") {
+          updateData.allocatedAt = now;
+        } else if (req.body.status === "Scheduled") {
+          updateData.confirmedAt = now;
+        }
+      }
+      
+      const updated = await storage.updateClient(req.params.id, updateData);
       if (!updated) {
         return res.status(404).json({ error: "Client not found" });
       }
@@ -962,8 +977,11 @@ export async function registerRoutes(
         }
       }
 
-      // Update client status to "Forms Completed" and insurer if found
-      const clientUpdate: { status: "Forms Completed"; insurer?: string } = { status: "Forms Completed" };
+      // Update client status to "Forms Completed" with timestamp and insurer if found
+      const clientUpdate: { status: "Forms Completed"; formsCompletedAt: Date; insurer?: string } = { 
+        status: "Forms Completed",
+        formsCompletedAt: new Date()
+      };
       if (insurerValue) {
         clientUpdate.insurer = insurerValue;
       }
@@ -1278,8 +1296,8 @@ export async function registerRoutes(
         return res.status(500).json({ error: result.error || "Failed to send email" });
       }
 
-      // Update client status to "Forms Sent"
-      await storage.updateClient(clientId, { status: "Forms Sent" });
+      // Update client status to "Forms Sent" with timestamp
+      await storage.updateClient(clientId, { status: "Forms Sent", formsSentAt: new Date() });
 
       res.json({ success: true, message: "Form sent successfully" });
     } catch (error) {

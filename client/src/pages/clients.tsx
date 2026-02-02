@@ -943,7 +943,7 @@ export default function Clients() {
                     </div>
                     <p className="text-xs text-muted-foreground mb-2">
                       <Clock className="h-3 w-3 inline mr-1" />
-                      {formatDateUK(client.intakeDate)}
+                      Created: {formatDateUK(client.intakeDate)}
                     </p>
                     {client.insurer && client.insurer !== "Private" && (
                       <Badge variant="outline" className="text-[10px] mb-2">{client.insurer}</Badge>
@@ -997,7 +997,7 @@ export default function Clients() {
                     </div>
                     <p className="text-xs text-muted-foreground mb-2">
                       <Clock className="h-3 w-3 inline mr-1" />
-                      {formatDateUK(client.intakeDate)}
+                      Sent: {(client as any).formsSentAt ? formatDateUK((client as any).formsSentAt) : formatDateUK(client.intakeDate)}
                     </p>
                     {client.insurer && client.insurer !== "Private" && (
                       <Badge variant="outline" className="text-[10px]">{client.insurer}</Badge>
@@ -1051,7 +1051,7 @@ export default function Clients() {
                     </div>
                     <p className="text-xs text-muted-foreground mb-2">
                       <Clock className="h-3 w-3 inline mr-1" />
-                      {formatDateUK(client.intakeDate)}
+                      Completed: {(client as any).formsCompletedAt ? formatDateUK((client as any).formsCompletedAt) : formatDateUK(client.intakeDate)}
                     </p>
                     {client.insurer && client.insurer !== "Private" && (
                       <Badge variant="outline" className="text-[10px] mb-2">{client.insurer}</Badge>
@@ -1103,6 +1103,10 @@ export default function Clients() {
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </div>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      <Clock className="h-3 w-3 inline mr-1" />
+                      Allocated: {(client as any).allocatedAt ? formatDateUK((client as any).allocatedAt) : formatDateUK(client.intakeDate)}
+                    </p>
                     {client.assignedClinicianId && (
                       <div className="flex items-center gap-1 text-xs text-indigo-700 bg-indigo-100 px-2 py-1 rounded mb-2">
                         <UserCheck className="h-3 w-3" />
@@ -1139,6 +1143,12 @@ export default function Clients() {
                     )}
                   </div>
                   <div className="flex items-center gap-2">
+                    {client.status === "Scheduled" && (client as any).confirmedAt && (
+                      <span className="text-xs text-muted-foreground">
+                        <Clock className="h-3 w-3 inline mr-1" />
+                        Confirmed: {formatDateUK((client as any).confirmedAt)}
+                      </span>
+                    )}
                     {client.assignedClinicianId && (
                       <span className="text-sm text-muted-foreground">
                         <UserCheck className="h-4 w-4 inline mr-1" />

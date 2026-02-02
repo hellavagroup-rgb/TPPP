@@ -844,13 +844,13 @@ export async function registerRoutes(
 
   app.post("/api/clients/:clientId/assign", requireAdmin, auditLog("assign", "client"), async (req, res) => {
     try {
-      const { clinicianId, slotId, allocationMethod = "form" } = req.body;
+      const { clinicianId, slotId, allocationMethod = "form", allocationReason } = req.body;
       
       if (!clinicianId || !slotId) {
         return res.status(400).json({ error: "Missing clinicianId or slotId" });
       }
 
-      await storage.assignClinicianToClient(req.params.clientId, clinicianId, slotId, allocationMethod);
+      await storage.assignClinicianToClient(req.params.clientId, clinicianId, slotId, allocationMethod, allocationReason);
       
       const updated = await storage.getClientById(req.params.clientId);
       res.json(updated);

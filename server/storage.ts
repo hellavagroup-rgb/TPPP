@@ -66,7 +66,7 @@ export interface IStorage {
   updateClient(id: string, updates: Partial<InsertClient>): Promise<Client | undefined>;
   archiveClient(id: string): Promise<Client | undefined>;
   restoreClient(id: string): Promise<Client | undefined>;
-  assignClinicianToClient(clientId: string, clinicianId: string, slotId: string, allocationMethod?: "form" | "manual"): Promise<void>;
+  assignClinicianToClient(clientId: string, clinicianId: string, slotId: string, allocationMethod?: "form" | "manual", allocationReason?: string): Promise<void>;
   reassignClient(clientId: string, newClinicianId: string | null, newSlotId: string | null, newStatus: string): Promise<Client | undefined>;
   
   // ============ FORMS ============
@@ -448,7 +448,7 @@ export class DatabaseStorage implements IStorage {
     return client || undefined;
   }
 
-  async assignClinicianToClient(clientId: string, clinicianId: string, slotId: string, allocationMethod: "form" | "manual" = "form"): Promise<void> {
+  async assignClinicianToClient(clientId: string, clinicianId: string, slotId: string, allocationMethod: "form" | "manual" = "form", allocationReason?: string): Promise<void> {
     // Get the slot details
     const [slot] = await db.select().from(timeSlots).where(eq(timeSlots.id, slotId));
     
@@ -468,6 +468,7 @@ export class DatabaseStorage implements IStorage {
         assignedSlotId: slotId,
         assignedSlot: slotString,
         allocationMethod: allocationMethod,
+        allocationReason: allocationReason || null,
         allocatedAt: new Date(),
         updatedAt: new Date()
       }).where(eq(clients.id, clientId));

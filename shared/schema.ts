@@ -111,6 +111,7 @@ export const clients = pgTable("clients", {
   assignedSlotId: varchar("assigned_slot_id").references(() => timeSlots.id),
   assignedSlot: text("assigned_slot"), // Display string for UI
   allocationMethod: text("allocation_method", { enum: ["form", "manual"] }), // How client was allocated
+  allocationReason: text("allocation_reason"), // Admin's reason for this allocation
   isArchived: boolean("is_archived").default(false).notNull(), // Soft delete - archived clients are hidden
   archivedAt: timestamp("archived_at"), // When the client was archived
   // Workflow Stage Timestamps

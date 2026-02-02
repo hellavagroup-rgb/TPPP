@@ -167,8 +167,8 @@ export default function Clients() {
   });
 
   const assignClientMutation = useMutation({
-    mutationFn: async ({ clientId, clinicianId, slotId, allocationMethod = "form" }: { clientId: string; clinicianId: string; slotId: string; allocationMethod?: "form" | "manual" }) => {
-      const response = await apiRequest("POST", `/api/clients/${clientId}/assign`, { clinicianId, slotId, allocationMethod });
+    mutationFn: async ({ clientId, clinicianId, slotId, allocationMethod = "form", allocationReason }: { clientId: string; clinicianId: string; slotId: string; allocationMethod?: "form" | "manual"; allocationReason?: string }) => {
+      const response = await apiRequest("POST", `/api/clients/${clientId}/assign`, { clinicianId, slotId, allocationMethod, allocationReason });
       return response.json();
     },
     onSuccess: () => {
@@ -177,6 +177,7 @@ export default function Clients() {
       setSelectedClient(null);
       setIsManualAllocateOpen(false);
       setIsAllocateDialogOpen(false);
+      setAllocationReason("");
     },
     onError: () => {
       toast({ title: "Error", description: "Failed to assign client.", variant: "destructive" });
@@ -213,6 +214,7 @@ export default function Clients() {
   const [clientToArchive, setClientToArchive] = useState<ClientType | null>(null);
   const [isAllocateDialogOpen, setIsAllocateDialogOpen] = useState(false);
   const [isManualAllocation, setIsManualAllocation] = useState(false); // Track if current allocation is manual
+  const [allocationReason, setAllocationReason] = useState(""); // Reason for allocation decision
 
   const archiveClientMutation = useMutation({
     mutationFn: async (clientId: string) => {
@@ -460,7 +462,8 @@ export default function Clients() {
         clientId: clientToAssign.id, 
         clinicianId, 
         slotId,
-        allocationMethod
+        allocationMethod,
+        allocationReason: allocationReason.trim() || undefined
       });
     }
   };
@@ -1116,6 +1119,11 @@ export default function Clients() {
                     {client.assignedSlot && (
                       <p className="text-[10px] text-muted-foreground font-mono">{client.assignedSlot}</p>
                     )}
+                    {(client as any).allocationReason && (
+                      <p className="text-[10px] text-muted-foreground mt-2 italic border-t pt-2">
+                        "{(client as any).allocationReason}"
+                      </p>
+                    )}
                   </CardContent>
                 </Card>
               ))}
@@ -1251,7 +1259,7 @@ export default function Clients() {
       )}
 
       {/* Allocate Dialog (from Kanban board) */}
-      <Dialog open={isAllocateDialogOpen} onOpenChange={(open) => { setIsAllocateDialogOpen(open); if (!open) setIsManualAllocation(false); }}>
+      <Dialog open={isAllocateDialogOpen} onOpenChange={(open) => { setIsAllocateDialogOpen(open); if (!open) { setIsManualAllocation(false); setAllocationReason(""); } }}>
         <DialogContent className="sm:max-w-[600px] max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Allocate Clinician Slot</DialogTitle>
@@ -1290,6 +1298,18 @@ export default function Clients() {
               {selectedClient?.referralSource && (
                 <p className="text-xs text-muted-foreground">Referral: {selectedClient.referralSource}</p>
               )}
+            </div>
+            
+            <div className="space-y-2">
+              <Label htmlFor="allocation-reason" className="text-xs font-medium text-muted-foreground">ALLOCATION REASON (Optional)</Label>
+              <textarea
+                id="allocation-reason"
+                data-testid="input-allocation-reason"
+                className="w-full min-h-[60px] px-3 py-2 text-sm rounded-md border border-input bg-background resize-none focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                placeholder="Explain why this clinician was selected for this client..."
+                value={allocationReason}
+                onChange={(e) => setAllocationReason(e.target.value)}
+              />
             </div>
             
             <div className="space-y-4">

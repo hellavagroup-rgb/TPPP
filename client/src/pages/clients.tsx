@@ -1129,7 +1129,7 @@ export default function Clients() {
                     <Button 
                       size="sm" 
                       variant="outline" 
-                      className="w-full gap-1 text-xs mt-2 border-purple-300 text-purple-700 hover:bg-purple-50"
+                      className="w-full gap-1 text-[10px] mt-2 border-purple-300 text-purple-700 hover:bg-purple-50 h-auto py-2 whitespace-normal"
                       onClick={() => {
                         updateClientMutation.mutate({ 
                           id: client.id, 
@@ -1137,7 +1137,7 @@ export default function Clients() {
                         });
                       }}
                     >
-                      <Mail className="h-3 w-3" /> Move to Awaiting Confirmation
+                      <Mail className="h-3 w-3 flex-shrink-0" /> Awaiting Confirmation
                     </Button>
                   </CardContent>
                 </Card>

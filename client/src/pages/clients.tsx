@@ -435,18 +435,20 @@ export default function Clients() {
     switch(status) {
       case "New": return "Pending Intake";
       case "Forms Sent": return "Screen Booked/Sent";
-      case "Assigned": return "Allocated - Awaiting Confirmation";
-      case "Scheduled": return "Allocated";
+      case "Assigned": return "Allocated";
+      case "AwaitingConfirmation": return "Awaiting Confirmation";
+      case "Scheduled": return "Confirmed";
       default: return status;
     }
   };
 
-  const getStatusColor = (status: ClientStatus) => {
+  const getStatusColor = (status: ClientStatus | "AwaitingConfirmation") => {
     switch(status) {
       case "New": return "bg-blue-100 text-blue-700 hover:bg-blue-200";
       case "Forms Sent": return "bg-amber-100 text-amber-700 hover:bg-amber-200";
       case "Forms Completed": return "bg-emerald-100 text-emerald-700 hover:bg-emerald-200";
       case "Assigned": return "bg-indigo-100 text-indigo-700 hover:bg-indigo-200";
+      case "AwaitingConfirmation": return "bg-purple-100 text-purple-700 hover:bg-purple-200";
       case "Scheduled": return "bg-green-100 text-green-700 hover:bg-green-200";
       case "Waitlist": return "bg-slate-100 text-slate-700 hover:bg-slate-200";
       default: return "bg-slate-100 text-slate-700";
@@ -911,7 +913,7 @@ export default function Clients() {
 
       {/* Kanban Board */}
       {!showConfirmedState && !showArchivedState ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           {/* Column 1: Pending Intake */}
           <div className="bg-blue-50/50 rounded-lg p-3 min-h-[400px]">
             <div className="flex items-center justify-between mb-3">
@@ -1071,10 +1073,10 @@ export default function Clients() {
             </div>
           </div>
 
-          {/* Column 4: Allocated - Awaiting Confirmation */}
+          {/* Column 4: Allocated */}
           <div className="bg-indigo-50/50 rounded-lg p-3 min-h-[400px]">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="font-semibold text-indigo-800 text-sm">Allocated - Awaiting</h3>
+              <h3 className="font-semibold text-indigo-800 text-sm">Allocated</h3>
               <Badge variant="secondary" className="bg-indigo-100 text-indigo-700">{filteredClients.filter(c => c.status === "Assigned").length}</Badge>
             </div>
             <div className="space-y-2">
@@ -1124,10 +1126,92 @@ export default function Clients() {
                         "{(client as any).allocationReason}"
                       </p>
                     )}
+                    <Button 
+                      size="sm" 
+                      variant="outline" 
+                      className="w-full gap-1 text-xs mt-2 border-purple-300 text-purple-700 hover:bg-purple-50"
+                      onClick={() => {
+                        updateClientMutation.mutate({ 
+                          id: client.id, 
+                          updates: { status: "AwaitingConfirmation", awaitingConfirmationAt: new Date().toISOString() } 
+                        });
+                      }}
+                    >
+                      <Mail className="h-3 w-3" /> Move to Awaiting Confirmation
+                    </Button>
                   </CardContent>
                 </Card>
               ))}
               {filteredClients.filter(c => c.status === "Assigned").length === 0 && (
+                <p className="text-xs text-muted-foreground text-center py-4">No clients</p>
+              )}
+            </div>
+          </div>
+
+          {/* Column 5: Awaiting Confirmation */}
+          <div className="bg-purple-50/50 rounded-lg p-3 min-h-[400px]">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold text-purple-800 text-sm">Awaiting Confirmation</h3>
+              <Badge variant="secondary" className="bg-purple-100 text-purple-700">{filteredClients.filter(c => c.status === "AwaitingConfirmation").length}</Badge>
+            </div>
+            <div className="space-y-2">
+              {filteredClients.filter(c => c.status === "AwaitingConfirmation").map(client => (
+                <Card key={client.id} className="bg-white shadow-sm hover:shadow-md transition-shadow cursor-pointer" data-testid={`kanban-card-${client.id}`}>
+                  <CardContent className="p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-mono font-semibold text-sm">{client.displayId}</span>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon" className="h-6 w-6">
+                            <MoreHorizontal className="h-3 w-3" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => handleOpenEditClient(client)}>
+                            <Edit className="h-4 w-4 mr-2" /> Edit Details
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleOpenEditStatus(client)}>
+                            <CalendarCheck className="h-4 w-4 mr-2" /> Edit Status
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleOpenViewResponses(client)}>
+                            <Eye className="h-4 w-4 mr-2" /> View Responses
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>
+                            Archive
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      <Clock className="h-3 w-3 inline mr-1" />
+                      Sent: {(client as any).awaitingConfirmationAt ? formatDateUK((client as any).awaitingConfirmationAt) : formatDateUK(client.intakeDate)}
+                    </p>
+                    {client.assignedClinicianId && (
+                      <div className="flex items-center gap-1 text-xs text-purple-700 bg-purple-100 px-2 py-1 rounded mb-2">
+                        <UserCheck className="h-3 w-3" />
+                        {clinicians.find(c => c.id === client.assignedClinicianId)?.name.split(",")[0]}
+                      </div>
+                    )}
+                    {client.assignedSlot && (
+                      <p className="text-[10px] text-muted-foreground font-mono">{client.assignedSlot}</p>
+                    )}
+                    <Button 
+                      size="sm" 
+                      className="w-full gap-1 text-xs mt-2 bg-green-600 hover:bg-green-700"
+                      onClick={() => {
+                        updateClientMutation.mutate({ 
+                          id: client.id, 
+                          updates: { status: "Scheduled", confirmedAt: new Date().toISOString() } 
+                        });
+                      }}
+                    >
+                      <CheckCircle2 className="h-3 w-3" /> Mark as Confirmed
+                    </Button>
+                  </CardContent>
+                </Card>
+              ))}
+              {filteredClients.filter(c => c.status === "AwaitingConfirmation").length === 0 && (
                 <p className="text-xs text-muted-foreground text-center py-4">No clients</p>
               )}
             </div>
@@ -1520,8 +1604,9 @@ export default function Clients() {
                     <SelectItem value="New">Pending Intake</SelectItem>
                     <SelectItem value="Forms Sent">Screen Booked/Sent</SelectItem>
                     <SelectItem value="Forms Completed">Forms Completed</SelectItem>
-                    <SelectItem value="Assigned">Allocated - Awaiting Confirmation</SelectItem>
-                    <SelectItem value="Scheduled">Allocated</SelectItem>
+                    <SelectItem value="Assigned">Allocated</SelectItem>
+                    <SelectItem value="AwaitingConfirmation">Awaiting Confirmation</SelectItem>
+                    <SelectItem value="Scheduled">Confirmed</SelectItem>
                     <SelectItem value="Waitlist">Waitlist</SelectItem>
                   </SelectContent>
                 </Select>
@@ -1605,8 +1690,9 @@ export default function Clients() {
                     <SelectItem value="New">Pending Intake</SelectItem>
                     <SelectItem value="Forms Sent">Screen Booked/Sent</SelectItem>
                     <SelectItem value="Forms Completed">Forms Completed</SelectItem>
-                    <SelectItem value="Assigned">Allocated - Awaiting Confirmation</SelectItem>
-                    <SelectItem value="Scheduled">Allocated</SelectItem>
+                    <SelectItem value="Assigned">Allocated</SelectItem>
+                    <SelectItem value="AwaitingConfirmation">Awaiting Confirmation</SelectItem>
+                    <SelectItem value="Scheduled">Confirmed</SelectItem>
                     <SelectItem value="Waitlist">Waitlist</SelectItem>
                   </SelectContent>
                 </Select>
@@ -1615,7 +1701,7 @@ export default function Clients() {
                 </p>
               </div>
 
-              {(editStatusData.status === "Assigned" || editStatusData.status === "Scheduled") && (
+              {(editStatusData.status === "Assigned" || editStatusData.status === "AwaitingConfirmation" || editStatusData.status === "Scheduled") && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <Label>Reassign to Different Slot (optional)</Label>

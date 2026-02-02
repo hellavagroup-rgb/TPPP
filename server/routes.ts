@@ -801,6 +801,8 @@ export async function registerRoutes(
           updateData.formsCompletedAt = now;
         } else if (req.body.status === "Assigned") {
           updateData.allocatedAt = now;
+        } else if (req.body.status === "AwaitingConfirmation") {
+          updateData.awaitingConfirmationAt = now;
         } else if (req.body.status === "Scheduled") {
           updateData.confirmedAt = now;
         }

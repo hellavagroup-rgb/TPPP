@@ -133,10 +133,18 @@ export default function Dashboard() {
       bg: "bg-teal-100"
     },
     {
-      title: "Allocated - Awaiting Confirmation",
+      title: "Allocated",
       value: clients.filter(c => c.status === "Assigned").length,
-      change: "Pending admin confirmation",
+      change: "Assigned to clinician",
       icon: Users,
+      color: "text-indigo-600",
+      bg: "bg-indigo-100"
+    },
+    {
+      title: "Awaiting Confirmation",
+      value: clients.filter(c => c.status === "AwaitingConfirmation").length,
+      change: "Email sent to client",
+      icon: Mail,
       color: "text-purple-600",
       bg: "bg-purple-100"
     },
@@ -157,7 +165,7 @@ export default function Dashboard() {
         <p className="text-muted-foreground mt-1">Manage client intake and clinician availability.</p>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
         {stats.map((stat) => (
           <Card key={stat.title} className="border-none shadow-sm hover:shadow-md transition-shadow">
             <CardContent className="p-6">

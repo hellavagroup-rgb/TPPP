@@ -103,7 +103,7 @@ export const clients = pgTable("clients", {
   // Clinical Data
   referralSource: text("referral_source"),
   insurer: text("insurer"),
-  status: text("status", { enum: ["New", "Forms Sent", "Forms Completed", "Assigned", "Scheduled", "Waitlist"] }).notNull().default("New"),
+  status: text("status", { enum: ["New", "Forms Sent", "Forms Completed", "Assigned", "AwaitingConfirmation", "Scheduled", "Waitlist"] }).notNull().default("New"),
   presentingIssues: text("presenting_issues").array().default(sql`ARRAY[]::text[]`),
   notes: text("notes"), // Clinical notes - restricted access
   // Assignment
@@ -118,6 +118,7 @@ export const clients = pgTable("clients", {
   formsSentAt: timestamp("forms_sent_at"), // When forms were sent to client
   formsCompletedAt: timestamp("forms_completed_at"), // When client completed forms
   allocatedAt: timestamp("allocated_at"), // When client was allocated to clinician
+  awaitingConfirmationAt: timestamp("awaiting_confirmation_at"), // When email sent to client for confirmation
   confirmedAt: timestamp("confirmed_at"), // When appointment was confirmed
   // Timestamps
   intakeDate: timestamp("intake_date").defaultNow().notNull(),

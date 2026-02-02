@@ -198,6 +198,7 @@ export const tasks = pgTable("tasks", {
   dueDate: timestamp("due_date").notNull(),
   priority: text("priority", { enum: ["High", "Medium", "Low"] }).notNull().default("Medium"),
   status: text("status", { enum: ["Pending", "In Progress", "Completed"] }).notNull().default("Pending"),
+  comments: text("comments"), // Comments added during task progress
   relatedClientId: varchar("related_client_id").references(() => clients.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

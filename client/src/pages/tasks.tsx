@@ -11,7 +11,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
-import { CheckCircle2, Clock, AlertTriangle, Plus, Pencil, Trash2, Calendar as CalendarIcon } from "lucide-react";
+import { CheckCircle2, Clock, AlertTriangle, Plus, Pencil, Trash2, Calendar as CalendarIcon, MessageSquare } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import type { Task } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
@@ -26,6 +27,7 @@ export default function Tasks() {
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [showCompleted, setShowCompleted] = useState(true);
   const [newTask, setNewTask] = useState({
     title: "",
     description: "",
@@ -40,6 +42,7 @@ export default function Tasks() {
     priority: "Medium" as "High" | "Medium" | "Low",
     dueDate: undefined as Date | undefined,
     status: "Pending" as string,
+    comments: "",
   });
 
   const { data: tasks = [] } = useQuery<Task[]>({
@@ -127,6 +130,7 @@ export default function Tasks() {
       priority: task.priority as "High" | "Medium" | "Low",
       dueDate: task.dueDate ? new Date(task.dueDate) : undefined,
       status: task.status,
+      comments: (task as any).comments || "",
     });
     setIsEditOpen(true);
   };
@@ -151,6 +155,7 @@ export default function Tasks() {
         priority: editTask.priority,
         dueDate: editTask.dueDate?.toISOString(),
         status: editTask.status,
+        comments: editTask.comments,
       },
     });
   };
@@ -167,14 +172,25 @@ export default function Tasks() {
           <h2 className="text-3xl font-serif font-bold text-foreground">Task Management</h2>
           <p className="text-muted-foreground mt-1">Assignments for Sarah, Rosie, and Suzanne.</p>
         </div>
-        <Button onClick={() => setIsAddOpen(true)} data-testid="button-add-task">
-          <Plus className="h-4 w-4 mr-2" />
-          Add Task
-        </Button>
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <Label htmlFor="show-completed" className="text-sm text-muted-foreground cursor-pointer">Show Completed</Label>
+            <Switch 
+              id="show-completed" 
+              checked={showCompleted} 
+              onCheckedChange={setShowCompleted}
+              data-testid="toggle-show-completed"
+            />
+          </div>
+          <Button onClick={() => setIsAddOpen(true)} data-testid="button-add-task">
+            <Plus className="h-4 w-4 mr-2" />
+            Add Task
+          </Button>
+        </div>
       </div>
 
-      <div className="grid gap-6 md:grid-cols-3">
-        {["Pending", "In Progress", "Completed"].map((status) => (
+      <div className={`grid gap-6 ${showCompleted ? "md:grid-cols-3" : "md:grid-cols-2"}`}>
+        {(showCompleted ? ["Pending", "In Progress", "Completed"] : ["Pending", "In Progress"]).map((status) => (
           <div key={status} className="space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="font-medium text-lg flex items-center gap-2">
@@ -208,6 +224,15 @@ export default function Tasks() {
                       </div>
                       <span>Due: {formatDateUK(task.dueDate)}</span>
                     </div>
+
+                    {(task as any).comments && (
+                      <div className="mt-2 p-2 bg-muted/50 rounded-md text-xs text-muted-foreground border-l-2 border-primary/30">
+                        <div className="flex items-start gap-1">
+                          <MessageSquare className="h-3 w-3 mt-0.5 flex-shrink-0" />
+                          <span className="italic">"{(task as any).comments}"</span>
+                        </div>
+                      </div>
+                    )}
 
                     <div className="pt-2 flex gap-2">
                       {status !== "Completed" && (
@@ -379,6 +404,17 @@ export default function Tasks() {
                 onChange={(e) => setEditTask({...editTask, description: e.target.value})}
                 placeholder="Additional details..."
                 data-testid="input-edit-task-description"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Comments / Progress Notes</Label>
+              <Textarea 
+                value={editTask.comments}
+                onChange={(e) => setEditTask({...editTask, comments: e.target.value})}
+                placeholder="Add notes about task progress, updates, or any issues..."
+                className="min-h-[80px]"
+                data-testid="input-edit-task-comments"
               />
             </div>
 

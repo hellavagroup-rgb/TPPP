@@ -22,6 +22,7 @@
 - Availability calendar now shows Monday-Saturday only (Sunday removed)
 - Added workflow stage timestamps: formsSentAt, formsCompletedAt, allocatedAt, confirmedAt track when clients move through each stage
 - Kanban board now displays relevant timestamps for each column (Created, Sent, Completed, Allocated, Confirmed dates)
+- Added allocation reason field: admins can optionally explain why a clinician was selected when allocating a client; displayed on Kanban cards in Allocated column
 
 ## Overview
 

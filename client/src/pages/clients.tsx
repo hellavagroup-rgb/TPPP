@@ -1137,7 +1137,7 @@ export default function Clients() {
                         });
                       }}
                     >
-                      <Mail className="h-3 w-3 flex-shrink-0" /> Awaiting Confirmation
+                      <Mail className="h-3 w-3 flex-shrink-0" /> Email Sent
                     </Button>
                   </CardContent>
                 </Card>

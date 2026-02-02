@@ -24,6 +24,8 @@
 - Kanban board now displays relevant timestamps for each column (Created, Sent, Completed, Allocated, Confirmed dates)
 - Added allocation reason field: admins can optionally explain why a clinician was selected when allocating a client; displayed on Kanban cards in Allocated column
 - Added new workflow step "Awaiting Confirmation": workflow is now New → Forms Sent → Forms Completed → Allocated → Awaiting Confirmation → Confirmed; admins move clients to Awaiting Confirmation after emailing them
+- Added task comments feature: tasks have a comments field for progress notes; comments displayed on task cards and editable in task edit dialog
+- Added show/hide completed tasks toggle: users can filter task view to hide completed tasks; grid layout adjusts dynamically (2 columns when hidden, 3 when shown)
 
 ## Overview
 

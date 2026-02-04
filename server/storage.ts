@@ -57,6 +57,8 @@ export interface IStorage {
   deleteSlotsByBatchId(batchId: string): Promise<number>;
   deleteNullTimeSlots(): Promise<number>;
   deleteSpecificDateSlotsByClinicianId(clinicianId: string): Promise<number>;
+  migrateMultiHourSlotsToHourly(): Promise<{ migrated: number; created: number }>;
+  getAllTimeSlots(): Promise<TimeSlot[]>;
   
   // ============ CLIENTS ============
   getAllClients(includeArchived?: boolean): Promise<Client[]>;
@@ -345,6 +347,69 @@ export class DatabaseStorage implements IStorage {
       ))
       .returning();
     return result.length;
+  }
+
+  async getAllTimeSlots(): Promise<TimeSlot[]> {
+    return await db.select().from(timeSlots);
+  }
+
+  async migrateMultiHourSlotsToHourly(): Promise<{ migrated: number; created: number }> {
+    const allSlots = await this.getAllTimeSlots();
+    let migrated = 0;
+    let created = 0;
+
+    for (const slot of allSlots) {
+      // Skip vacation slots and already booked slots
+      if (slot.type === "Vacation" || slot.isBooked) continue;
+      
+      const [startHour, startMin] = (slot.startTime || "00:00").split(":").map(Number);
+      const [endHour, endMin] = (slot.endTime || "00:00").split(":").map(Number);
+      const startMinutes = startHour * 60 + startMin;
+      const endMinutes = endHour * 60 + endMin;
+      const durationMinutes = endMinutes - startMinutes;
+
+      // Only migrate slots longer than 1 hour
+      if (durationMinutes <= 60) continue;
+
+      // Calculate number of 1-hour slots
+      const numSlots = Math.floor(durationMinutes / 60);
+      
+      // Create individual 1-hour slots
+      for (let i = 0; i < numSlots; i++) {
+        const slotStartMins = startMinutes + (i * 60);
+        const slotEndMins = slotStartMins + 60;
+        
+        const slotStartHour = Math.floor(slotStartMins / 60);
+        const slotStartMin = slotStartMins % 60;
+        const slotEndHour = Math.floor(slotEndMins / 60);
+        const slotEndMin = slotEndMins % 60;
+
+        const newSlotId = `${slot.id}-h${slotStartHour}`;
+        const newStartTime = `${String(slotStartHour).padStart(2, "0")}:${String(slotStartMin).padStart(2, "0")}`;
+        const newEndTime = `${String(slotEndHour).padStart(2, "0")}:${String(slotEndMin).padStart(2, "0")}`;
+
+        // Insert with explicit ID using raw SQL
+        await db.insert(timeSlots).values({
+          clinicianId: slot.clinicianId,
+          type: slot.type as "Recurring" | "SpecificDate" | "Vacation",
+          day: slot.day,
+          date: slot.date,
+          startDate: slot.startDate,
+          endDate: slot.endDate,
+          startTime: newStartTime,
+          endTime: newEndTime,
+          isBooked: false,
+          batchId: slot.batchId,
+        }).onConflictDoNothing();
+        created++;
+      }
+
+      // Delete the original multi-hour slot
+      await db.delete(timeSlots).where(eq(timeSlots.id, slot.id));
+      migrated++;
+    }
+
+    return { migrated, created };
   }
 
   // ============ CLIENTS ============

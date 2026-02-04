@@ -475,17 +475,15 @@ export default function Clients() {
     }
   };
 
-  const handleAssign = (clinicianId: string, slotId: string, allocationMethod: "form" | "manual" = "form", parentSlotId?: string) => {
+  const handleAssign = (clinicianId: string, slotId: string, allocationMethod: "form" | "manual" = "form") => {
     // For unified dialog, always use selectedClient
     // For legacy manual dialog (isManualAllocateOpen), use manualAllocateClient
     const clientToAssign = isManualAllocateOpen ? manualAllocateClient : selectedClient;
     if (clientToAssign) {
-      // Use parentSlotId if this is a split segment from a multi-hour slot
-      const actualSlotId = parentSlotId || slotId;
       assignClientMutation.mutate({ 
         clientId: clientToAssign.id, 
         clinicianId, 
-        slotId: actualSlotId,
+        slotId,
         allocationMethod,
         allocationReason: allocationReason.trim() || undefined
       });
@@ -1590,7 +1588,7 @@ export default function Clients() {
                                       ? "opacity-60 border-slate-200" 
                                       : "hover:border-primary hover:bg-primary/5"
                             }`}
-                            onClick={() => { handleAssign(clinician.id, slot.id, isManualAllocation ? "manual" : "form", slot.parentSlotId); setIsAllocateDialogOpen(false); setIsManualAllocation(false); }}
+                            onClick={() => { handleAssign(clinician.id, slot.id, isManualAllocation ? "manual" : "form"); setIsAllocateDialogOpen(false); setIsManualAllocation(false); }}
                           >
                             {slotIsMatch && !isPending && <span className="absolute -top-1 -right-1 bg-emerald-500 text-white text-[8px] px-1 rounded">Match</span>}
                             {isPending && <span className="absolute -top-1 -right-1 bg-amber-500 text-white text-[8px] px-1 rounded">Pending</span>}
@@ -1940,7 +1938,7 @@ export default function Clients() {
                             className={`justify-start h-auto py-2 px-3 text-xs ${
                               slot.isBooked ? "opacity-50 line-through decoration-destructive" : "hover:border-primary hover:bg-primary/5"
                             }`}
-                            onClick={() => handleAssign(clinician.id, slot.id, "manual", slot.parentSlotId)}
+                            onClick={() => handleAssign(clinician.id, slot.id, "manual")}
                           >
                             <CalendarCheck className="h-3 w-3 mr-2" />
                             <div className="text-left">

@@ -718,6 +718,33 @@ export async function registerRoutes(
     }
   });
 
+  // Admin endpoint to migrate multi-hour slots to individual 1-hour slots
+  app.post("/api/timeslots/migrate-to-hourly", requireAdmin, async (req, res) => {
+    try {
+      const result = await storage.migrateMultiHourSlotsToHourly();
+      res.json({ 
+        success: true, 
+        message: `Migrated ${result.migrated} multi-hour slots into ${result.created} individual 1-hour slots`,
+        ...result
+      });
+    } catch (error) {
+      console.error("Error migrating slots:", error);
+      res.status(500).json({ error: "Failed to migrate slots" });
+    }
+  });
+
+  // Run migration automatically on startup
+  (async () => {
+    try {
+      const result = await storage.migrateMultiHourSlotsToHourly();
+      if (result.migrated > 0) {
+        console.log(`[MIGRATION] Split ${result.migrated} multi-hour slots into ${result.created} individual 1-hour slots`);
+      }
+    } catch (error) {
+      console.error("[MIGRATION] Failed to migrate multi-hour slots:", error);
+    }
+  })();
+
   // ============ CLIENT ROUTES (GDPR Protected) ============
   app.get("/api/clients", requireAdmin, auditLog("view", "client"), async (req, res) => {
     try {

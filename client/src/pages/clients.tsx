@@ -84,13 +84,22 @@ function getSlotPendingDate(slot: TimeSlot): string | null {
   return null;
 }
 
+function isSlotActiveGlobal(slot: TimeSlot) {
+  if (!slot.endDate) return true;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const endDate = new Date(slot.endDate);
+  endDate.setHours(0, 0, 0, 0);
+  return endDate >= today;
+}
+
 function getSlotCounts(availability?: TimeSlot[]) {
   if (!availability) return { available: 0, pending: 0 };
   
   let available = 0;
   let pending = 0;
   
-  availability.filter(s => !s.isBooked && s.type !== "Vacation").forEach(slot => {
+  availability.filter(s => !s.isBooked && s.type !== "Vacation" && isSlotActiveGlobal(s)).forEach(slot => {
     if (isSlotPending(slot)) {
       pending++;
     } else {
@@ -521,6 +530,21 @@ export default function Clients() {
     return clinician.availability.some(s => s.type === "Vacation" && new Date(s.date!) >= new Date());
   };
 
+  // Helper to check if a slot is still active (end date is today or in the future)
+  const isSlotActive = (slot: any) => {
+    if (!slot.endDate) return true; // No end date means always active
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const endDate = new Date(slot.endDate);
+    endDate.setHours(0, 0, 0, 0);
+    return endDate >= today;
+  };
+
+  // Helper to filter active, non-vacation slots
+  const getActiveSlots = (availability: any[]) => {
+    return availability.filter(s => s.type !== "Vacation" && isSlotActive(s));
+  };
+
   const handleOpenSendForms = (client: ClientType) => {
       setClientToSendForms(client);
       setSelectedForms([]); // Reset selection
@@ -710,7 +734,7 @@ export default function Clients() {
     
     let matchCount = 0;
     clinician.availability.forEach(slot => {
-      if (slot.type === "Vacation" || slot.isBooked) return;
+      if (slot.type === "Vacation" || slot.isBooked || !isSlotActive(slot)) return;
       const day = slot.day || "";
       const clientSlots = clientAvail[day] || [];
       if (clientSlots.length === 0) return;
@@ -1497,7 +1521,7 @@ export default function Clients() {
                     </div>
                     
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pl-8">
-                      {clinician.availability.filter(s => s.type !== "Vacation").map(slot => {
+                      {getActiveSlots(clinician.availability).map(slot => {
                         const isPending = isSlotPending(slot);
                         const pendingDate = getSlotPendingDate(slot);
                         const availMatch = doesSlotMatchClientAvailability(slot, clientAvailabilityForAllocation);
@@ -1534,7 +1558,7 @@ export default function Clients() {
                           </Button>
                         );
                       })}
-                      {clinician.availability.filter(s => s.type !== "Vacation").length === 0 && (
+                      {getActiveSlots(clinician.availability).length === 0 && (
                         <div className="col-span-3 text-xs text-muted-foreground italic p-2 border border-dashed rounded bg-slate-50/50 text-center">
                           No availability set.
                         </div>
@@ -1710,7 +1734,7 @@ export default function Clients() {
                   </div>
 
                   {clinicians.map(clinician => {
-                    const allSlots = clinician.availability.filter(s => s.type !== "Vacation" && !s.isBooked);
+                    const allSlots = getActiveSlots(clinician.availability).filter(s => !s.isBooked);
                     if (allSlots.length === 0) return null;
                     
                     return (
@@ -1861,7 +1885,7 @@ export default function Clients() {
                         </div>
                       </div>
                       <div className="grid grid-cols-3 gap-2">
-                        {clinician.availability.filter(s => s.type !== "Vacation").map(slot => (
+                        {getActiveSlots(clinician.availability).map(slot => (
                           <Button
                             key={slot.id}
                             variant="outline"
@@ -1879,7 +1903,7 @@ export default function Clients() {
                             </div>
                           </Button>
                         ))}
-                        {clinician.availability.filter(s => s.type !== "Vacation").length === 0 && (
+                        {getActiveSlots(clinician.availability).length === 0 && (
                           <div className="col-span-3 text-xs text-muted-foreground italic p-2 border border-dashed rounded bg-slate-50/50 text-center">
                             No availability set.
                           </div>

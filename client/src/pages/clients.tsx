@@ -611,8 +611,8 @@ export default function Clients() {
 
   // Helper to determine if a clinician matches the client's needs
   const isClinicianMatch = (clinician: typeof clinicians[0], client: ClientType) => {
-      // 1. Check Capacity (Load vs New Client Cap)
-      const hasSpace = (clinician.maxNewClients || 999) > (clinician.currentLoad % 5); // Mock logic for "new client" load
+      // 1. Check Capacity - clinician must have capacity for new clients
+      const hasSpace = (clinician.maxNewClients ?? 0) > 0;
       
       // 2. Check Insurer
       const clientInsurer = client.insurer || "Private";

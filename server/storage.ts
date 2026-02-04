@@ -493,7 +493,8 @@ export class DatabaseStorage implements IStorage {
     let oldSlotIdToRelease = existingClient.assignedSlotId;
     // Statuses where the slot should remain booked
     const isAllocatedStatus = newStatus === "Assigned" || newStatus === "AwaitingConfirmation" || newStatus === "Scheduled";
-    const isReassigning = newSlotId !== null;
+    // Only consider it a reassign if a NEW slot is being assigned (different from current)
+    const isReassigning = newSlotId !== null && newSlotId !== existingClient.assignedSlotId;
 
     // Check if client has any allocation (either by slotId or legacy slot string)
     const hasAllocation = oldClinicianId && (oldSlotIdToRelease || existingClient.assignedSlot);

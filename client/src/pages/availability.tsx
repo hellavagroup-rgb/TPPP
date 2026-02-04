@@ -107,6 +107,8 @@ export default function Availability() {
   const [newSlotType, setNewSlotType] = useState<SlotType>("Recurring");
   const [newDate, setNewDate] = useState(format(new Date(), "yyyy-MM-dd"));
   const [endDate, setEndDate] = useState(format(new Date(), "yyyy-MM-dd"));
+  const [isOngoing, setIsOngoing] = useState(false);
+  const [frequency, setFrequency] = useState<"weekly" | "fortnightly">("weekly");
   const [selectedDays, setSelectedDays] = useState<string[]>([]);
   const [newStartTime, setNewStartTime] = useState("09:00");
   const [newEndTime, setNewEndTime] = useState("17:00");
@@ -439,6 +441,8 @@ export default function Availability() {
     setNewSlotType("Recurring");
     setNewDate(format(new Date(), "yyyy-MM-dd"));
     setEndDate(format(new Date(), "yyyy-MM-dd"));
+    setIsOngoing(false);
+    setFrequency("weekly");
     setSelectedDays([]);
     setNewStartTime("09:00");
     setNewEndTime("17:00");

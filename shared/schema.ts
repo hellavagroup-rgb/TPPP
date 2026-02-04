@@ -72,11 +72,13 @@ export const timeSlots = pgTable("time_slots", {
   day: text("day"), // "Monday", "Tuesday", etc.
   date: text("date"), // YYYY-MM-DD for specific dates
   startDate: text("start_date"), // For recurring ranges
-  endDate: text("end_date"), // For recurring ranges
+  endDate: text("end_date"), // For recurring ranges (null = ongoing)
   startTime: text("start_time").notNull(),
   endTime: text("end_time").notNull(),
   isBooked: boolean("is_booked").default(false).notNull(),
   batchId: text("batch_id"), // Groups slots created together for batch operations
+  frequency: text("frequency", { enum: ["weekly", "fortnightly"] }).default("weekly"), // Schedule frequency
+  isOngoing: boolean("is_ongoing").default(false), // Whether schedule continues indefinitely
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

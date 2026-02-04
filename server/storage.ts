@@ -274,6 +274,8 @@ export class DatabaseStorage implements IStorage {
       endTime: slot.endTime,
       isBooked: slot.isBooked || false,
       batchId: slot.batchId,
+      frequency: (slot as any).frequency || "weekly",
+      isOngoing: (slot as any).isOngoing || false,
     }))).returning();
     
     // Update lastUpdatedAvailability

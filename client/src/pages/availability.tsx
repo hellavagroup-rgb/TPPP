@@ -493,11 +493,13 @@ export default function Availability() {
             day: day,
             date: null,
             startDate: newDate,
-            endDate: endDate,
+            endDate: isOngoing ? null : endDate,
             startTime: timeSlot.start,
             endTime: timeSlot.end,
             isBooked: false,
             batchId: totalSlots > 1 ? batchId : null,
+            frequency: frequency,
+            isOngoing: isOngoing,
           } as TimeSlot);
         });
       });
@@ -571,6 +573,8 @@ export default function Availability() {
     setNewSlotType(slot.type as SlotType);
     setNewDate(slot.date || slot.startDate || format(new Date(), "yyyy-MM-dd"));
     setEndDate(slot.endDate || slot.date || format(new Date(), "yyyy-MM-dd"));
+    setFrequency((slot as any).frequency || "weekly");
+    setIsOngoing((slot as any).isOngoing || false);
     setNewStartTime(slot.startTime);
     setNewEndTime(slot.endTime);
     setApplyToAllBatch(false);
@@ -830,11 +834,46 @@ export default function Availability() {
                     <Label>{newSlotType === "Recurring" ? "Valid From" : "Start Date"}</Label>
                     <DatePicker value={newDate} onChange={setNewDate} placeholder="Select date" />
                   </div>
-                  <div className="grid gap-2">
-                    <Label>{newSlotType === "Recurring" ? "Valid Until" : "End Date"}</Label>
-                    <DatePicker value={endDate} onChange={setEndDate} placeholder="Select date" />
-                  </div>
+                  {!isOngoing && (
+                    <div className="grid gap-2">
+                      <Label>{newSlotType === "Recurring" ? "Valid Until" : "End Date"}</Label>
+                      <DatePicker value={endDate} onChange={setEndDate} placeholder="Select date" />
+                    </div>
+                  )}
                 </div>
+
+                {newSlotType === "Recurring" && (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="grid gap-2">
+                      <Label>Frequency</Label>
+                      <Select value={frequency} onValueChange={(val) => setFrequency(val as "weekly" | "fortnightly")}>
+                        <SelectTrigger data-testid="select-frequency">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="weekly">Weekly</SelectItem>
+                          <SelectItem value="fortnightly">Fortnightly</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="grid gap-2">
+                      <Label>Duration</Label>
+                      <div className="flex items-center gap-2 h-10">
+                        <input
+                          type="checkbox"
+                          id="ongoing"
+                          checked={isOngoing}
+                          onChange={(e) => setIsOngoing(e.target.checked)}
+                          className="h-4 w-4"
+                          data-testid="checkbox-ongoing"
+                        />
+                        <label htmlFor="ongoing" className="text-sm cursor-pointer">
+                          Ongoing (no end date)
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {newSlotType === "Recurring" && (
                   <div className="space-y-2">

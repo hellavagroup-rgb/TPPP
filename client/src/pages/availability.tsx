@@ -301,6 +301,14 @@ export default function Availability() {
     }
   }, [isDialogOpen, clinicians, user, dialogClinicianId]);
 
+  // Reset ongoing and frequency when switching away from Recurring
+  useEffect(() => {
+    if (newSlotType !== "Recurring") {
+      setIsOngoing(false);
+      setFrequency("weekly");
+    }
+  }, [newSlotType]);
+
   // Sort clinicians by most availability first (number of slots), then by tier
   const allCliniciansData = [...(cliniciansWithSlots.data || [])].sort((a, b) => {
     // Count active slots (non-vacation slots)
@@ -834,7 +842,7 @@ export default function Availability() {
                     <Label>{newSlotType === "Recurring" ? "Valid From" : "Start Date"}</Label>
                     <DatePicker value={newDate} onChange={setNewDate} placeholder="Select date" />
                   </div>
-                  {!isOngoing && (
+                  {!(newSlotType === "Recurring" && isOngoing) && (
                     <div className="grid gap-2">
                       <Label>{newSlotType === "Recurring" ? "Valid Until" : "End Date"}</Label>
                       <DatePicker value={endDate} onChange={setEndDate} placeholder="Select date" />

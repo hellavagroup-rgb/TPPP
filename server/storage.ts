@@ -491,7 +491,8 @@ export class DatabaseStorage implements IStorage {
 
     const oldClinicianId = existingClient.assignedClinicianId;
     let oldSlotIdToRelease = existingClient.assignedSlotId;
-    const isAllocatedStatus = newStatus === "Assigned" || newStatus === "Scheduled";
+    // Statuses where the slot should remain booked
+    const isAllocatedStatus = newStatus === "Assigned" || newStatus === "AwaitingConfirmation" || newStatus === "Scheduled";
     const isReassigning = newSlotId !== null;
 
     // Check if client has any allocation (either by slotId or legacy slot string)
@@ -530,10 +531,19 @@ export class DatabaseStorage implements IStorage {
 
       // Case 1: Status-only change to allocated status (keep current slot)
       if (isAllocatedStatus && !isReassigning && hasAllocation) {
-        await tx.update(clients).set({
+        const statusUpdates: any = {
           status: newStatus as any,
           updatedAt: new Date()
-        }).where(eq(clients.id, clientId));
+        };
+        // Set appropriate timestamp based on new status
+        if (newStatus === "Assigned") {
+          statusUpdates.allocatedAt = new Date();
+        } else if (newStatus === "AwaitingConfirmation") {
+          statusUpdates.awaitingConfirmationAt = new Date();
+        } else if (newStatus === "Scheduled") {
+          statusUpdates.confirmedAt = new Date();
+        }
+        await tx.update(clients).set(statusUpdates).where(eq(clients.id, clientId));
         return;
       }
 

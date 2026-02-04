@@ -28,6 +28,7 @@
 - Added show/hide completed tasks toggle: users can filter task view to hide completed tasks; grid layout adjusts dynamically (2 columns when hidden, 3 when shown)
 - Expired slot filtering: slots with past endDate are now filtered out of all allocation dialogs and slot displays
 - **1-hour slot booking**: Availability is now automatically split into individual 1-hour slots when created (e.g., 9am-5pm creates 8 x 1-hour slots). Each client booking takes exactly one 1-hour slot. Time ranges must be at least 1 hour; partial hours are not created.
+- **Recurring schedule enhancements**: Added frequency option (weekly/fortnightly) and ongoing option (no end date required) for recurring availability slots. Schema includes `frequency` and `isOngoing` fields on time_slots table.
 
 ## Overview
 

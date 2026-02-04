@@ -93,6 +93,16 @@ function isSlotActiveGlobal(slot: TimeSlot) {
   return endDate >= today;
 }
 
+// Split a slot into 1-hour segments for counting
+function getSlotHourCount(slot: TimeSlot): number {
+  if (slot.type === "Vacation") return 0;
+  const [startHour, startMin] = (slot.startTime || "00:00").split(":").map(Number);
+  const [endHour, endMin] = (slot.endTime || "00:00").split(":").map(Number);
+  const startMinutes = startHour * 60 + startMin;
+  const endMinutes = endHour * 60 + endMin;
+  return Math.floor((endMinutes - startMinutes) / 60);
+}
+
 function getSlotCounts(availability?: TimeSlot[]) {
   if (!availability) return { available: 0, pending: 0 };
   
@@ -100,10 +110,11 @@ function getSlotCounts(availability?: TimeSlot[]) {
   let pending = 0;
   
   availability.filter(s => !s.isBooked && s.type !== "Vacation" && isSlotActiveGlobal(s)).forEach(slot => {
+    const hourCount = Math.max(1, getSlotHourCount(slot));
     if (isSlotPending(slot)) {
-      pending++;
+      pending += hourCount;
     } else {
-      available++;
+      available += hourCount;
     }
   });
   
@@ -464,15 +475,17 @@ export default function Clients() {
     }
   };
 
-  const handleAssign = (clinicianId: string, slotId: string, allocationMethod: "form" | "manual" = "form") => {
+  const handleAssign = (clinicianId: string, slotId: string, allocationMethod: "form" | "manual" = "form", parentSlotId?: string) => {
     // For unified dialog, always use selectedClient
     // For legacy manual dialog (isManualAllocateOpen), use manualAllocateClient
     const clientToAssign = isManualAllocateOpen ? manualAllocateClient : selectedClient;
     if (clientToAssign) {
+      // Use parentSlotId if this is a split segment from a multi-hour slot
+      const actualSlotId = parentSlotId || slotId;
       assignClientMutation.mutate({ 
         clientId: clientToAssign.id, 
         clinicianId, 
-        slotId,
+        slotId: actualSlotId,
         allocationMethod,
         allocationReason: allocationReason.trim() || undefined
       });
@@ -540,9 +553,42 @@ export default function Clients() {
     return endDate >= today;
   };
 
-  // Helper to filter active, non-vacation slots
+  // Helper to split a slot into 1-hour segments for display
+  const splitSlotIntoHours = (slot: any): any[] => {
+    if (slot.type === "Vacation") return [slot];
+    
+    const [startHour, startMin] = (slot.startTime || "00:00").split(":").map(Number);
+    const [endHour, endMin] = (slot.endTime || "00:00").split(":").map(Number);
+    const startMinutes = startHour * 60 + startMin;
+    const endMinutes = endHour * 60 + endMin;
+    
+    // If already 1 hour or less, return as-is
+    if (endMinutes - startMinutes <= 60) return [slot];
+    
+    // Split into 1-hour segments
+    const segments: any[] = [];
+    for (let mins = startMinutes; mins + 60 <= endMinutes; mins += 60) {
+      const segStartHour = Math.floor(mins / 60);
+      const segStartMin = mins % 60;
+      const segEndHour = Math.floor((mins + 60) / 60);
+      const segEndMin = (mins + 60) % 60;
+      
+      segments.push({
+        ...slot,
+        id: `${slot.id}-h${segStartHour}`,
+        startTime: `${String(segStartHour).padStart(2, "0")}:${String(segStartMin).padStart(2, "0")}`,
+        endTime: `${String(segEndHour).padStart(2, "0")}:${String(segEndMin).padStart(2, "0")}`,
+        parentSlotId: slot.id, // Reference to original slot
+      });
+    }
+    return segments;
+  };
+
+  // Helper to filter active, non-vacation slots and split into 1-hour segments
   const getActiveSlots = (availability: any[]) => {
-    return availability.filter(s => s.type !== "Vacation" && isSlotActive(s));
+    const filtered = availability.filter(s => s.type !== "Vacation" && isSlotActive(s));
+    // Split each slot into 1-hour segments
+    return filtered.flatMap(slot => splitSlotIntoHours(slot));
   };
 
   const handleOpenSendForms = (client: ClientType) => {
@@ -1544,7 +1590,7 @@ export default function Clients() {
                                       ? "opacity-60 border-slate-200" 
                                       : "hover:border-primary hover:bg-primary/5"
                             }`}
-                            onClick={() => { handleAssign(clinician.id, slot.id, isManualAllocation ? "manual" : "form"); setIsAllocateDialogOpen(false); setIsManualAllocation(false); }}
+                            onClick={() => { handleAssign(clinician.id, slot.id, isManualAllocation ? "manual" : "form", slot.parentSlotId); setIsAllocateDialogOpen(false); setIsManualAllocation(false); }}
                           >
                             {slotIsMatch && !isPending && <span className="absolute -top-1 -right-1 bg-emerald-500 text-white text-[8px] px-1 rounded">Match</span>}
                             {isPending && <span className="absolute -top-1 -right-1 bg-amber-500 text-white text-[8px] px-1 rounded">Pending</span>}
@@ -1894,7 +1940,7 @@ export default function Clients() {
                             className={`justify-start h-auto py-2 px-3 text-xs ${
                               slot.isBooked ? "opacity-50 line-through decoration-destructive" : "hover:border-primary hover:bg-primary/5"
                             }`}
-                            onClick={() => handleAssign(clinician.id, slot.id, "manual")}
+                            onClick={() => handleAssign(clinician.id, slot.id, "manual", slot.parentSlotId)}
                           >
                             <CalendarCheck className="h-3 w-3 mr-2" />
                             <div className="text-left">

@@ -333,6 +333,36 @@ export default function Availability() {
     setWeekStart(addDays(weekStart, 7));
   };
 
+  // Helper to split a slot into 1-hour segments for display
+  const splitSlotIntoHours = (slot: TimeSlot): TimeSlot[] => {
+    if (slot.type === "Vacation") return [slot];
+    
+    const [startHour, startMin] = (slot.startTime || "00:00").split(":").map(Number);
+    const [endHour, endMin] = (slot.endTime || "00:00").split(":").map(Number);
+    const startMinutes = startHour * 60 + startMin;
+    const endMinutes = endHour * 60 + endMin;
+    
+    // If already 1 hour or less, return as-is
+    if (endMinutes - startMinutes <= 60) return [slot];
+    
+    // Split into 1-hour segments
+    const segments: TimeSlot[] = [];
+    for (let mins = startMinutes; mins + 60 <= endMinutes; mins += 60) {
+      const segStartHour = Math.floor(mins / 60);
+      const segStartMin = mins % 60;
+      const segEndHour = Math.floor((mins + 60) / 60);
+      const segEndMin = (mins + 60) % 60;
+      
+      segments.push({
+        ...slot,
+        id: `${slot.id}-h${segStartHour}`,
+        startTime: `${String(segStartHour).padStart(2, "0")}:${String(segStartMin).padStart(2, "0")}`,
+        endTime: `${String(segEndHour).padStart(2, "0")}:${String(segEndMin).padStart(2, "0")}`,
+      } as TimeSlot);
+    }
+    return segments;
+  };
+
   const getSlotsForDate = (clinician: ClinicianWithSlots, date: Date): SlotForDate[] => {
     const today = startOfDay(new Date());
     const dayName = format(date, "EEEE");
@@ -354,33 +384,49 @@ export default function Availability() {
           const isFutureSlot = isBefore(date, slotStart);
           
           if (isWithinRange) {
-            results.push({
-              slot,
-              isActive: true,
-              isFuture: false,
+            // Split multi-hour slots into 1-hour segments
+            const splitSlots = splitSlotIntoHours(slot);
+            splitSlots.forEach(splitSlot => {
+              results.push({
+                slot: splitSlot,
+                isActive: true,
+                isFuture: false,
+              });
             });
           } else if (isFutureSlot && isBefore(today, slotEnd)) {
-            results.push({
-              slot,
-              isActive: false,
-              isFuture: true,
-              validFrom: format(slotStart, "dd/MM/yyyy"),
-              validUntil: format(slotEnd, "dd/MM/yyyy"),
+            // Split multi-hour slots into 1-hour segments
+            const splitSlots = splitSlotIntoHours(slot);
+            splitSlots.forEach(splitSlot => {
+              results.push({
+                slot: splitSlot,
+                isActive: false,
+                isFuture: true,
+                validFrom: format(slotStart, "dd/MM/yyyy"),
+                validUntil: format(slotEnd, "dd/MM/yyyy"),
+              });
             });
           }
         } else {
-          results.push({
-            slot,
-            isActive: true,
-            isFuture: false,
+          // Split multi-hour slots into 1-hour segments
+          const splitSlots = splitSlotIntoHours(slot);
+          splitSlots.forEach(splitSlot => {
+            results.push({
+              slot: splitSlot,
+              isActive: true,
+              isFuture: false,
+            });
           });
         }
       } else if (slot.type === "SpecificDate" || slot.type === "Vacation") {
         if (slot.date === dateStr) {
-          results.push({
-            slot,
-            isActive: true,
-            isFuture: false,
+          // Split SpecificDate slots into 1-hour segments (not Vacation)
+          const splitSlots = splitSlotIntoHours(slot);
+          splitSlots.forEach(splitSlot => {
+            results.push({
+              slot: splitSlot,
+              isActive: true,
+              isFuture: false,
+            });
           });
         }
       }

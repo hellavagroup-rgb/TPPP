@@ -53,6 +53,31 @@ interface SlotForDate {
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
+// Helper to split a time range into 1-hour slots (only creates full 60-minute slots)
+function splitIntoHourlySlots(startTime: string, endTime: string): { start: string; end: string }[] {
+  const slots: { start: string; end: string }[] = [];
+  const [startHour, startMin] = startTime.split(":").map(Number);
+  const [endHour, endMin] = endTime.split(":").map(Number);
+  
+  const startMinutes = startHour * 60 + startMin;
+  const endMinutes = endHour * 60 + endMin;
+  
+  // Only create full 60-minute slots
+  for (let mins = startMinutes; mins + 60 <= endMinutes; mins += 60) {
+    const slotStartHour = Math.floor(mins / 60);
+    const slotStartMin = mins % 60;
+    const slotEndHour = Math.floor((mins + 60) / 60);
+    const slotEndMin = (mins + 60) % 60;
+    
+    slots.push({
+      start: `${String(slotStartHour).padStart(2, "0")}:${String(slotStartMin).padStart(2, "0")}`,
+      end: `${String(slotEndHour).padStart(2, "0")}:${String(slotEndMin).padStart(2, "0")}`,
+    });
+  }
+  
+  return slots;
+}
+
 const TIME_OPTIONS = Array.from({ length: 13 * 4 + 1 }, (_, i) => {
   const hour = Math.floor(i / 4) + 7;
   const minute = (i % 4) * 15;
@@ -386,46 +411,91 @@ export default function Availability() {
       return;
     }
 
+    // Validate time range produces at least one full 1-hour slot (except for vacation)
+    if (newSlotType !== "Vacation") {
+      const previewSlots = splitIntoHourlySlots(newStartTime, newEndTime);
+      if (previewSlots.length === 0) {
+        toast({ 
+          title: "Validation Error", 
+          description: "Time range must be at least 1 hour. Each booking requires a full 1-hour slot.", 
+          variant: "destructive" 
+        });
+        return;
+      }
+    }
+
     const newSlots: TimeSlot[] = [];
     const start = parseISO(newDate);
     const end = parseISO(endDate);
     const batchId = `batch-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
     if (newSlotType === "Recurring") {
-      selectedDays.forEach(day => {
-        newSlots.push({
-          id: `ts-${Date.now()}-${day}`,
-          clinicianId: dialogClinicianId,
-          type: "Recurring",
-          day: day,
-          date: null,
-          startDate: newDate,
-          endDate: endDate,
-          startTime: newStartTime,
-          endTime: newEndTime,
-          isBooked: false,
-          batchId: selectedDays.length > 1 ? batchId : null,
-        } as TimeSlot);
+      // Split time range into 1-hour slots
+      const hourlySlots = splitIntoHourlySlots(newStartTime, newEndTime);
+      const totalSlots = selectedDays.length * hourlySlots.length;
+      
+      selectedDays.forEach((day, dayIndex) => {
+        hourlySlots.forEach((timeSlot, slotIndex) => {
+          newSlots.push({
+            id: `ts-${Date.now()}-${dayIndex}-${slotIndex}-${day}`,
+            clinicianId: dialogClinicianId,
+            type: "Recurring",
+            day: day,
+            date: null,
+            startDate: newDate,
+            endDate: endDate,
+            startTime: timeSlot.start,
+            endTime: timeSlot.end,
+            isBooked: false,
+            batchId: totalSlots > 1 ? batchId : null,
+          } as TimeSlot);
+        });
       });
     } else {
       const rangeEnd = end < start ? start : end;
       const dayCount = differenceInDays(rangeEnd, start) + 1;
       
-      for (let i = 0; i < dayCount; i++) {
-        const day = addDays(start, i);
-        newSlots.push({
-          id: `ts-${Date.now()}-${day.getTime()}`,
-          clinicianId: dialogClinicianId,
-          type: newSlotType,
-          day: format(day, "EEEE"),
-          date: format(day, "yyyy-MM-dd"),
-          startDate: null,
-          endDate: null,
-          startTime: newSlotType === "Vacation" ? "00:00" : newStartTime,
-          endTime: newSlotType === "Vacation" ? "23:59" : newEndTime,
-          isBooked: false,
-          batchId: dayCount > 1 ? batchId : null,
-        } as TimeSlot);
+      // For vacation, keep as single block; for SpecificDate, split into hourly
+      if (newSlotType === "Vacation") {
+        for (let i = 0; i < dayCount; i++) {
+          const day = addDays(start, i);
+          newSlots.push({
+            id: `ts-${Date.now()}-${day.getTime()}`,
+            clinicianId: dialogClinicianId,
+            type: newSlotType,
+            day: format(day, "EEEE"),
+            date: format(day, "yyyy-MM-dd"),
+            startDate: null,
+            endDate: null,
+            startTime: "00:00",
+            endTime: "23:59",
+            isBooked: false,
+            batchId: dayCount > 1 ? batchId : null,
+          } as TimeSlot);
+        }
+      } else {
+        // Split SpecificDate into 1-hour slots
+        const hourlySlots = splitIntoHourlySlots(newStartTime, newEndTime);
+        const totalSlots = dayCount * hourlySlots.length;
+        
+        for (let i = 0; i < dayCount; i++) {
+          const day = addDays(start, i);
+          hourlySlots.forEach((timeSlot, slotIndex) => {
+            newSlots.push({
+              id: `ts-${Date.now()}-${day.getTime()}-${slotIndex}`,
+              clinicianId: dialogClinicianId,
+              type: newSlotType,
+              day: format(day, "EEEE"),
+              date: format(day, "yyyy-MM-dd"),
+              startDate: null,
+              endDate: null,
+              startTime: timeSlot.start,
+              endTime: timeSlot.end,
+              isBooked: false,
+              batchId: totalSlots > 1 ? batchId : null,
+            } as TimeSlot);
+          });
+        }
       }
     }
 
@@ -433,9 +503,7 @@ export default function Availability() {
       onSuccess: () => {
         toast({
           title: "Availability Added",
-          description: newSlotType === "Recurring"
-            ? `Added recurring schedule for ${selectedDays.length} days/week`
-            : `Added ${newSlots.length} time slots`,
+          description: `Added ${newSlots.length} x 1-hour time slots`,
         });
         setIsDialogOpen(false);
         resetForm();

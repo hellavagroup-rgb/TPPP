@@ -26,6 +26,8 @@
 - Added new workflow step "Awaiting Confirmation": workflow is now New → Forms Sent → Forms Completed → Allocated → Awaiting Confirmation → Confirmed; admins move clients to Awaiting Confirmation after emailing them
 - Added task comments feature: tasks have a comments field for progress notes; comments displayed on task cards and editable in task edit dialog
 - Added show/hide completed tasks toggle: users can filter task view to hide completed tasks; grid layout adjusts dynamically (2 columns when hidden, 3 when shown)
+- Expired slot filtering: slots with past endDate are now filtered out of all allocation dialogs and slot displays
+- **1-hour slot booking**: Availability is now automatically split into individual 1-hour slots when created (e.g., 9am-5pm creates 8 x 1-hour slots). Each client booking takes exactly one 1-hour slot. Time ranges must be at least 1 hour; partial hours are not created.
 
 ## Overview
 

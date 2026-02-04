@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { ChevronLeft, ChevronRight, Plus, Trash2, Pencil, UserPlus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { format, addDays, startOfDay, startOfWeek, parseISO, isWithinInterval, isBefore, isAfter, differenceInDays } from "date-fns";
+import { format, addDays, startOfDay, startOfWeek, parseISO, isWithinInterval, isBefore, isAfter, differenceInDays, differenceInWeeks } from "date-fns";
 import {
   Dialog,
   DialogContent,
@@ -385,6 +385,43 @@ export default function Availability() {
         
         const slotStart = slot.startDate ? parseISO(slot.startDate) : null;
         const slotEnd = slot.endDate ? parseISO(slot.endDate) : null;
+        const slotFrequency = (slot as any).frequency || "weekly";
+        const slotIsOngoing = (slot as any).isOngoing || false;
+        
+        // Check fortnightly frequency - only show on alternating weeks from start date
+        if (slotFrequency === "fortnightly" && slotStart) {
+          const weeksDiff = differenceInWeeks(startOfWeek(date), startOfWeek(slotStart));
+          if (weeksDiff < 0 || weeksDiff % 2 !== 0) return; // Skip odd weeks
+        }
+        
+        // Handle ongoing slots (no end date)
+        if (slotIsOngoing && slotStart) {
+          slotStart.setHours(0, 0, 0, 0);
+          const isAfterStart = !isBefore(date, slotStart);
+          const isFutureSlot = isBefore(date, slotStart);
+          
+          if (isAfterStart) {
+            const splitSlots = splitSlotIntoHours(slot);
+            splitSlots.forEach(splitSlot => {
+              results.push({
+                slot: splitSlot,
+                isActive: true,
+                isFuture: false,
+              });
+            });
+          } else if (isFutureSlot) {
+            const splitSlots = splitSlotIntoHours(slot);
+            splitSlots.forEach(splitSlot => {
+              results.push({
+                slot: splitSlot,
+                isActive: false,
+                isFuture: true,
+                validFrom: format(slotStart, "dd/MM/yyyy"),
+              });
+            });
+          }
+          return;
+        }
         
         if (slotStart && slotEnd) {
           slotStart.setHours(0, 0, 0, 0);

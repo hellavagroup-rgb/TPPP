@@ -815,7 +815,7 @@ export async function registerRoutes(
   app.patch("/api/clients/:id", requireAdmin, auditLog("edit", "client"), async (req, res) => {
     try {
       // Get current client to check for status change
-      const currentClient = await storage.getClient(req.params.id);
+      const currentClient = await storage.getClientById(req.params.id);
       const oldStatus = currentClient?.status;
       
       // Add workflow timestamps based on status change

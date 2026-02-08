@@ -1060,6 +1060,14 @@ export default function Availability() {
                       <div className="min-w-0">
                         <div className="font-medium text-sm truncate">{clinician.name}</div>
                         <div className="text-xs text-muted-foreground truncate">{clinician.tier || "Mid"} · {clinician.location || "No location"}</div>
+                        <div className="flex flex-wrap gap-1 mt-0.5">
+                          {clinician.worksWithCouples && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">Couples</span>
+                          )}
+                          {clinician.allocateForBupa && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">Bupa</span>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </td>

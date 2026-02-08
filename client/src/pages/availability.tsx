@@ -841,7 +841,7 @@ export default function Availability() {
             <DialogContent>
               <DialogHeader>
                 <DialogTitle>{isEditMode ? "Edit Availability" : "Add Availability"}</DialogTitle>
-                <DialogDescription>{isEditMode ? "Update this time slot." : "Add a specific shift, recurring bank, or vacation."}</DialogDescription>
+                <DialogDescription>{isEditMode ? "Update this time slot." : "Add availability or vacation."}</DialogDescription>
               </DialogHeader>
               <div className="grid gap-4 py-4">
                 {user?.role !== "clinician" && !isEditMode && (
@@ -867,8 +867,7 @@ export default function Availability() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="SpecificDate">One-Off / Specific Date</SelectItem>
-                      <SelectItem value="Recurring">Recurring Schedule (Bank)</SelectItem>
+                      <SelectItem value="Recurring">Availability</SelectItem>
                       <SelectItem value="Vacation">Time Off / Vacation</SelectItem>
                     </SelectContent>
                   </Select>

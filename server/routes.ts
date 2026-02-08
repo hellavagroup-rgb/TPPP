@@ -832,17 +832,26 @@ export async function registerRoutes(
           updateData.awaitingConfirmationAt = now;
         } else if (req.body.status === "Scheduled") {
           updateData.confirmedAt = now;
-          if (currentClient?.assignedSlotId) {
-            try {
-              await storage.deleteTimeSlot(currentClient.assignedSlotId);
-            } catch (err) {
-              console.error("Failed to delete slot on confirmation:", err);
-            }
-          }
         }
       }
       
+      const slotToDelete = (req.body.status === "Scheduled" && req.body.status !== oldStatus && currentClient?.assignedSlotId)
+        ? currentClient.assignedSlotId
+        : null;
+      
+      if (slotToDelete) {
+        updateData.assignedSlotId = null;
+      }
+      
       const updated = await storage.updateClient(req.params.id, updateData);
+      
+      if (slotToDelete && updated) {
+        try {
+          await storage.deleteTimeSlot(slotToDelete);
+        } catch (err) {
+          console.error("Failed to delete slot on confirmation:", err);
+        }
+      }
       if (!updated) {
         return res.status(404).json({ error: "Client not found" });
       }

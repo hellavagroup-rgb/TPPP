@@ -1104,7 +1104,7 @@ export default function Availability() {
                                 <div className="font-medium">OFF</div>
                               ) : (
                                 <>
-                                  <div className="font-semibold">{slot.startTime} - {slot.endTime}</div>
+                                  <div className="font-semibold">{slot.startTime} - {slot.endTime} <span className="font-normal text-[9px] opacity-70">{(slot as any).frequency === "fortnightly" ? "F" : "W"}</span></div>
                                   {isFuture && (
                                     <div className="text-[9px] leading-tight mt-0.5 italic">
                                       Available {validFrom} - {validUntil}

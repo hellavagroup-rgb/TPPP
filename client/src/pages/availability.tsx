@@ -327,12 +327,6 @@ export default function Availability() {
     return tierA - tierB;
   });
 
-  const confirmedSlotIds = new Set(
-    clients
-      .filter(c => c.status === "Scheduled" && c.assignedSlotId)
-      .map(c => c.assignedSlotId)
-  );
-
   const visibleDates = Array.from({ length: DAYS_TO_SHOW }, (_, i) => addDays(weekStart, i));
 
   const handleScrollLeft = () => {
@@ -386,8 +380,6 @@ export default function Availability() {
     const results: SlotForDate[] = [];
 
     clinician.slots.forEach(slot => {
-      if (confirmedSlotIds.has(slot.id)) return;
-
       if (slot.type === "Recurring") {
         if (slot.day !== dayName) return;
         

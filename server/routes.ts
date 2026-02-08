@@ -832,6 +832,14 @@ export async function registerRoutes(
           updateData.awaitingConfirmationAt = now;
         } else if (req.body.status === "Scheduled") {
           updateData.confirmedAt = now;
+          // Unbook the assigned slot so it can be reused for future clients
+          if (currentClient?.assignedSlotId) {
+            try {
+              await storage.updateTimeSlot(currentClient.assignedSlotId, { isBooked: false });
+            } catch (err) {
+              console.error("Failed to unbook slot on confirmation:", err);
+            }
+          }
         }
       }
       

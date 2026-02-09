@@ -1596,8 +1596,11 @@ export default function Clients() {
                             <div className="text-left">
                               <div className={`font-medium ${slotIsMatch && !isPending ? "text-emerald-700" : isPending ? "text-amber-700" : ""}`}>{slot.day || format(parseISO(slot.date!), "EEE")}</div>
                               <div className={`text-[10px] ${slotIsMatch && !isPending ? "text-emerald-600" : isPending ? "text-amber-600" : "text-muted-foreground"}`}>
-                                {isPending ? `From ${pendingDate}` : `${slot.startTime} - ${slot.endTime}`}
+                                {slot.startTime} - {slot.endTime}
                               </div>
+                              {isPending && pendingDate && (
+                                <div className="text-[9px] text-amber-600">Available from {pendingDate}</div>
+                              )}
                             </div>
                           </Button>
                         );
@@ -1814,8 +1817,11 @@ export default function Clients() {
                                 <div className="text-left">
                                   <div className={`font-medium ${isPending && !isSelected ? "text-amber-700" : ""}`}>{slot.day || (slot.date && format(parseISO(slot.date), "EEE"))}</div>
                                   <div className={`text-[10px] ${isPending && !isSelected ? "text-amber-600" : "text-muted-foreground"}`}>
-                                    {isPending ? `From ${pendingDate}` : `${slot.startTime} - ${slot.endTime}`}
+                                    {slot.startTime} - {slot.endTime}
                                   </div>
+                                  {isPending && pendingDate && (
+                                    <div className="text-[9px] text-amber-600">Available from {pendingDate}</div>
+                                  )}
                                 </div>
                               </Button>
                             );

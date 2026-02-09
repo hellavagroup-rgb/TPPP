@@ -196,7 +196,7 @@ export const tasks = pgTable("tasks", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   title: text("title").notNull(),
   description: text("description").notNull(),
-  assignee: text("assignee", { enum: ["Sarah", "Rosie", "Suzanne"] }).notNull(),
+  assignee: text("assignee").notNull(),
   dueDate: timestamp("due_date").notNull(),
   priority: text("priority", { enum: ["High", "Medium", "Low"] }).notNull().default("Medium"),
   status: text("status", { enum: ["Pending", "In Progress", "Completed"] }).notNull().default("Pending"),

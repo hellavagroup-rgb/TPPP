@@ -14,7 +14,7 @@ import { Calendar } from "@/components/ui/calendar";
 import { CheckCircle2, Clock, AlertTriangle, Plus, Pencil, Trash2, Calendar as CalendarIcon, MessageSquare } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-import type { Task } from "@shared/schema";
+import type { Task, User } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
 import { formatDateUK } from "@/lib/dateUtils";
 import { format, parse } from "date-fns";
@@ -48,6 +48,14 @@ export default function Tasks() {
   const { data: tasks = [] } = useQuery<Task[]>({
     queryKey: ["/api/tasks"],
   });
+
+  const { data: adminUsers = [] } = useQuery<User[]>({
+    queryKey: ["/api/admin-users"],
+  });
+
+  const assigneeOptions = adminUsers
+    .map(u => u.name)
+    .sort();
 
   const createTaskMutation = useMutation({
     mutationFn: async (task: typeof newTask) => {
@@ -319,9 +327,9 @@ export default function Tasks() {
                     <SelectValue placeholder="Select assignee" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="Sarah">Sarah</SelectItem>
-                    <SelectItem value="Rosie">Rosie</SelectItem>
-                    <SelectItem value="Suzanne">Suzanne</SelectItem>
+                    {assigneeOptions.map(name => (
+                      <SelectItem key={name} value={name}>{name}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -426,9 +434,9 @@ export default function Tasks() {
                     <SelectValue placeholder="Select assignee" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="Sarah">Sarah</SelectItem>
-                    <SelectItem value="Rosie">Rosie</SelectItem>
-                    <SelectItem value="Suzanne">Suzanne</SelectItem>
+                    {assigneeOptions.map(name => (
+                      <SelectItem key={name} value={name}>{name}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>

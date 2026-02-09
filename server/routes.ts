@@ -1242,12 +1242,13 @@ export async function registerRoutes(
       const validated = insertTaskSchema.parse(body);
       const task = await storage.createTask(validated);
 
-      // Send email notification if assignee has task notifications enabled
       if (validated.assignee) {
         try {
           const assigneeUser = await storage.getUserByName(validated.assignee);
+          console.log(`Task notification: assignee="${validated.assignee}", userFound=${!!assigneeUser}, email=${assigneeUser?.email}`);
           if (assigneeUser) {
             const prefs = assigneeUser.notificationPrefs as { taskAssignments?: boolean } | null;
+            console.log(`Task notification: prefs=${JSON.stringify(prefs)}`);
             if (prefs?.taskAssignments !== false) {
               const dueDateStr = validated.dueDate ? 
                 new Date(validated.dueDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 
@@ -1258,10 +1259,12 @@ export async function registerRoutes(
                 validated.description || '',
                 dueDateStr
               );
-              await sendEmail({
+              console.log(`Task notification: sending email to ${assigneeUser.email}`);
+              const result = await sendEmail({
                 ...emailOptions,
                 to: assigneeUser.email
               });
+              console.log(`Task notification: email result=${JSON.stringify(result)}`);
             }
           }
         } catch (emailError) {

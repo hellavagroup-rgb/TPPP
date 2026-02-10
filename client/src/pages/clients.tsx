@@ -1597,6 +1597,11 @@ export default function Clients() {
                               <div className={`font-medium ${slotIsMatch && !isPending ? "text-emerald-700" : isPending ? "text-amber-700" : ""}`}>{slot.day || format(parseISO(slot.date!), "EEE")}</div>
                               <div className={`text-[10px] ${slotIsMatch && !isPending ? "text-emerald-600" : isPending ? "text-amber-600" : "text-muted-foreground"}`}>
                                 {slot.startTime} - {slot.endTime}
+                                {slot.type === "Recurring" && (
+                                  <span className={`ml-1 font-bold ${isPending ? "text-amber-700" : slotIsMatch ? "text-emerald-700" : "text-muted-foreground"}`}>
+                                    {(slot as any).frequency === "fortnightly" ? "F" : "W"}
+                                  </span>
+                                )}
                               </div>
                               {isPending && pendingDate && (
                                 <div className="text-[9px] text-amber-600">Available from {pendingDate}</div>
@@ -1818,6 +1823,11 @@ export default function Clients() {
                                   <div className={`font-medium ${isPending && !isSelected ? "text-amber-700" : ""}`}>{slot.day || (slot.date && format(parseISO(slot.date), "EEE"))}</div>
                                   <div className={`text-[10px] ${isPending && !isSelected ? "text-amber-600" : "text-muted-foreground"}`}>
                                     {slot.startTime} - {slot.endTime}
+                                    {slot.type === "Recurring" && (
+                                      <span className={`ml-1 font-bold ${isPending && !isSelected ? "text-amber-700" : "text-muted-foreground"}`}>
+                                        {(slot as any).frequency === "fortnightly" ? "F" : "W"}
+                                      </span>
+                                    )}
                                   </div>
                                   {isPending && pendingDate && (
                                     <div className="text-[9px] text-amber-600">Available from {pendingDate}</div>

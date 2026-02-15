@@ -155,6 +155,14 @@ export default function Dashboard() {
       icon: AlertCircle,
       color: "text-slate-600",
       bg: "bg-slate-100"
+    },
+    {
+      title: "Available Slots",
+      value: clinicians.reduce((sum, c) => sum + getSlotCounts(c.availability).available, 0),
+      change: "Total across all clinicians",
+      icon: Calendar,
+      color: "text-green-600",
+      bg: "bg-green-100"
     }
   ];
 
@@ -165,7 +173,7 @@ export default function Dashboard() {
         <p className="text-muted-foreground mt-1">Manage client intake and clinician availability.</p>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
         {stats.map((stat) => (
           <Card key={stat.title} className="border-none shadow-sm hover:shadow-md transition-shadow">
             <CardContent className="p-6">

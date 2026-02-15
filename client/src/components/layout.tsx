@@ -15,7 +15,8 @@ import {
   FileText,
   BarChart3,
   Brain,
-  UserCircle
+  UserCircle,
+  KeyRound
 } from "lucide-react";
 import logo from "@assets/xPerinatalPP-logo-large-digital.png.pagespeed.ic.wAjk_RUOnf_1766008188694.png";
 import { useState } from "react";
@@ -23,16 +24,62 @@ import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const { notifications } = useData();
   const { user, logout } = useAuth();
+  const { toast } = useToast();
   
+  const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [isChanging, setIsChanging] = useState(false);
+
   const unreadNotifications = notifications.filter(n => !n.read).length;
 
-  // Determine navigation based on role
+  const handleChangePassword = async () => {
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      toast({ title: "Error", description: "Please fill in all fields.", variant: "destructive" });
+      return;
+    }
+    if (newPassword.length < 8) {
+      toast({ title: "Error", description: "New password must be at least 8 characters.", variant: "destructive" });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast({ title: "Error", description: "New passwords do not match.", variant: "destructive" });
+      return;
+    }
+    setIsChanging(true);
+    try {
+      const res = await apiRequest("POST", "/api/auth/change-password", {
+        currentPassword,
+        newPassword,
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        toast({ title: "Error", description: data.error || "Failed to change password.", variant: "destructive" });
+        return;
+      }
+      toast({ title: "Password Changed", description: "Your password has been updated successfully." });
+      setIsChangePasswordOpen(false);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch (error) {
+      toast({ title: "Error", description: "Failed to change password.", variant: "destructive" });
+    } finally {
+      setIsChanging(false);
+    }
+  };
+
   const adminNavigation = [
     { name: "Dashboard", href: "/", icon: LayoutDashboard },
     { name: "Clients", href: "/clients", icon: Users },
@@ -56,7 +103,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     <div className="flex flex-col h-full bg-sidebar text-sidebar-foreground border-r border-sidebar-border">
       <div className="p-6 flex flex-col gap-4">
         <div className="w-full flex flex-col items-center py-2 gap-1">
-             {/* Logo is wide, so we display it without a constraining circle */}
              <img src={logo} alt="The Perinatal Psychology Practice" className="w-full max-w-[200px] object-contain" />
              <span className="text-[10px] uppercase tracking-widest text-sidebar-foreground/60 font-medium">
                 {user?.role === "clinician" ? "Clinician Portal" : "Client Management"}
@@ -112,6 +158,16 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <p className="text-sm font-medium truncate">{user?.name || "Guest"}</p>
             <p className="text-xs text-sidebar-foreground/60 truncate capitalize">{user?.role || "Visitor"}</p>
           </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent"
+            onClick={() => setIsChangePasswordOpen(true)}
+            title="Change Password"
+            data-testid="button-change-password"
+          >
+            <KeyRound className="h-4 w-4" />
+          </Button>
           <Button variant="ghost" size="icon" className="h-8 w-8 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent" onClick={logout}>
             <LogOut className="h-4 w-4" />
           </Button>
@@ -122,19 +178,16 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-background flex">
-      {/* Desktop Sidebar */}
       <div className="hidden md:flex md:w-64 md:flex-col fixed inset-y-0 z-50">
         <SidebarContent />
       </div>
 
-      {/* Mobile Sidebar */}
       <Sheet open={isMobileOpen} onOpenChange={setIsMobileOpen}>
         <SheetContent side="left" className="p-0 w-64 bg-sidebar border-r border-sidebar-border">
           <SidebarContent />
         </SheetContent>
       </Sheet>
 
-      {/* Main Content */}
       <div className="flex-1 md:pl-64 flex flex-col">
         <header className="h-16 flex items-center justify-between px-6 border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-40">
           <div className="flex items-center gap-4 md:hidden">
@@ -161,6 +214,74 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </div>
         </main>
       </div>
+
+      <Dialog open={isChangePasswordOpen} onOpenChange={(open) => {
+        setIsChangePasswordOpen(open);
+        if (!open) {
+          setCurrentPassword("");
+          setNewPassword("");
+          setConfirmPassword("");
+        }
+      }}>
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <KeyRound className="h-5 w-5" />
+              Change Password
+            </DialogTitle>
+            <DialogDescription>
+              Enter your current password and choose a new one.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="current-password">Current Password</Label>
+              <Input
+                id="current-password"
+                type="password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                placeholder="Enter current password"
+                data-testid="input-current-password"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="new-password">New Password</Label>
+              <Input
+                id="new-password"
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="At least 8 characters"
+                data-testid="input-new-password"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="confirm-password">Confirm New Password</Label>
+              <Input
+                id="confirm-password"
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="Re-enter new password"
+                data-testid="input-confirm-password"
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setIsChangePasswordOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleChangePassword}
+              disabled={isChanging}
+              data-testid="button-submit-change-password"
+            >
+              {isChanging ? "Changing..." : "Change Password"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -1360,6 +1360,35 @@ export async function registerRoutes(
     }
   });
 
+  // Change password (authenticated users)
+  app.post("/api/auth/change-password", requireAuth, async (req, res) => {
+    try {
+      const { currentPassword, newPassword } = req.body;
+      if (!currentPassword || !newPassword) {
+        return res.status(400).json({ error: "Current password and new password are required" });
+      }
+      if (newPassword.length < 8) {
+        return res.status(400).json({ error: "New password must be at least 8 characters" });
+      }
+      const user = await storage.getUserById(req.user!.id);
+      if (!user || !user.password) {
+        return res.status(400).json({ error: "Unable to change password" });
+      }
+      const { comparePasswords } = await import("./auth");
+      const isValid = await comparePasswords(currentPassword, user.password);
+      if (!isValid) {
+        return res.status(400).json({ error: "Current password is incorrect" });
+      }
+      const hashedPassword = await hashPassword(newPassword);
+      await storage.updateUser(user.id, { password: hashedPassword });
+      await auditLog(req, "password_changed", "user", user.id);
+      res.json({ message: "Password changed successfully" });
+    } catch (error) {
+      console.error("Change password error:", error);
+      res.status(500).json({ error: "Failed to change password" });
+    }
+  });
+
   // Request password reset
   app.post("/api/auth/forgot-password", async (req, res) => {
     try {

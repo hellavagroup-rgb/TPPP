@@ -302,53 +302,41 @@ export default function Availability() {
         const slotFrequency = (slot as any).frequency || "weekly";
         const slotIsOngoing = (slot as any).isOngoing || false;
         
-        if (slotFrequency === "fortnightly" && slotStart) {
+        const slotStartCmp = slotStart ? new Date(slotStart) : null;
+        if (slotStartCmp) slotStartCmp.setHours(0, 0, 0, 0);
+        const isFutureSlot = slotStartCmp ? isBefore(date, slotStartCmp) : false;
+
+        if (!isFutureSlot && slotFrequency === "fortnightly" && slotStart) {
           const weeksDiff = differenceInWeeks(startOfWeek(date, { weekStartsOn: 1 }), startOfWeek(slotStart, { weekStartsOn: 1 }));
           if (weeksDiff < 0 || weeksDiff % 2 !== 0) return;
         }
+
+        if (isFutureSlot) {
+          const slotEndCmp = slotEnd ? new Date(slotEnd) : null;
+          if (slotEndCmp) slotEndCmp.setHours(23, 59, 59, 999);
+          results.push({
+            slot,
+            isActive: false,
+            isFuture: true,
+            validFrom: slotStartCmp ? format(slotStartCmp, "dd/MM/yyyy") : undefined,
+            validUntil: slotEndCmp ? format(slotEndCmp, "dd/MM/yyyy") : undefined,
+          });
+          return;
+        }
         
         if (slotIsOngoing || !slotEnd) {
-          if (slotStart) {
-            const startCmp = new Date(slotStart);
-            startCmp.setHours(0, 0, 0, 0);
-            const isAfterStart = !isBefore(date, startCmp);
-            const isFutureSlot = isBefore(date, startCmp);
-            
-            if (isAfterStart) {
-              results.push({ slot, isActive: true, isFuture: false });
-            } else if (isFutureSlot) {
-              results.push({
-                slot,
-                isActive: false,
-                isFuture: true,
-                validFrom: format(startCmp, "dd/MM/yyyy"),
-              });
-            }
-          } else {
-            results.push({ slot, isActive: true, isFuture: false });
-          }
+          results.push({ slot, isActive: true, isFuture: false });
           return;
         }
         
         if (slotStart && slotEnd) {
-          const startCmp = new Date(slotStart);
-          startCmp.setHours(0, 0, 0, 0);
           const endCmp = new Date(slotEnd);
           endCmp.setHours(23, 59, 59, 999);
           
-          const isWithinRange = isWithinInterval(date, { start: startCmp, end: endCmp });
-          const isFutureSlot = isBefore(date, startCmp);
+          const isWithinRange = isWithinInterval(date, { start: slotStartCmp!, end: endCmp });
           
           if (isWithinRange) {
             results.push({ slot, isActive: true, isFuture: false });
-          } else if (isFutureSlot && isBefore(startOfDay(new Date()), endCmp)) {
-            results.push({
-              slot,
-              isActive: false,
-              isFuture: true,
-              validFrom: format(startCmp, "dd/MM/yyyy"),
-              validUntil: format(endCmp, "dd/MM/yyyy"),
-            });
           }
         }
       } else if (slot.type === "Vacation") {

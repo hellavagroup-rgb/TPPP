@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import { useLocation } from "wouter";
@@ -127,6 +127,16 @@ export default function Availability() {
     queryKey: ["/api/clients"],
     enabled: user?.role === "admin",
   });
+
+  const slotToClientMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const client of clients) {
+      if (client.assignedSlotId && client.displayId) {
+        map[client.assignedSlotId] = client.displayId;
+      }
+    }
+    return map;
+  }, [clients]);
 
   const cliniciansWithSlots = useQuery<ClinicianWithSlots[]>({
     queryKey: ["/api/clinicians/with-slots"],
@@ -777,7 +787,7 @@ export default function Availability() {
                                   )}
                                   {slot.isBooked && (
                                     <Badge variant="secondary" className="text-[8px] px-1 py-0 mt-0.5">
-                                      Booked
+                                      {slotToClientMap[slot.id] || "Booked"}
                                     </Badge>
                                   )}
                                 </>

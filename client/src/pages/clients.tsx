@@ -195,6 +195,11 @@ export default function Clients() {
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [showAllClinicians, setShowAllClinicians] = useState(false);
 
+  // Fill by Phone State
+  const [isPhoneFillOpen, setIsPhoneFillOpen] = useState(false);
+  const [phoneFillClient, setPhoneFillClient] = useState<ClientType | null>(null);
+  const [phoneFillFormId, setPhoneFillFormId] = useState<string>("");
+
   // New Client Form State
   const [isNewClientOpen, setIsNewClientOpen] = useState(false);
   const [newClientData, setNewClientData] = useState({
@@ -542,6 +547,26 @@ export default function Clients() {
       setClientToSendForms(client);
       setSelectedForms([]); // Reset selection
       setIsSendFormsOpen(true);
+  };
+
+  const handleOpenPhoneFill = (client: ClientType) => {
+    setPhoneFillClient(client);
+    setPhoneFillFormId(forms.length === 1 ? forms[0].id : "");
+    setIsPhoneFillOpen(true);
+  };
+
+  const handleStartPhoneFill = () => {
+    if (phoneFillClient && phoneFillFormId) {
+      const url = `${window.location.origin}/fill/${phoneFillClient.id}/${phoneFillFormId}`;
+      window.open(url, '_blank');
+      setIsPhoneFillOpen(false);
+      setPhoneFillClient(null);
+      setPhoneFillFormId("");
+      toast({
+        title: "Phone Fill Started",
+        description: `Form opened in a new tab for ${phoneFillClient.displayId}. Fill it in while on the phone with the client.`,
+      });
+    }
   };
 
   const handleSendForms = async () => {
@@ -973,9 +998,14 @@ export default function Clients() {
                     {client.notes && (
                       <p className="text-[10px] text-muted-foreground mt-1 italic line-clamp-2" data-testid={`notes-${client.id}`}>"{client.notes}"</p>
                     )}
-                    <Button size="sm" variant="outline" className="w-full gap-1 text-xs mt-2" onClick={() => handleOpenSendForms(client)}>
-                      <Mail className="h-3 w-3" /> Send Forms
-                    </Button>
+                    <div className="flex gap-1 mt-2">
+                      <Button size="sm" variant="outline" className="flex-1 gap-1 text-xs" onClick={() => handleOpenSendForms(client)}>
+                        <Mail className="h-3 w-3" /> Send Forms
+                      </Button>
+                      <Button size="sm" variant="outline" className="flex-1 gap-1 text-xs" onClick={() => handleOpenPhoneFill(client)}>
+                        <Phone className="h-3 w-3" /> Fill by Phone
+                      </Button>
+                    </div>
                   </CardContent>
                 </Card>
               ))}
@@ -1009,6 +1039,9 @@ export default function Clients() {
                           </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => handleOpenSendForms(client)}>
                             <Mail className="h-4 w-4 mr-2" /> Resend Forms
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleOpenPhoneFill(client)}>
+                            <Phone className="h-4 w-4 mr-2" /> Fill by Phone
                           </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => handleOpenManualAllocate(client)}>
                             <CalendarCheck className="h-4 w-4 mr-2" /> Allocate to Clinician
@@ -1368,6 +1401,51 @@ export default function Clients() {
                     <Mail className="h-4 w-4 mr-2" /> Send {selectedFormIds.length > 0 ? `(${selectedFormIds.length})` : ""}
                 </Button>
             </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Fill by Phone Dialog */}
+      <Dialog open={isPhoneFillOpen} onOpenChange={setIsPhoneFillOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Phone className="h-5 w-5" />
+              Fill Form by Phone
+            </DialogTitle>
+            <DialogDescription>
+              Select the form to fill in on behalf of {phoneFillClient?.displayId} during a phone call. The form will open in a new tab.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4 space-y-3">
+            {forms.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-4">No forms available. Create a form template first.</p>
+            ) : forms.length === 1 ? (
+              <div className="p-3 rounded border bg-muted/30">
+                <p className="text-sm font-medium">{forms[0].title}</p>
+                {forms[0].description && <p className="text-xs text-muted-foreground mt-1">{forms[0].description}</p>}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <Label>Select Form</Label>
+                <Select value={phoneFillFormId} onValueChange={setPhoneFillFormId}>
+                  <SelectTrigger data-testid="select-phone-fill-form">
+                    <SelectValue placeholder="Choose a form..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {forms.map(form => (
+                      <SelectItem key={form.id} value={form.id}>{form.title}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setIsPhoneFillOpen(false)}>Cancel</Button>
+            <Button onClick={handleStartPhoneFill} disabled={!phoneFillFormId} data-testid="button-start-phone-fill">
+              <Phone className="h-4 w-4 mr-2" /> Open Form
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

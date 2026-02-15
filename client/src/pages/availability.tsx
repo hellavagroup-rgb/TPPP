@@ -129,10 +129,10 @@ export default function Availability() {
   });
 
   const slotToClientMap = useMemo(() => {
-    const map: Record<string, string> = {};
+    const map: Record<string, { displayId: string; status: string }> = {};
     for (const client of clients) {
       if (client.assignedSlotId && client.displayId) {
-        map[client.assignedSlotId] = client.displayId;
+        map[client.assignedSlotId] = { displayId: client.displayId, status: client.status };
       }
     }
     return map;
@@ -289,6 +289,11 @@ export default function Availability() {
     const results: SlotForDate[] = [];
 
     clinician.slots.forEach(slot => {
+      if (slot.isBooked) {
+        const clientInfo = slotToClientMap[slot.id];
+        if (clientInfo && clientInfo.status === "Scheduled") return;
+      }
+
       if (slot.type === "Recurring") {
         if (slot.day !== dayName) return;
         
@@ -787,7 +792,7 @@ export default function Availability() {
                                   )}
                                   {slot.isBooked && (
                                     <Badge variant="secondary" className="text-[8px] px-1 py-0 mt-0.5">
-                                      {slotToClientMap[slot.id] || "Booked"}
+                                      {slotToClientMap[slot.id]?.displayId || "Booked"}
                                     </Badge>
                                   )}
                                 </>

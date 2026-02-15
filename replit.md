@@ -27,8 +27,7 @@
 - Added task comments feature: tasks have a comments field for progress notes; comments displayed on task cards and editable in task edit dialog
 - Added show/hide completed tasks toggle: users can filter task view to hide completed tasks; grid layout adjusts dynamically (2 columns when hidden, 3 when shown)
 - Expired slot filtering: slots with past endDate are now filtered out of all allocation dialogs and slot displays
-- **1-hour slot booking**: Availability is now automatically split into individual 1-hour slots when created (e.g., 9am-5pm creates 8 x 1-hour slots). Each client booking takes exactly one 1-hour slot. Time ranges must be at least 1 hour; partial hours are not created.
-- **Recurring schedule enhancements**: Added frequency option (weekly/fortnightly) and ongoing option (no end date required) for recurring availability slots. Schema includes `frequency` and `isOngoing` fields on time_slots table.
+- **Simplified availability system (Feb 2026)**: Completely reworked slot management. Each 1-hour slot is an independent database record. No batch operations or edit mode - add new or delete existing only. Deleting a slot permanently removes it from all future weeks (even booked slots). Booked slot deletion clears client assignment reference automatically. Default to ongoing (no end date), with "Add an end date" checkbox. End time auto-defaults to 1 hour after selected start time. SpecificDate slot type removed from UI (schema retained for backward compatibility). Fortnightly alternation fixed with proper week start alignment.
 
 ## Overview
 
@@ -93,7 +92,7 @@ Core entities:
 ### Key Design Decisions
 - **Shared Types**: The `shared/` directory contains schema definitions used by both frontend and backend, ensuring type consistency
 - **Display IDs**: Clients have both internal UUIDs and human-readable display IDs (W12345678 format)
-- **Slot Types**: Time slots support three types - Recurring (weekly pattern), SpecificDate (one-off), and Vacation (blocked time)
+- **Slot Types**: Time slots support Recurring (weekly/fortnightly pattern) and Vacation (blocked time). Each slot is an independent 1-hour record. SpecificDate type retained in schema for backward compatibility but no longer created by UI
 - **Form Builder**: Dynamic forms support multiple field types with conditional logic for showing/hiding fields based on answers
 
 ## External Dependencies

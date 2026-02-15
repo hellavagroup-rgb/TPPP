@@ -613,10 +613,9 @@ export async function registerRoutes(
     }
   });
 
-  // Delete a specific time slot
+  // Delete a specific time slot (permanently removes it, even if booked)
   app.delete("/api/timeslots/:clinicianId/:slotId", requireAuth, async (req, res) => {
     try {
-      // Check authorization: Admin can delete any, Clinician can only delete their own
       if (req.user!.role === "clinician") {
         const clinician = await storage.getClinicianByUserId(req.user!.id);
         if (!clinician || clinician.id !== req.params.clinicianId) {
@@ -629,121 +628,9 @@ export async function registerRoutes(
       res.json(allSlots);
     } catch (error: any) {
       console.error("Error deleting time slot:", error);
-      if (error.message?.includes("assigned to a client")) {
-        return res.status(400).json({ error: "Cannot delete slot that is assigned to a client" });
-      }
       res.status(500).json({ error: "Failed to delete time slot" });
     }
   });
-
-  // Update a specific time slot
-  app.put("/api/timeslots/:clinicianId/:slotId", requireAuth, async (req, res) => {
-    try {
-      // Check authorization: Admin can update any, Clinician can only update their own
-      if (req.user!.role === "clinician") {
-        const clinician = await storage.getClinicianByUserId(req.user!.id);
-        if (!clinician || clinician.id !== req.params.clinicianId) {
-          return res.status(403).json({ error: "Forbidden" });
-        }
-      }
-
-      const updates = req.body;
-      const updated = await storage.updateTimeSlot(req.params.slotId, updates);
-      if (!updated) {
-        return res.status(404).json({ error: "Time slot not found" });
-      }
-      
-      // Update lastUpdatedAvailability - use empty update to trigger timestamp refresh
-      await storage.updateClinician(req.params.clinicianId, {});
-      
-      const allSlots = await storage.getTimeSlotsByClinicianId(req.params.clinicianId);
-      res.json(allSlots);
-    } catch (error) {
-      console.error("Error updating time slot:", error);
-      res.status(500).json({ error: "Failed to update time slot" });
-    }
-  });
-
-  // Batch operations for time slots
-  app.get("/api/timeslots/batch/:batchId", requireAuth, async (req, res) => {
-    try {
-      const slots = await storage.getSlotsByBatchId(req.params.batchId);
-      res.json(slots);
-    } catch (error) {
-      res.status(500).json({ error: "Failed to fetch batch slots" });
-    }
-  });
-
-  app.put("/api/timeslots/batch/:batchId", requireAuth, async (req, res) => {
-    try {
-      const updates = req.body;
-      const count = await storage.updateSlotsByBatchId(req.params.batchId, updates);
-      res.json({ updated: count });
-    } catch (error) {
-      console.error("Error updating batch slots:", error);
-      res.status(500).json({ error: "Failed to update batch slots" });
-    }
-  });
-
-  app.delete("/api/timeslots/batch/:batchId", requireAuth, async (req, res) => {
-    try {
-      const count = await storage.deleteSlotsByBatchId(req.params.batchId);
-      res.json({ deleted: count });
-    } catch (error) {
-      console.error("Error deleting batch slots:", error);
-      res.status(500).json({ error: "Failed to delete batch slots" });
-    }
-  });
-
-  // Admin endpoint to clean up corrupted/null time slots
-  app.delete("/api/timeslots/cleanup/null-entries", requireAdmin, async (req, res) => {
-    try {
-      const count = await storage.deleteNullTimeSlots();
-      res.json({ deleted: count, message: `Deleted ${count} corrupted/null time slots` });
-    } catch (error) {
-      console.error("Error cleaning up null slots:", error);
-      res.status(500).json({ error: "Failed to clean up null slots" });
-    }
-  });
-
-  // Admin endpoint to delete all SpecificDate slots for a clinician
-  app.delete("/api/timeslots/cleanup/specific-date/:clinicianId", requireAdmin, async (req, res) => {
-    try {
-      const { clinicianId } = req.params;
-      const count = await storage.deleteSpecificDateSlotsByClinicianId(clinicianId);
-      res.json({ deleted: count, message: `Deleted ${count} SpecificDate slots for clinician` });
-    } catch (error) {
-      console.error("Error cleaning up specific date slots:", error);
-      res.status(500).json({ error: "Failed to clean up specific date slots" });
-    }
-  });
-
-  // Admin endpoint to migrate multi-hour slots to individual 1-hour slots
-  app.post("/api/timeslots/migrate-to-hourly", requireAdmin, async (req, res) => {
-    try {
-      const result = await storage.migrateMultiHourSlotsToHourly();
-      res.json({ 
-        success: true, 
-        message: `Migrated ${result.migrated} multi-hour slots into ${result.created} individual 1-hour slots`,
-        ...result
-      });
-    } catch (error) {
-      console.error("Error migrating slots:", error);
-      res.status(500).json({ error: "Failed to migrate slots" });
-    }
-  });
-
-  // Run migration automatically on startup
-  (async () => {
-    try {
-      const result = await storage.migrateMultiHourSlotsToHourly();
-      if (result.migrated > 0) {
-        console.log(`[MIGRATION] Split ${result.migrated} multi-hour slots into ${result.created} individual 1-hour slots`);
-      }
-    } catch (error) {
-      console.error("[MIGRATION] Failed to migrate multi-hour slots:", error);
-    }
-  })();
 
   // ============ CLIENT ROUTES (GDPR Protected) ============
   app.get("/api/clients", requireAdmin, auditLog("view", "client"), async (req, res) => {

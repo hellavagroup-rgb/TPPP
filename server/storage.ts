@@ -48,16 +48,9 @@ export interface IStorage {
   // ============ TIME SLOTS ============
   getTimeSlotsByClinicianId(clinicianId: string): Promise<TimeSlot[]>;
   createTimeSlot(slot: InsertTimeSlot): Promise<TimeSlot>;
-  updateTimeSlot(id: string, updates: Partial<InsertTimeSlot>): Promise<TimeSlot | undefined>;
   deleteTimeSlot(id: string): Promise<void>;
   addTimeSlots(clinicianId: string, newSlots: Omit<TimeSlot, 'id' | 'createdAt'>[]): Promise<TimeSlot[]>;
   deleteTimeSlotById(id: string): Promise<boolean>;
-  getSlotsByBatchId(batchId: string): Promise<TimeSlot[]>;
-  updateSlotsByBatchId(batchId: string, updates: Partial<InsertTimeSlot>): Promise<number>;
-  deleteSlotsByBatchId(batchId: string): Promise<number>;
-  deleteNullTimeSlots(): Promise<number>;
-  deleteSpecificDateSlotsByClinicianId(clinicianId: string): Promise<number>;
-  migrateMultiHourSlotsToHourly(): Promise<{ migrated: number; created: number }>;
   getAllTimeSlots(): Promise<TimeSlot[]>;
   
   // ============ CLIENTS ============
@@ -250,11 +243,6 @@ export class DatabaseStorage implements IStorage {
     return newSlot;
   }
 
-  async updateTimeSlot(id: string, updates: Partial<InsertTimeSlot>): Promise<TimeSlot | undefined> {
-    const [slot] = await db.update(timeSlots).set(updates).where(eq(timeSlots.id, id)).returning();
-    return slot || undefined;
-  }
-
   async deleteTimeSlot(id: string): Promise<void> {
     await db.delete(timeSlots).where(eq(timeSlots.id, id));
   }
@@ -278,7 +266,6 @@ export class DatabaseStorage implements IStorage {
       isOngoing: (slot as any).isOngoing || false,
     }))).returning();
     
-    // Update lastUpdatedAvailability
     await db.update(clinicians).set({
       lastUpdatedAvailability: new Date()
     }).where(eq(clinicians.id, clinicianId));
@@ -287,15 +274,13 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteTimeSlotById(id: string): Promise<boolean> {
-    // Check if slot is booked/assigned to a client
     const [slot] = await db.select().from(timeSlots).where(eq(timeSlots.id, id));
     if (!slot) return false;
     
     if (slot.isBooked) {
-      // Check if any client references this slot
       const clientsWithSlot = await db.select().from(clients).where(eq(clients.assignedSlotId, id));
-      if (clientsWithSlot.length > 0) {
-        throw new Error("Cannot delete slot that is assigned to a client");
+      for (const client of clientsWithSlot) {
+        await db.update(clients).set({ assignedSlotId: null }).where(eq(clients.id, client.id));
       }
     }
     
@@ -303,115 +288,8 @@ export class DatabaseStorage implements IStorage {
     return true;
   }
 
-  async getSlotsByBatchId(batchId: string): Promise<TimeSlot[]> {
-    return await db.select().from(timeSlots).where(eq(timeSlots.batchId, batchId));
-  }
-
-  async updateSlotsByBatchId(batchId: string, updates: Partial<InsertTimeSlot>): Promise<number> {
-    const result = await db.update(timeSlots)
-      .set(updates)
-      .where(eq(timeSlots.batchId, batchId))
-      .returning();
-    return result.length;
-  }
-
-  async deleteSlotsByBatchId(batchId: string): Promise<number> {
-    const result = await db.delete(timeSlots)
-      .where(eq(timeSlots.batchId, batchId))
-      .returning();
-    return result.length;
-  }
-
-  async deleteNullTimeSlots(): Promise<number> {
-    const result = await db.delete(timeSlots)
-      .where(or(
-        isNull(timeSlots.clinicianId),
-        isNull(timeSlots.startTime),
-        isNull(timeSlots.endTime),
-        and(
-          eq(timeSlots.type, "SpecificDate"),
-          isNull(timeSlots.date)
-        ),
-        and(
-          eq(timeSlots.type, "Recurring"),
-          isNull(timeSlots.day)
-        )
-      ))
-      .returning();
-    return result.length;
-  }
-
-  async deleteSpecificDateSlotsByClinicianId(clinicianId: string): Promise<number> {
-    const result = await db.delete(timeSlots)
-      .where(and(
-        eq(timeSlots.clinicianId, clinicianId),
-        eq(timeSlots.type, "SpecificDate")
-      ))
-      .returning();
-    return result.length;
-  }
-
   async getAllTimeSlots(): Promise<TimeSlot[]> {
     return await db.select().from(timeSlots);
-  }
-
-  async migrateMultiHourSlotsToHourly(): Promise<{ migrated: number; created: number }> {
-    const allSlots = await this.getAllTimeSlots();
-    let migrated = 0;
-    let created = 0;
-
-    for (const slot of allSlots) {
-      // Skip vacation slots and already booked slots
-      if (slot.type === "Vacation" || slot.isBooked) continue;
-      
-      const [startHour, startMin] = (slot.startTime || "00:00").split(":").map(Number);
-      const [endHour, endMin] = (slot.endTime || "00:00").split(":").map(Number);
-      const startMinutes = startHour * 60 + startMin;
-      const endMinutes = endHour * 60 + endMin;
-      const durationMinutes = endMinutes - startMinutes;
-
-      // Only migrate slots longer than 1 hour
-      if (durationMinutes <= 60) continue;
-
-      // Calculate number of 1-hour slots
-      const numSlots = Math.floor(durationMinutes / 60);
-      
-      // Create individual 1-hour slots
-      for (let i = 0; i < numSlots; i++) {
-        const slotStartMins = startMinutes + (i * 60);
-        const slotEndMins = slotStartMins + 60;
-        
-        const slotStartHour = Math.floor(slotStartMins / 60);
-        const slotStartMin = slotStartMins % 60;
-        const slotEndHour = Math.floor(slotEndMins / 60);
-        const slotEndMin = slotEndMins % 60;
-
-        const newSlotId = `${slot.id}-h${slotStartHour}`;
-        const newStartTime = `${String(slotStartHour).padStart(2, "0")}:${String(slotStartMin).padStart(2, "0")}`;
-        const newEndTime = `${String(slotEndHour).padStart(2, "0")}:${String(slotEndMin).padStart(2, "0")}`;
-
-        // Insert with explicit ID using raw SQL
-        await db.insert(timeSlots).values({
-          clinicianId: slot.clinicianId,
-          type: slot.type as "Recurring" | "SpecificDate" | "Vacation",
-          day: slot.day,
-          date: slot.date,
-          startDate: slot.startDate,
-          endDate: slot.endDate,
-          startTime: newStartTime,
-          endTime: newEndTime,
-          isBooked: false,
-          batchId: slot.batchId,
-        }).onConflictDoNothing();
-        created++;
-      }
-
-      // Delete the original multi-hour slot
-      await db.delete(timeSlots).where(eq(timeSlots.id, slot.id));
-      migrated++;
-    }
-
-    return { migrated, created };
   }
 
   // ============ CLIENTS ============

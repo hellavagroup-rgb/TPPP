@@ -63,23 +63,17 @@ function isSlotPending(slot: TimeSlot): boolean {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   
-  if (slot.type === "Recurring" && slot.startDate) {
+  if (slot.startDate) {
     const startDate = new Date(slot.startDate);
     startDate.setHours(0, 0, 0, 0);
     return startDate > today;
-  } else if (slot.type === "SpecificDate" && slot.date) {
-    const slotDate = new Date(slot.date);
-    slotDate.setHours(0, 0, 0, 0);
-    return slotDate > today;
   }
   return false;
 }
 
 function getSlotPendingDate(slot: TimeSlot): string | null {
-  if (slot.type === "Recurring" && slot.startDate) {
+  if (slot.startDate) {
     return format(parseISO(slot.startDate), "dd/MM/yyyy");
-  } else if (slot.type === "SpecificDate" && slot.date) {
-    return format(parseISO(slot.date), "dd/MM/yyyy");
   }
   return null;
 }
@@ -93,16 +87,6 @@ function isSlotActiveGlobal(slot: TimeSlot) {
   return endDate >= today;
 }
 
-// Split a slot into 1-hour segments for counting
-function getSlotHourCount(slot: TimeSlot): number {
-  if (slot.type === "Vacation") return 0;
-  const [startHour, startMin] = (slot.startTime || "00:00").split(":").map(Number);
-  const [endHour, endMin] = (slot.endTime || "00:00").split(":").map(Number);
-  const startMinutes = startHour * 60 + startMin;
-  const endMinutes = endHour * 60 + endMin;
-  return Math.floor((endMinutes - startMinutes) / 60);
-}
-
 function getSlotCounts(availability?: TimeSlot[]) {
   if (!availability) return { available: 0, pending: 0 };
   
@@ -110,11 +94,10 @@ function getSlotCounts(availability?: TimeSlot[]) {
   let pending = 0;
   
   availability.filter(s => !s.isBooked && s.type !== "Vacation" && isSlotActiveGlobal(s)).forEach(slot => {
-    const hourCount = Math.max(1, getSlotHourCount(slot));
     if (isSlotPending(slot)) {
-      pending += hourCount;
+      pending += 1;
     } else {
-      available += hourCount;
+      available += 1;
     }
   });
   
@@ -551,42 +534,8 @@ export default function Clients() {
     return endDate >= today;
   };
 
-  // Helper to split a slot into 1-hour segments for display
-  const splitSlotIntoHours = (slot: any): any[] => {
-    if (slot.type === "Vacation") return [slot];
-    
-    const [startHour, startMin] = (slot.startTime || "00:00").split(":").map(Number);
-    const [endHour, endMin] = (slot.endTime || "00:00").split(":").map(Number);
-    const startMinutes = startHour * 60 + startMin;
-    const endMinutes = endHour * 60 + endMin;
-    
-    // If already 1 hour or less, return as-is
-    if (endMinutes - startMinutes <= 60) return [slot];
-    
-    // Split into 1-hour segments
-    const segments: any[] = [];
-    for (let mins = startMinutes; mins + 60 <= endMinutes; mins += 60) {
-      const segStartHour = Math.floor(mins / 60);
-      const segStartMin = mins % 60;
-      const segEndHour = Math.floor((mins + 60) / 60);
-      const segEndMin = (mins + 60) % 60;
-      
-      segments.push({
-        ...slot,
-        id: `${slot.id}-h${segStartHour}`,
-        startTime: `${String(segStartHour).padStart(2, "0")}:${String(segStartMin).padStart(2, "0")}`,
-        endTime: `${String(segEndHour).padStart(2, "0")}:${String(segEndMin).padStart(2, "0")}`,
-        parentSlotId: slot.id, // Reference to original slot
-      });
-    }
-    return segments;
-  };
-
-  // Helper to filter active, non-vacation slots and split into 1-hour segments
   const getActiveSlots = (availability: any[]) => {
-    const filtered = availability.filter(s => s.type !== "Vacation" && isSlotActive(s));
-    // Split each slot into 1-hour segments
-    return filtered.flatMap(slot => splitSlotIntoHours(slot));
+    return availability.filter(s => s.type !== "Vacation" && isSlotActive(s));
   };
 
   const handleOpenSendForms = (client: ClientType) => {

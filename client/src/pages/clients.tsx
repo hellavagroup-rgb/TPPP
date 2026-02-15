@@ -970,6 +970,9 @@ export default function Clients() {
                     {client.insurer && client.insurer !== "Private" && (
                       <Badge variant="outline" className="text-[10px] mb-2">{client.insurer}</Badge>
                     )}
+                    {client.notes && (
+                      <p className="text-[10px] text-muted-foreground mt-1 italic line-clamp-2" data-testid={`notes-${client.id}`}>"{client.notes}"</p>
+                    )}
                     <Button size="sm" variant="outline" className="w-full gap-1 text-xs mt-2" onClick={() => handleOpenSendForms(client)}>
                       <Mail className="h-3 w-3" /> Send Forms
                     </Button>
@@ -1024,6 +1027,9 @@ export default function Clients() {
                     {client.insurer && client.insurer !== "Private" && (
                       <Badge variant="outline" className="text-[10px]">{client.insurer}</Badge>
                     )}
+                    {client.notes && (
+                      <p className="text-[10px] text-muted-foreground mt-1 italic line-clamp-2" data-testid={`notes-${client.id}`}>"{client.notes}"</p>
+                    )}
                     <p className="text-[10px] text-amber-600 mt-2 flex items-center gap-1">
                       <Mail className="h-3 w-3" /> Awaiting response
                     </p>
@@ -1077,6 +1083,9 @@ export default function Clients() {
                     </p>
                     {client.insurer && client.insurer !== "Private" && (
                       <Badge variant="outline" className="text-[10px] mb-2">{client.insurer}</Badge>
+                    )}
+                    {client.notes && (
+                      <p className="text-[10px] text-muted-foreground mt-1 italic line-clamp-2" data-testid={`notes-${client.id}`}>"{client.notes}"</p>
                     )}
                     <Button size="sm" className="w-full gap-1 text-xs mt-2 bg-primary hover:bg-primary/90" onClick={() => { setSelectedClient(client); setIsManualAllocation(false); fetchClientAvailability(client.id); setIsAllocateDialogOpen(true); }}>
                       <UserCheck className="h-3 w-3" /> Allocate
@@ -1137,6 +1146,9 @@ export default function Clients() {
                     )}
                     {client.assignedSlot && (
                       <p className="text-[10px] text-muted-foreground font-mono">{client.assignedSlot}</p>
+                    )}
+                    {client.notes && (
+                      <p className="text-[10px] text-muted-foreground mt-1 italic line-clamp-2" data-testid={`notes-${client.id}`}>"{client.notes}"</p>
                     )}
                     {(client as any).allocationReason && (
                       <p className="text-[10px] text-muted-foreground mt-2 italic border-t pt-2">
@@ -1214,6 +1226,9 @@ export default function Clients() {
                     )}
                     {client.assignedSlot && (
                       <p className="text-[10px] text-muted-foreground font-mono">{client.assignedSlot}</p>
+                    )}
+                    {client.notes && (
+                      <p className="text-[10px] text-muted-foreground mt-1 italic line-clamp-2" data-testid={`notes-${client.id}`}>"{client.notes}"</p>
                     )}
                     <Button 
                       size="sm" 
@@ -1296,6 +1311,9 @@ export default function Clients() {
                     </DropdownMenu>
                   </div>
                 </div>
+                {client.notes && (
+                  <p className="text-xs text-muted-foreground mt-2 italic line-clamp-2" data-testid={`notes-${client.id}`}>"{client.notes}"</p>
+                )}
               </CardContent>
             </Card>
           ))}

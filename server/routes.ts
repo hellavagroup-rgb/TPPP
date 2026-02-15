@@ -605,6 +605,25 @@ export async function registerRoutes(
       const newSlots = req.body; // Array of new slots to add
       const inserted = await storage.addTimeSlots(req.params.clinicianId, newSlots);
       
+      const clinician = await storage.getClinicianById(req.params.clinicianId);
+      let clinicianName = "Unknown";
+      if (clinician?.userId) {
+        const clinicianUser = await storage.getUserById(clinician.userId);
+        clinicianName = clinicianUser?.name || "Unknown";
+      }
+      const slotCount = Array.isArray(newSlots) ? newSlots.length : 1;
+      const slotDetails = Array.isArray(newSlots) && newSlots[0] 
+        ? `${newSlots[0].day} ${newSlots[0].startTime}-${newSlots[0].endTime}${slotCount > 1 ? ` (+${slotCount - 1} more)` : ''}`
+        : '';
+      
+      await storage.createAuditLog({
+        userId: req.user!.id,
+        action: "add_slots",
+        resourceType: "timeslot",
+        resourceId: req.params.clinicianId,
+        ipAddress: `${clinicianName}|${slotCount} slot${slotCount > 1 ? 's' : ''}|${slotDetails}`,
+      });
+
       const allSlots = await storage.getTimeSlotsByClinicianId(req.params.clinicianId);
       res.json(allSlots);
     } catch (error) {
@@ -1110,6 +1129,15 @@ export async function registerRoutes(
   });
 
   // ============ TASKS ============
+  app.get("/api/activity/recent", requireAdmin, async (req, res) => {
+    try {
+      const logs = await storage.getRecentAuditLogs(20, "add_slots");
+      res.json(logs);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch recent activity" });
+    }
+  });
+
   app.get("/api/tasks", requireAdmin, async (req, res) => {
     try {
       const tasks = await storage.getAllTasks();

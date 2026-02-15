@@ -15,10 +15,25 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
 import { Link } from "wouter";
-import type { Client, Task, Clinician, TimeSlot } from "@shared/schema";
+import type { Client, Task, Clinician, TimeSlot, AuditLog } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
+import { Plus } from "lucide-react";
 
 type ClinicianWithAvailability = Clinician & { name: string; availability?: TimeSlot[] };
+
+function formatTimeAgo(date: Date): string {
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  if (diffMins < 1) return "Just now";
+  if (diffMins < 60) return `${diffMins}m ago`;
+  const diffHours = Math.floor(diffMins / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return date.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+}
 
 function getSlotCounts(availability?: TimeSlot[]) {
   if (!availability) return { available: 0, pending: 0 };
@@ -70,6 +85,11 @@ export default function Dashboard() {
 
   const { data: clinicians = [] } = useQuery<ClinicianWithAvailability[]>({
     queryKey: ["/api/clinicians"],
+  });
+
+  const { data: recentActivity = [] } = useQuery<AuditLog[]>({
+    queryKey: ["/api/activity/recent"],
+    enabled: user?.role === "admin",
   });
 
   // Get linked clinician data for admins who are also clinicians
@@ -237,14 +257,35 @@ export default function Dashboard() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <FileText className="h-5 w-5" />
-                Recent Tasks
+                Recent Activity
               </CardTitle>
             </CardHeader>
             <CardContent>
-              {tasks.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-4">No tasks yet</p>
+              {tasks.length === 0 && recentActivity.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-4">No recent activity</p>
               ) : (
                 <div className="space-y-3">
+                  {recentActivity.slice(0, 5).map((log) => {
+                    const parts = (log.ipAddress || "").split("|");
+                    const clinicianName = parts[0] || "Unknown";
+                    const slotInfo = parts[1] || "";
+                    const slotDetails = parts[2] || "";
+                    const timeAgo = log.timestamp ? formatTimeAgo(new Date(log.timestamp)) : "";
+                    return (
+                      <div key={log.id} className="flex items-center justify-between p-3 bg-green-50 rounded-lg border border-green-100">
+                        <div className="flex items-center gap-2">
+                          <div className="p-1.5 rounded-full bg-green-100">
+                            <Plus className="h-3 w-3 text-green-600" />
+                          </div>
+                          <div>
+                            <p className="font-medium text-sm">{clinicianName} added {slotInfo}</p>
+                            {slotDetails && <p className="text-xs text-muted-foreground">{slotDetails}</p>}
+                          </div>
+                        </div>
+                        <span className="text-xs text-muted-foreground whitespace-nowrap">{timeAgo}</span>
+                      </div>
+                    );
+                  })}
                   {tasks.slice(0, 5).map((task) => (
                     <div key={task.id} className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
                       <div>

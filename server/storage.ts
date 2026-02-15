@@ -88,6 +88,7 @@ export interface IStorage {
   // ============ AUDIT LOGS (GDPR) ============
   createAuditLog(log: InsertAuditLog): Promise<AuditLog>;
   getAuditLogsByUserId(userId: string): Promise<AuditLog[]>;
+  getRecentAuditLogs(limit?: number, action?: string): Promise<AuditLog[]>;
 
   // ============ EMAIL TEMPLATES ============
   getAllEmailTemplates(): Promise<EmailTemplate[]>;
@@ -699,6 +700,18 @@ export class DatabaseStorage implements IStorage {
 
   async getAuditLogsByUserId(userId: string): Promise<AuditLog[]> {
     return await db.select().from(auditLogs).where(eq(auditLogs.userId, userId)).orderBy(desc(auditLogs.timestamp));
+  }
+
+  async getRecentAuditLogs(limit: number = 10, action?: string): Promise<AuditLog[]> {
+    if (action) {
+      return await db.select().from(auditLogs)
+        .where(eq(auditLogs.action, action))
+        .orderBy(desc(auditLogs.timestamp))
+        .limit(limit);
+    }
+    return await db.select().from(auditLogs)
+      .orderBy(desc(auditLogs.timestamp))
+      .limit(limit);
   }
 
   // ============ EMAIL TEMPLATES ============

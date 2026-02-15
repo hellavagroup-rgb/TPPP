@@ -226,12 +226,12 @@ export default function Clients() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
-      toast({ title: "Client Archived", description: "This client has been moved to the archive." });
+      toast({ title: "Client Archived", description: "This client has been moved to Archive/Didn't Engage." });
       setIsArchiveDialogOpen(false);
       setClientToArchive(null);
     },
     onError: () => {
-      toast({ title: "Error", description: "Failed to archive client.", variant: "destructive" });
+      toast({ title: "Error", description: "Failed to archive/didn't engage client.", variant: "destructive" });
     },
   });
 
@@ -923,7 +923,7 @@ export default function Clients() {
               checked={showArchivedState}
               onCheckedChange={(checked) => { setShowArchivedState(checked); if (checked) setShowConfirmedState(false); }}
             />
-            <Label htmlFor="show-archived" className="text-sm cursor-pointer">Show Archived</Label>
+            <Label htmlFor="show-archived" className="text-sm cursor-pointer">Show Archived/Didn't Engage</Label>
           </div>
         </div>
       </div>
@@ -958,7 +958,7 @@ export default function Clients() {
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>
-                            Archive
+                            Archive/Didn't Engage
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -1015,7 +1015,7 @@ export default function Clients() {
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>
-                            Archive
+                            Archive/Didn't Engage
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -1072,7 +1072,7 @@ export default function Clients() {
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>
-                            Archive
+                            Archive/Didn't Engage
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -1129,7 +1129,7 @@ export default function Clients() {
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>
-                            Archive
+                            Archive/Didn't Engage
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -1209,7 +1209,7 @@ export default function Clients() {
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>
-                            Archive
+                            Archive/Didn't Engage
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -1254,7 +1254,7 @@ export default function Clients() {
       ) : (
         /* List view for Confirmed and Archived clients */
         <div className="space-y-3">
-          <h3 className="font-semibold text-lg">{showConfirmedState ? "Confirmed Clients" : "Archived Clients"}</h3>
+          <h3 className="font-semibold text-lg">{showConfirmedState ? "Confirmed Clients" : "Archived/Didn't Engage"}</h3>
           {filteredClients.map(client => (
             <Card key={client.id} className="shadow-sm">
               <CardContent className="p-4">
@@ -1304,7 +1304,7 @@ export default function Clients() {
                           </DropdownMenuItem>
                         ) : (
                           <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>
-                            Archive
+                            Archive/Didn't Engage
                           </DropdownMenuItem>
                         )}
                       </DropdownMenuContent>
@@ -1318,7 +1318,7 @@ export default function Clients() {
             </Card>
           ))}
           {filteredClients.length === 0 && (
-            <p className="text-center py-8 text-muted-foreground">No {showConfirmedState ? "confirmed" : "archived"} clients found.</p>
+            <p className="text-center py-8 text-muted-foreground">No {showConfirmedState ? "confirmed" : "archived/didn't engage"} clients found.</p>
           )}
         </div>
       )}
@@ -1951,7 +1951,7 @@ export default function Clients() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-destructive">
               <AlertTriangle className="h-5 w-5" />
-              Archive Client
+              Archive/Didn't Engage
             </DialogTitle>
             <DialogDescription>
               Are you sure you want to archive client <strong>{clientToArchive?.displayId}</strong>?
@@ -1960,9 +1960,9 @@ export default function Clients() {
           
           <div className="py-4">
             <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
-              <p className="text-sm font-medium text-amber-800 mb-2">This client will be moved to the archive</p>
+              <p className="text-sm font-medium text-amber-800 mb-2">This client will be moved to Archive/Didn't Engage</p>
               <p className="text-sm text-muted-foreground">
-                Archived clients can be restored later by selecting "Archived" from the status filter.
+                These clients can be restored later by selecting "Show Archived/Didn't Engage" from the toggle.
               </p>
             </div>
           </div>
@@ -1976,7 +1976,7 @@ export default function Clients() {
               onClick={handleConfirmArchive}
               disabled={archiveClientMutation.isPending}
             >
-              {archiveClientMutation.isPending ? "Archiving..." : "Yes, Archive Client"}
+              {archiveClientMutation.isPending ? "Archiving..." : "Yes, Archive/Didn't Engage"}
             </Button>
           </DialogFooter>
         </DialogContent>

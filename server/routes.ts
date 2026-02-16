@@ -144,12 +144,32 @@ export async function registerRoutes(
   app.get("/api/clinicians", requireAuth, async (req, res) => {
     try {
       const clinicians = await storage.getAllClinicians();
+      const allClients = await storage.getAllClients();
       
-      // For each clinician, fetch their availability
+      const legacyBookedSlots = new Map<string, Set<string>>();
+      allClients.forEach(client => {
+        if (client.assignedSlot && client.assignedClinicianId && !client.assignedSlotId &&
+            !["Archived"].includes(client.status)) {
+          const key = client.assignedClinicianId;
+          if (!legacyBookedSlots.has(key)) legacyBookedSlots.set(key, new Set());
+          legacyBookedSlots.get(key)!.add(client.assignedSlot.toLowerCase());
+        }
+      });
+
       const cliniciansWithAvailability = await Promise.all(
         clinicians.map(async (clinician) => {
           const availability = await storage.getTimeSlotsByClinicianId(clinician.id);
-          return { ...clinician, availability };
+          const legacySlots = legacyBookedSlots.get(clinician.id);
+          const enrichedAvailability = availability.map(slot => {
+            if (!slot.isBooked && legacySlots && slot.day && slot.startTime) {
+              const slotKey = `${slot.day} ${slot.startTime}`.toLowerCase();
+              if (legacySlots.has(slotKey)) {
+                return { ...slot, isBooked: true };
+              }
+            }
+            return slot;
+          });
+          return { ...clinician, availability: enrichedAvailability };
         })
       );
       

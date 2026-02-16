@@ -35,6 +35,15 @@ function formatTimeAgo(date: Date): string {
   return date.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 }
 
+function isSlotActive(slot: TimeSlot) {
+  if (!slot.endDate) return true;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const endDate = new Date(slot.endDate);
+  endDate.setHours(0, 0, 0, 0);
+  return endDate >= today;
+}
+
 function getSlotCounts(availability?: TimeSlot[]) {
   if (!availability) return { available: 0, pending: 0 };
   const today = new Date();
@@ -43,7 +52,7 @@ function getSlotCounts(availability?: TimeSlot[]) {
   let available = 0;
   let pending = 0;
   
-  availability.filter(s => !s.isBooked && s.type !== "Vacation").forEach(slot => {
+  availability.filter(s => !s.isBooked && s.type !== "Vacation" && isSlotActive(s)).forEach(slot => {
     if (slot.type === "Recurring") {
       if (slot.startDate) {
         const startDate = new Date(slot.startDate);

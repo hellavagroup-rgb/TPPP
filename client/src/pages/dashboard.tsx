@@ -187,11 +187,8 @@ export default function Dashboard() {
     },
     {
       title: "Available Slots",
-      value: clinicians.reduce((sum, c) => {
-        const counts = getSlotCounts(c.availability);
-        return sum + counts.available + counts.pending;
-      }, 0),
-      change: "Total across all clinicians",
+      value: clinicians.reduce((sum, c) => sum + getSlotCounts(c.availability).available, 0),
+      change: `${clinicians.reduce((sum, c) => sum + getSlotCounts(c.availability).pending, 0)} pending`,
       icon: Calendar,
       color: "text-green-600",
       bg: "bg-green-100"
@@ -327,7 +324,7 @@ export default function Dashboard() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
-            {clinicians.slice(0, 5).map((clinician) => {
+            {clinicians.map((clinician) => {
               const counts = getSlotCounts(clinician.availability);
               return (
                 <div key={clinician.id} className="space-y-3 pb-3 border-b border-border/40 last:border-0">

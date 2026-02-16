@@ -187,7 +187,10 @@ export default function Dashboard() {
     },
     {
       title: "Available Slots",
-      value: clinicians.reduce((sum, c) => sum + getSlotCounts(c.availability).available, 0),
+      value: clinicians.reduce((sum, c) => {
+        const counts = getSlotCounts(c.availability);
+        return sum + counts.available + counts.pending;
+      }, 0),
       change: "Total across all clinicians",
       icon: Calendar,
       color: "text-green-600",

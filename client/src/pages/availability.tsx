@@ -390,6 +390,15 @@ export default function Availability() {
       }
     }
 
+    if (hasEndDate && endDate && newDate && endDate < newDate) {
+      toast({
+        title: "Validation Error",
+        description: "The end date cannot be before the start date. Please choose an end date that is on or after the start date.",
+        variant: "destructive"
+      });
+      return;
+    }
+
     const newSlots: Partial<TimeSlot>[] = [];
     const start = parseISO(newDate);
 

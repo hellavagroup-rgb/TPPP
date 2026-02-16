@@ -44,6 +44,32 @@ function isSlotActive(slot: TimeSlot) {
   return endDate >= today;
 }
 
+function hasRemainingOccurrence(slot: TimeSlot): boolean {
+  const frequency = (slot as any).frequency || "weekly";
+  if (frequency !== "fortnightly") return true;
+  if (!slot.startDate) return true;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const startDate = new Date(slot.startDate);
+  startDate.setHours(0, 0, 0, 0);
+  const endDate = slot.endDate ? new Date(slot.endDate) : null;
+  if (endDate) endDate.setHours(23, 59, 59, 999);
+
+  const dayIndex: Record<string, number> = { Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6, Sunday: 0 };
+  const slotDayNum = dayIndex[slot.day || ""] ?? 0;
+
+  let checkDate = new Date(startDate);
+  const diff = (slotDayNum - checkDate.getDay() + 7) % 7;
+  checkDate.setDate(checkDate.getDate() + diff);
+
+  while (checkDate <= (endDate || new Date(today.getFullYear() + 1, 0, 1))) {
+    if (checkDate >= today) return true;
+    checkDate.setDate(checkDate.getDate() + 14);
+  }
+  return false;
+}
+
 function getSlotCounts(availability?: TimeSlot[]) {
   if (!availability) return { available: 0, pending: 0 };
   const today = new Date();
@@ -52,7 +78,7 @@ function getSlotCounts(availability?: TimeSlot[]) {
   let available = 0;
   let pending = 0;
   
-  availability.filter(s => !s.isBooked && s.type !== "Vacation" && isSlotActive(s)).forEach(slot => {
+  availability.filter(s => !s.isBooked && s.type !== "Vacation" && isSlotActive(s) && hasRemainingOccurrence(s)).forEach(slot => {
     if (slot.type === "Recurring") {
       if (slot.startDate) {
         const startDate = new Date(slot.startDate);

@@ -288,7 +288,16 @@ export default function Availability() {
     const dateStr = format(date, "yyyy-MM-dd");
     const results: SlotForDate[] = [];
 
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
     clinician.slots.forEach(slot => {
+      if (slot.endDate) {
+        const endCmp = new Date(slot.endDate);
+        endCmp.setHours(0, 0, 0, 0);
+        if (endCmp < today) return;
+      }
+
       if (slot.isBooked) {
         const clientInfo = slotToClientMap[slot.id];
         if (clientInfo && clientInfo.status === "Scheduled") return;

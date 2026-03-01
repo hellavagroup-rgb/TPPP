@@ -109,6 +109,7 @@ export default function Availability() {
   const [newDate, setNewDate] = useState(format(new Date(), "yyyy-MM-dd"));
   const [endDate, setEndDate] = useState(format(new Date(), "yyyy-MM-dd"));
   const [hasEndDate, setHasEndDate] = useState(false);
+  const [vacationEndDate, setVacationEndDate] = useState(format(new Date(), "yyyy-MM-dd"));
   const [frequency, setFrequency] = useState<"weekly" | "fortnightly">("weekly");
   const [selectedDays, setSelectedDays] = useState<string[]>([]);
   const [newStartTime, setNewStartTime] = useState("09:00");
@@ -363,6 +364,7 @@ export default function Availability() {
     setNewDate(format(new Date(), "yyyy-MM-dd"));
     setEndDate(format(new Date(), "yyyy-MM-dd"));
     setHasEndDate(false);
+    setVacationEndDate(format(new Date(), "yyyy-MM-dd"));
     setFrequency("weekly");
     setSelectedDays([]);
     setNewStartTime("09:00");
@@ -424,18 +426,32 @@ export default function Availability() {
         });
       });
     } else {
-      newSlots.push({
-        clinicianId: dialogClinicianId,
-        type: "Vacation",
-        day: format(start, "EEEE"),
-        date: newDate,
-        startDate: null,
-        endDate: null,
-        startTime: "00:00",
-        endTime: "23:59",
-        isBooked: false,
-        batchId: null,
-      } as any);
+      const vacStart = parseISO(newDate);
+      const vacEnd = parseISO(vacationEndDate);
+      if (vacEnd < vacStart) {
+        toast({
+          title: "Validation Error",
+          description: "The end date cannot be before the start date.",
+          variant: "destructive"
+        });
+        return;
+      }
+      let current = new Date(vacStart);
+      while (current <= vacEnd) {
+        newSlots.push({
+          clinicianId: dialogClinicianId,
+          type: "Vacation",
+          day: format(current, "EEEE"),
+          date: format(current, "yyyy-MM-dd"),
+          startDate: null,
+          endDate: null,
+          startTime: "00:00",
+          endTime: "23:59",
+          isBooked: false,
+          batchId: null,
+        } as any);
+        current.setDate(current.getDate() + 1);
+      }
     }
 
     addSlotsMutation.mutate({ clinicianId: dialogClinicianId, newSlots }, {
@@ -640,9 +656,15 @@ export default function Availability() {
                 )}
 
                 {newSlotType === "Vacation" && (
-                  <div className="grid gap-2">
-                    <Label>Date</Label>
-                    <DatePicker value={newDate} onChange={setNewDate} placeholder="Select date" />
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="grid gap-2">
+                      <Label>Start Date</Label>
+                      <DatePicker value={newDate} onChange={(val) => { setNewDate(val); if (val > vacationEndDate) setVacationEndDate(val); }} placeholder="Select start date" />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label>End Date</Label>
+                      <DatePicker value={vacationEndDate} onChange={setVacationEndDate} placeholder="Select end date" />
+                    </div>
                   </div>
                 )}
 

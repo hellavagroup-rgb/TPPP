@@ -61,6 +61,7 @@ export interface IStorage {
   updateClient(id: string, updates: Partial<InsertClient>): Promise<Client | undefined>;
   archiveClient(id: string): Promise<Client | undefined>;
   restoreClient(id: string): Promise<Client | undefined>;
+  deleteClientPermanently(id: string): Promise<boolean>;
   assignClinicianToClient(clientId: string, clinicianId: string, slotId: string, allocationMethod?: "form" | "manual", allocationReason?: string): Promise<void>;
   reassignClient(clientId: string, newClinicianId: string | null, newSlotId: string | null, newStatus: string): Promise<Client | undefined>;
   
@@ -310,6 +311,23 @@ export class DatabaseStorage implements IStorage {
       .where(eq(clients.id, id))
       .returning();
     return updated;
+  }
+
+  async deleteClientPermanently(id: string): Promise<boolean> {
+    const [existing] = await db.select().from(clients).where(eq(clients.id, id));
+    if (!existing) return false;
+
+    await db.transaction(async (tx) => {
+      if (existing.assignedSlotId) {
+        await tx.update(timeSlots)
+          .set({ isBooked: false, bookedByClientId: null })
+          .where(eq(timeSlots.id, existing.assignedSlotId));
+      }
+
+      await tx.delete(formSubmissions).where(eq(formSubmissions.clientId, id));
+      await tx.delete(clients).where(eq(clients.id, id));
+    });
+    return true;
   }
 
   async archiveClient(id: string): Promise<Client | undefined> {

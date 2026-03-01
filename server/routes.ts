@@ -694,6 +694,42 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/clients/:id/delete-permanently", requireAdmin, auditLog("delete", "client"), async (req, res) => {
+    try {
+      const { password } = req.body;
+      if (!password) {
+        return res.status(400).json({ error: "Password is required" });
+      }
+
+      const user = await storage.getUser(req.user!.id);
+      if (!user) {
+        return res.status(401).json({ error: "User not found" });
+      }
+
+      const { comparePasswords } = await import("./auth");
+      const isValid = await comparePasswords(password, user.password);
+      if (!isValid) {
+        return res.status(403).json({ error: "Incorrect password" });
+      }
+
+      const client = await storage.getClientById(req.params.id);
+      if (!client) {
+        return res.status(404).json({ error: "Client not found" });
+      }
+      if (!client.isArchived) {
+        return res.status(400).json({ error: "Only archived clients can be permanently deleted" });
+      }
+
+      const deleted = await storage.deleteClientPermanently(req.params.id);
+      if (!deleted) {
+        return res.status(500).json({ error: "Failed to delete client" });
+      }
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to permanently delete client" });
+    }
+  });
+
   app.get("/api/clients/:id", requireAdmin, auditLog("view", "client"), async (req, res) => {
     try {
       const client = await storage.getClientById(req.params.id);

@@ -46,7 +46,8 @@ import {
   Download,
   Loader2,
   RotateCcw,
-  Users
+  Users,
+  Trash2
 } from "lucide-react";
 import { useState } from "react";
 import { useLocation } from "wouter";
@@ -262,6 +263,50 @@ export default function Clients() {
   const handleConfirmArchive = () => {
     if (clientToArchive) {
       archiveClientMutation.mutate(clientToArchive.id);
+    }
+  };
+
+  // Permanent Delete State
+  const [isPermanentDeleteOpen, setIsPermanentDeleteOpen] = useState(false);
+  const [clientToDelete, setClientToDelete] = useState<ClientType | null>(null);
+  const [deletePassword, setDeletePassword] = useState("");
+  const [deleteError, setDeleteError] = useState("");
+
+  const permanentDeleteMutation = useMutation({
+    mutationFn: async ({ clientId, password }: { clientId: string; password: string }) => {
+      const response = await apiRequest("POST", `/api/clients/${clientId}/delete-permanently`, { password });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      toast({ title: "Client Permanently Deleted", description: "The client record has been permanently removed." });
+      setIsPermanentDeleteOpen(false);
+      setClientToDelete(null);
+      setDeletePassword("");
+      setDeleteError("");
+    },
+    onError: (error: any) => {
+      const message = error?.message || "";
+      if (message.includes("Incorrect password")) {
+        setDeleteError("Incorrect password. Please try again.");
+      } else if (message.includes("Only archived")) {
+        setDeleteError("Only archived clients can be permanently deleted.");
+      } else {
+        setDeleteError("Failed to delete client. Please try again.");
+      }
+    },
+  });
+
+  const handleOpenPermanentDelete = (client: ClientType) => {
+    setClientToDelete(client);
+    setDeletePassword("");
+    setDeleteError("");
+    setIsPermanentDeleteOpen(true);
+  };
+
+  const handleConfirmPermanentDelete = () => {
+    if (clientToDelete && deletePassword) {
+      permanentDeleteMutation.mutate({ clientId: clientToDelete.id, password: deletePassword });
     }
   };
 
@@ -1332,9 +1377,14 @@ export default function Clients() {
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
                         {client.isArchived ? (
-                          <DropdownMenuItem onClick={() => restoreClientMutation.mutate(client.id)}>
-                            <RotateCcw className="h-4 w-4 mr-2" /> Restore
-                          </DropdownMenuItem>
+                          <>
+                            <DropdownMenuItem onClick={() => restoreClientMutation.mutate(client.id)}>
+                              <RotateCcw className="h-4 w-4 mr-2" /> Restore
+                            </DropdownMenuItem>
+                            <DropdownMenuItem className="text-destructive" onClick={() => handleOpenPermanentDelete(client)} data-testid={`btn-permanent-delete-${client.id}`}>
+                              <Trash2 className="h-4 w-4 mr-2" /> Permanently Delete
+                            </DropdownMenuItem>
+                          </>
                         ) : (
                           <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>
                             Archive/Didn't Engage
@@ -2055,6 +2105,59 @@ export default function Clients() {
               disabled={archiveClientMutation.isPending}
             >
               {archiveClientMutation.isPending ? "Archiving..." : "Yes, Archive/Didn't Engage"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Permanent Delete Confirmation Dialog */}
+      <Dialog open={isPermanentDeleteOpen} onOpenChange={(open) => { setIsPermanentDeleteOpen(open); if (!open) { setDeletePassword(""); setDeleteError(""); } }}>
+        <DialogContent className="sm:max-w-[450px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="h-5 w-5" />
+              Permanently Delete Client
+            </DialogTitle>
+            <DialogDescription>
+              You are about to permanently delete client <strong>{clientToDelete?.displayId}</strong>.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="py-4 space-y-4">
+            <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+              <p className="text-sm font-semibold text-red-800 mb-2">This action is irreversible</p>
+              <p className="text-sm text-red-700">
+                This will permanently remove the client record, including all form submissions and associated data. This cannot be undone.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="delete-password">Enter your password to confirm</Label>
+              <Input
+                id="delete-password"
+                type="password"
+                placeholder="Your password"
+                value={deletePassword}
+                onChange={(e) => { setDeletePassword(e.target.value); setDeleteError(""); }}
+                data-testid="input-delete-password"
+              />
+              {deleteError && (
+                <p className="text-sm text-destructive" data-testid="text-delete-error">{deleteError}</p>
+              )}
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setIsPermanentDeleteOpen(false)}>
+              Cancel
+            </Button>
+            <Button 
+              variant="destructive" 
+              onClick={handleConfirmPermanentDelete}
+              disabled={!deletePassword || permanentDeleteMutation.isPending}
+              data-testid="btn-confirm-permanent-delete"
+            >
+              {permanentDeleteMutation.isPending ? "Deleting..." : "Permanently Delete"}
             </Button>
           </DialogFooter>
         </DialogContent>

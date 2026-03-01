@@ -227,9 +227,28 @@ export default function Clients() {
 
   const [archiveReason, setArchiveReason] = useState("");
   const [archiveCategory, setArchiveCategory] = useState("");
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [isAddingCategory, setIsAddingCategory] = useState(false);
 
   const { data: nonEngagementCategories = [] } = useQuery<{ id: string; name: string }[]>({
     queryKey: ["/api/non-engagement-categories"],
+  });
+
+  const addCategoryMutation = useMutation({
+    mutationFn: async (name: string) => {
+      const response = await apiRequest("POST", "/api/non-engagement-categories", { name });
+      return response.json();
+    },
+    onSuccess: (data: { name: string }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/non-engagement-categories"] });
+      setArchiveCategory(data.name);
+      setNewCategoryName("");
+      setIsAddingCategory(false);
+    },
+    onError: (error: any) => {
+      const msg = error?.message?.includes("already exists") ? "This category already exists" : "Failed to add category";
+      toast({ title: "Error", description: msg, variant: "destructive" });
+    },
   });
 
   const archiveClientMutation = useMutation({
@@ -254,6 +273,8 @@ export default function Clients() {
     setClientToArchive(client);
     setArchiveReason("");
     setArchiveCategory("");
+    setIsAddingCategory(false);
+    setNewCategoryName("");
     setIsArchiveDialogOpen(true);
   };
 
@@ -2118,18 +2139,44 @@ export default function Clients() {
 
             <div className="grid gap-2">
               <Label>Category</Label>
-              <Select value={archiveCategory} onValueChange={setArchiveCategory}>
-                <SelectTrigger data-testid="select-archive-category">
-                  <SelectValue placeholder="Select a reason category (optional)" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__">No category</SelectItem>
-                  {nonEngagementCategories.map(cat => (
-                    <SelectItem key={cat.id} value={cat.name}>{cat.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">Categories can be managed in Settings.</p>
+              {!isAddingCategory ? (
+                <>
+                  <Select value={archiveCategory} onValueChange={(val) => { if (val === "__add_new__") { setIsAddingCategory(true); } else { setArchiveCategory(val); } }}>
+                    <SelectTrigger data-testid="select-archive-category">
+                      <SelectValue placeholder="Select a category (optional)" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">No category</SelectItem>
+                      {nonEngagementCategories.map(cat => (
+                        <SelectItem key={cat.id} value={cat.name}>{cat.name}</SelectItem>
+                      ))}
+                      <SelectItem value="__add_new__" className="text-primary font-medium">+ Add new category</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </>
+              ) : (
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="New category name"
+                    value={newCategoryName}
+                    onChange={(e) => setNewCategoryName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter" && newCategoryName.trim()) addCategoryMutation.mutate(newCategoryName.trim()); if (e.key === "Escape") { setIsAddingCategory(false); setNewCategoryName(""); } }}
+                    autoFocus
+                    data-testid="input-new-archive-category"
+                  />
+                  <Button
+                    size="sm"
+                    onClick={() => newCategoryName.trim() && addCategoryMutation.mutate(newCategoryName.trim())}
+                    disabled={!newCategoryName.trim() || addCategoryMutation.isPending}
+                    data-testid="btn-save-new-category"
+                  >
+                    Add
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => { setIsAddingCategory(false); setNewCategoryName(""); }}>
+                    Cancel
+                  </Button>
+                </div>
+              )}
             </div>
 
             <div className="grid gap-2">

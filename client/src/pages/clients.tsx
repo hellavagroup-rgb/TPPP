@@ -225,9 +225,16 @@ export default function Clients() {
   const [isManualAllocation, setIsManualAllocation] = useState(false); // Track if current allocation is manual
   const [allocationReason, setAllocationReason] = useState(""); // Reason for allocation decision
 
+  const [archiveReason, setArchiveReason] = useState("");
+  const [archiveCategory, setArchiveCategory] = useState("");
+
+  const { data: nonEngagementCategories = [] } = useQuery<{ id: string; name: string }[]>({
+    queryKey: ["/api/non-engagement-categories"],
+  });
+
   const archiveClientMutation = useMutation({
-    mutationFn: async (clientId: string) => {
-      const response = await apiRequest("POST", `/api/clients/${clientId}/archive`, {});
+    mutationFn: async ({ clientId, reason, category }: { clientId: string; reason: string; category: string }) => {
+      const response = await apiRequest("POST", `/api/clients/${clientId}/archive`, { reason, category });
       return response.json();
     },
     onSuccess: () => {
@@ -235,6 +242,8 @@ export default function Clients() {
       toast({ title: "Client Archived", description: "This client has been moved to Archive/Didn't Engage." });
       setIsArchiveDialogOpen(false);
       setClientToArchive(null);
+      setArchiveReason("");
+      setArchiveCategory("");
     },
     onError: () => {
       toast({ title: "Error", description: "Failed to archive/didn't engage client.", variant: "destructive" });
@@ -243,6 +252,8 @@ export default function Clients() {
 
   const handleOpenArchiveDialog = (client: ClientType) => {
     setClientToArchive(client);
+    setArchiveReason("");
+    setArchiveCategory("");
     setIsArchiveDialogOpen(true);
   };
 
@@ -262,7 +273,8 @@ export default function Clients() {
 
   const handleConfirmArchive = () => {
     if (clientToArchive) {
-      archiveClientMutation.mutate(clientToArchive.id);
+      const cat = archiveCategory === "__none__" ? "" : archiveCategory;
+      archiveClientMutation.mutate({ clientId: clientToArchive.id, reason: archiveReason, category: cat });
     }
   };
 
@@ -1394,7 +1406,17 @@ export default function Clients() {
                     </DropdownMenu>
                   </div>
                 </div>
-                {client.notes && (
+                {showArchivedState && ((client as any).archiveCategory || (client as any).archiveReason) && (
+                  <div className="mt-2 p-2 bg-slate-50 rounded border border-slate-200">
+                    {(client as any).archiveCategory && (
+                      <Badge variant="outline" className="text-xs mb-1 bg-slate-100">{(client as any).archiveCategory}</Badge>
+                    )}
+                    {(client as any).archiveReason && (
+                      <p className="text-xs text-muted-foreground italic" data-testid={`archive-reason-${client.id}`}>"{(client as any).archiveReason}"</p>
+                    )}
+                  </div>
+                )}
+                {client.notes && !showArchivedState && (
                   <p className="text-xs text-muted-foreground mt-2 italic line-clamp-2" data-testid={`notes-${client.id}`}>"{client.notes}"</p>
                 )}
               </CardContent>
@@ -2075,23 +2097,51 @@ export default function Clients() {
 
       {/* Archive Confirmation Dialog */}
       <Dialog open={isArchiveDialogOpen} onOpenChange={setIsArchiveDialogOpen}>
-        <DialogContent className="sm:max-w-[425px]">
+        <DialogContent className="sm:max-w-[475px]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-destructive">
               <AlertTriangle className="h-5 w-5" />
               Archive/Didn't Engage
             </DialogTitle>
             <DialogDescription>
-              Are you sure you want to archive client <strong>{clientToArchive?.displayId}</strong>?
+              Archive client <strong>{clientToArchive?.displayId}</strong> and record the reason.
             </DialogDescription>
           </DialogHeader>
           
-          <div className="py-4">
+          <div className="py-4 space-y-4">
             <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
               <p className="text-sm font-medium text-amber-800 mb-2">This client will be moved to Archive/Didn't Engage</p>
               <p className="text-sm text-muted-foreground">
-                These clients can be restored later by selecting "Show Archived/Didn't Engage" from the toggle.
+                They can be restored later from the archived list.
               </p>
+            </div>
+
+            <div className="grid gap-2">
+              <Label>Category</Label>
+              <Select value={archiveCategory} onValueChange={setArchiveCategory}>
+                <SelectTrigger data-testid="select-archive-category">
+                  <SelectValue placeholder="Select a reason category (optional)" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">No category</SelectItem>
+                  {nonEngagementCategories.map(cat => (
+                    <SelectItem key={cat.id} value={cat.name}>{cat.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">Categories can be managed in Settings.</p>
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="archive-reason">Reason / Notes</Label>
+              <Textarea
+                id="archive-reason"
+                placeholder="Why didn't this client engage? (optional)"
+                value={archiveReason}
+                onChange={(e) => setArchiveReason(e.target.value)}
+                rows={3}
+                data-testid="input-archive-reason"
+              />
             </div>
           </div>
 

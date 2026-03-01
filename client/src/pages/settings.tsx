@@ -770,6 +770,105 @@ function AdminUsersTab() {
   );
 }
 
+function NonEngagementCategoriesTab() {
+  const queryClient = useQueryClient();
+  const [newCategoryName, setNewCategoryName] = useState("");
+
+  const { data: categories = [], isLoading } = useQuery<{ id: string; name: string; createdAt: string }[]>({
+    queryKey: ["/api/non-engagement-categories"],
+  });
+
+  const createMutation = useMutation({
+    mutationFn: async (name: string) => {
+      const response = await apiRequest("POST", "/api/non-engagement-categories", { name });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/non-engagement-categories"] });
+      setNewCategoryName("");
+      toast.success("Category added");
+    },
+    onError: (error: any) => {
+      if (error?.message?.includes("already exists")) {
+        toast.error("This category already exists");
+      } else {
+        toast.error("Failed to add category");
+      }
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const response = await apiRequest("DELETE", `/api/non-engagement-categories/${id}`);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/non-engagement-categories"] });
+      toast.success("Category removed");
+    },
+    onError: () => {
+      toast.error("Failed to remove category");
+    },
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Non-Engagement Categories</CardTitle>
+        <CardDescription>
+          Manage the categories available when archiving clients who didn't engage. These help you analyse patterns and reasons for non-engagement.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex gap-2">
+          <Input
+            placeholder="New category name"
+            value={newCategoryName}
+            onChange={(e) => setNewCategoryName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && newCategoryName.trim()) createMutation.mutate(newCategoryName.trim()); }}
+            data-testid="input-new-category"
+          />
+          <Button
+            onClick={() => newCategoryName.trim() && createMutation.mutate(newCategoryName.trim())}
+            disabled={!newCategoryName.trim() || createMutation.isPending}
+            data-testid="btn-add-category"
+          >
+            {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Add"}
+          </Button>
+        </div>
+
+        {isLoading ? (
+          <div className="flex justify-center py-8">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : categories.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-4 text-center">
+            No categories yet. Add some common reasons like "Cost", "Changed mind", "No availability", etc.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {categories.map(cat => (
+              <div key={cat.id} className="flex items-center justify-between p-3 border rounded-lg" data-testid={`category-${cat.id}`}>
+                <span className="text-sm font-medium">{cat.name}</span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                  onClick={() => deleteMutation.mutate(cat.id)}
+                  disabled={deleteMutation.isPending}
+                  data-testid={`btn-delete-category-${cat.id}`}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function Settings() {
   const { user } = useAuth();
   
@@ -784,6 +883,7 @@ export default function Settings() {
         <TabsList>
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
           <TabsTrigger value="email-templates">Email Templates</TabsTrigger>
+          <TabsTrigger value="non-engagement">Non-Engagement</TabsTrigger>
           <TabsTrigger value="account">Account</TabsTrigger>
           <TabsTrigger value="team">Team Members</TabsTrigger>
         </TabsList>
@@ -794,6 +894,10 @@ export default function Settings() {
 
         <TabsContent value="email-templates">
           <EmailTemplatesTab />
+        </TabsContent>
+
+        <TabsContent value="non-engagement">
+          <NonEngagementCategoriesTab />
         </TabsContent>
 
         <TabsContent value="account">

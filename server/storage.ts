@@ -1,5 +1,5 @@
 import { 
-  users, clients, clinicians, timeSlots, formTemplates, formSubmissions, tasks, auditLogs, emailTemplates, inviteTokens, passwordResetTokens,
+  users, clients, clinicians, timeSlots, formTemplates, formSubmissions, tasks, auditLogs, emailTemplates, inviteTokens, passwordResetTokens, nonEngagementCategories,
   type User, type InsertUser, type SafeUser,
   type Client, type InsertClient,
   type Clinician, type InsertClinician,
@@ -10,7 +10,8 @@ import {
   type AuditLog, type InsertAuditLog,
   type EmailTemplate, type InsertEmailTemplate,
   type InviteToken,
-  type PasswordResetToken
+  type PasswordResetToken,
+  type NonEngagementCategory, type InsertNonEngagementCategory
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, or, desc, sql, isNull } from "drizzle-orm";
@@ -59,7 +60,7 @@ export interface IStorage {
   getClientByDisplayId(displayId: string): Promise<Client | undefined>;
   createClient(client: InsertClient): Promise<Client>;
   updateClient(id: string, updates: Partial<InsertClient>): Promise<Client | undefined>;
-  archiveClient(id: string): Promise<Client | undefined>;
+  archiveClient(id: string, reason?: string, category?: string): Promise<Client | undefined>;
   restoreClient(id: string): Promise<Client | undefined>;
   deleteClientPermanently(id: string): Promise<boolean>;
   assignClinicianToClient(clientId: string, clinicianId: string, slotId: string, allocationMethod?: "form" | "manual", allocationReason?: string): Promise<void>;
@@ -95,6 +96,11 @@ export interface IStorage {
   getAllEmailTemplates(): Promise<EmailTemplate[]>;
   getEmailTemplateByKey(templateKey: string): Promise<EmailTemplate | undefined>;
   upsertEmailTemplate(template: InsertEmailTemplate): Promise<EmailTemplate>;
+
+  // ============ NON-ENGAGEMENT CATEGORIES ============
+  getAllNonEngagementCategories(): Promise<NonEngagementCategory[]>;
+  createNonEngagementCategory(category: InsertNonEngagementCategory): Promise<NonEngagementCategory>;
+  deleteNonEngagementCategory(id: string): Promise<boolean>;
 }
 
 // Database implementation with PostgreSQL
@@ -330,7 +336,7 @@ export class DatabaseStorage implements IStorage {
     return true;
   }
 
-  async archiveClient(id: string): Promise<Client | undefined> {
+  async archiveClient(id: string, reason?: string, category?: string): Promise<Client | undefined> {
     // First, get the client to find their assigned slot and clinician
     const [existingClient] = await db.select().from(clients).where(eq(clients.id, id));
     
@@ -380,10 +386,11 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
-    // Archive the client
     const [client] = await db.update(clients).set({
       isArchived: true,
       archivedAt: new Date(),
+      archiveReason: reason || null,
+      archiveCategory: category || null,
       updatedAt: new Date()
     }).where(eq(clients.id, id)).returning();
     return client || undefined;
@@ -757,6 +764,21 @@ export class DatabaseStorage implements IStorage {
       })
       .returning();
     return result;
+  }
+
+  // ============ NON-ENGAGEMENT CATEGORIES ============
+  async getAllNonEngagementCategories(): Promise<NonEngagementCategory[]> {
+    return await db.select().from(nonEngagementCategories).orderBy(nonEngagementCategories.name);
+  }
+
+  async createNonEngagementCategory(category: InsertNonEngagementCategory): Promise<NonEngagementCategory> {
+    const [result] = await db.insert(nonEngagementCategories).values(category).returning();
+    return result;
+  }
+
+  async deleteNonEngagementCategory(id: string): Promise<boolean> {
+    const result = await db.delete(nonEngagementCategories).where(eq(nonEngagementCategories.id, id));
+    return (result.rowCount ?? 0) > 0;
   }
 }
 

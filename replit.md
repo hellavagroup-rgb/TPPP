@@ -29,6 +29,7 @@
 - Expired slot filtering: slots with past endDate are now filtered out of all allocation dialogs and slot displays
 - **Simplified availability system (Feb 2026)**: Completely reworked slot management. Each 1-hour slot is an independent database record. No batch operations or edit mode - add new or delete existing only. Deleting a slot permanently removes it from all future weeks (even booked slots). Booked slot deletion clears client assignment reference automatically. Default to ongoing (no end date), with "Add an end date" checkbox. End time auto-defaults to 1 hour after selected start time. SpecificDate slot type removed from UI (schema retained for backward compatibility). Fortnightly alternation fixed with proper week start alignment.
 - **Permanent client deletion (Mar 2026)**: Archived clients can be permanently deleted via "Permanently Delete" option in the dropdown menu. Requires admin password confirmation and shows an irreversibility warning. Deletes client record, form submissions, and releases any booked slots. Only available for archived clients.
+- **Non-engagement tracking (Mar 2026)**: When archiving a client as "Didn't Engage", admins can select a category and add a reason/notes. Categories are admin-managed via Settings > Non-Engagement tab. Archive reason and category are displayed on archived client cards. Schema fields: `archiveReason`, `archiveCategory` on clients table; `non_engagement_categories` table for category management.
 
 ## Overview
 

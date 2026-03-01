@@ -892,7 +892,8 @@ export async function registerRoutes(
 
   app.post("/api/clients/:id/archive", requireAdmin, auditLog("archive", "client"), async (req, res) => {
     try {
-      const archived = await storage.archiveClient(req.params.id);
+      const { reason, category } = req.body || {};
+      const archived = await storage.archiveClient(req.params.id, reason, category);
       if (!archived) {
         return res.status(404).json({ error: "Client not found" });
       }
@@ -1529,6 +1530,44 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Update email template error:", error);
       res.status(500).json({ error: "Failed to update email template" });
+    }
+  });
+
+  // ============ NON-ENGAGEMENT CATEGORIES ============
+  app.get("/api/non-engagement-categories", requireAdmin, async (req, res) => {
+    try {
+      const categories = await storage.getAllNonEngagementCategories();
+      res.json(categories);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch categories" });
+    }
+  });
+
+  app.post("/api/non-engagement-categories", requireAdmin, async (req, res) => {
+    try {
+      const { name } = req.body;
+      if (!name || !name.trim()) {
+        return res.status(400).json({ error: "Category name is required" });
+      }
+      const category = await storage.createNonEngagementCategory({ name: name.trim() });
+      res.json(category);
+    } catch (error: any) {
+      if (error?.constraint || error?.code === "23505") {
+        return res.status(409).json({ error: "This category already exists" });
+      }
+      res.status(500).json({ error: "Failed to create category" });
+    }
+  });
+
+  app.delete("/api/non-engagement-categories/:id", requireAdmin, async (req, res) => {
+    try {
+      const deleted = await storage.deleteNonEngagementCategory(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ error: "Category not found" });
+      }
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete category" });
     }
   });
 

@@ -114,8 +114,10 @@ export const clients = pgTable("clients", {
   assignedSlot: text("assigned_slot"), // Display string for UI
   allocationMethod: text("allocation_method", { enum: ["form", "manual"] }), // How client was allocated
   allocationReason: text("allocation_reason"), // Admin's reason for this allocation
-  isArchived: boolean("is_archived").default(false).notNull(), // Soft delete - archived clients are hidden
-  archivedAt: timestamp("archived_at"), // When the client was archived
+  isArchived: boolean("is_archived").default(false).notNull(),
+  archivedAt: timestamp("archived_at"),
+  archiveReason: text("archive_reason"),
+  archiveCategory: text("archive_category"),
   // Workflow Stage Timestamps
   formsSentAt: timestamp("forms_sent_at"), // When forms were sent to client
   formsCompletedAt: timestamp("forms_completed_at"), // When client completed forms
@@ -262,6 +264,17 @@ export const inviteTokens = pgTable("invite_tokens", {
 export const insertInviteTokenSchema = createInsertSchema(inviteTokens).omit({ id: true, createdAt: true, usedAt: true });
 export type InsertInviteToken = z.infer<typeof insertInviteTokenSchema>;
 export type InviteToken = typeof inviteTokens.$inferSelect;
+
+// ============ NON-ENGAGEMENT CATEGORIES ============
+export const nonEngagementCategories = pgTable("non_engagement_categories", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull().unique(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertNonEngagementCategorySchema = createInsertSchema(nonEngagementCategories).omit({ id: true, createdAt: true });
+export type InsertNonEngagementCategory = z.infer<typeof insertNonEngagementCategorySchema>;
+export type NonEngagementCategory = typeof nonEngagementCategories.$inferSelect;
 
 // ============ PASSWORD RESET TOKENS ============
 export const passwordResetTokens = pgTable("password_reset_tokens", {

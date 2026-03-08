@@ -1533,6 +1533,79 @@ export async function registerRoutes(
     }
   });
 
+  // ============ DATA EXPORT ============
+  app.get("/api/export/:type", requireAdmin, auditLog("export", "data"), async (req, res) => {
+    try {
+      const { type } = req.params;
+      const format = (req.query.format as string) || "csv";
+      let data: any[] = [];
+      let filename = "";
+
+      switch (type) {
+        case "clients": {
+          data = await storage.getAllClients(true);
+          filename = "clients";
+          break;
+        }
+        case "clinicians": {
+          data = await storage.getAllClinicians();
+          filename = "clinicians";
+          break;
+        }
+        case "tasks": {
+          data = await storage.getAllTasks();
+          filename = "tasks";
+          break;
+        }
+        case "form-templates": {
+          data = await storage.getAllFormTemplates();
+          filename = "form-templates";
+          break;
+        }
+        default:
+          return res.status(400).json({ error: "Invalid export type. Use: clients, clinicians, tasks, form-templates" });
+      }
+
+      const timestamp = new Date().toISOString().slice(0, 10);
+
+      if (format === "json") {
+        res.setHeader("Content-Type", "application/json");
+        res.setHeader("Content-Disposition", `attachment; filename="${filename}_${timestamp}.json"`);
+        return res.json(data);
+      }
+
+      // CSV format
+      if (data.length === 0) {
+        res.setHeader("Content-Type", "text/csv");
+        res.setHeader("Content-Disposition", `attachment; filename="${filename}_${timestamp}.csv"`);
+        return res.send("");
+      }
+
+      const headers = Object.keys(data[0]);
+      const csvRows = [
+        headers.join(","),
+        ...data.map(row =>
+          headers.map(h => {
+            const val = row[h];
+            if (val === null || val === undefined) return "";
+            const str = String(val);
+            if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+              return `"${str.replace(/"/g, '""')}"`;
+            }
+            return str;
+          }).join(",")
+        )
+      ];
+
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}_${timestamp}.csv"`);
+      res.send(csvRows.join("\n"));
+    } catch (error) {
+      console.error("Export error:", error);
+      res.status(500).json({ error: "Failed to export data" });
+    }
+  });
+
   // ============ NON-ENGAGEMENT CATEGORIES ============
   app.get("/api/non-engagement-categories", requireAdmin, async (req, res) => {
     try {

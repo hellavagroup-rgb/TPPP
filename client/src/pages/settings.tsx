@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { toast } from "sonner";
-import { Loader2, Save, Mail, Trash2, UserPlus, Link2, Unlink, ShieldCheck } from "lucide-react";
+import { Loader2, Save, Mail, Trash2, UserPlus, Link2, Unlink, ShieldCheck, Download, Database } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useAuth } from "@/lib/auth";
@@ -770,6 +770,98 @@ function AdminUsersTab() {
   );
 }
 
+function DataExportTab() {
+  const [downloading, setDownloading] = useState<string | null>(null);
+
+  const exportTypes = [
+    { key: "clients", label: "Clients", description: "All client records including archived clients, status, notes, and assignment details" },
+    { key: "clinicians", label: "Clinicians", description: "All clinician profiles including specialties, capacity, and insurance panels" },
+    { key: "tasks", label: "Tasks", description: "All tasks including assignments, priorities, due dates, and completion status" },
+    { key: "form-templates", label: "Form Templates", description: "All intake form templates and their field definitions" },
+  ];
+
+  const handleExport = async (type: string, format: "csv" | "json") => {
+    setDownloading(`${type}-${format}`);
+    try {
+      const response = await fetch(`/api/export/${type}?format=${format}`, { credentials: "include" });
+      if (!response.ok) throw new Error("Export failed");
+
+      const blob = await response.blob();
+      const disposition = response.headers.get("Content-Disposition") || "";
+      const filenameMatch = disposition.match(/filename="(.+)"/);
+      const filename = filenameMatch ? filenameMatch[1] : `${type}_export.${format}`;
+
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+      toast.success(`${type} exported as ${format.toUpperCase()}`);
+    } catch {
+      toast.error("Failed to export data");
+    } finally {
+      setDownloading(null);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Database className="h-5 w-5" />
+          Data Export
+        </CardTitle>
+        <CardDescription>
+          Download your practice data as CSV or JSON files. Use these for backups or external analysis. Exports include all records including archived data.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {exportTypes.map(({ key, label, description }) => (
+          <div key={key} className="flex items-center justify-between p-4 border rounded-lg" data-testid={`export-${key}`}>
+            <div className="flex-1">
+              <p className="font-medium text-sm">{label}</p>
+              <p className="text-xs text-muted-foreground mt-1">{description}</p>
+            </div>
+            <div className="flex gap-2 ml-4">
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1"
+                onClick={() => handleExport(key, "csv")}
+                disabled={downloading === `${key}-csv`}
+                data-testid={`btn-export-${key}-csv`}
+              >
+                {downloading === `${key}-csv` ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+                CSV
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1"
+                onClick={() => handleExport(key, "json")}
+                disabled={downloading === `${key}-json`}
+                data-testid={`btn-export-${key}-json`}
+              >
+                {downloading === `${key}-json` ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+                JSON
+              </Button>
+            </div>
+          </div>
+        ))}
+
+        <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg mt-4">
+          <p className="text-xs text-blue-800">
+            <strong>Tip:</strong> Download regular backups and store them somewhere safe. This gives you an extra layer of protection beyond automatic system checkpoints.
+          </p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function NonEngagementCategoriesTab() {
   const queryClient = useQueryClient();
   const [newCategoryName, setNewCategoryName] = useState("");
@@ -884,6 +976,7 @@ export default function Settings() {
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
           <TabsTrigger value="email-templates">Email Templates</TabsTrigger>
           <TabsTrigger value="non-engagement">Non-Engagement</TabsTrigger>
+          <TabsTrigger value="data-export">Data Export</TabsTrigger>
           <TabsTrigger value="account">Account</TabsTrigger>
           <TabsTrigger value="team">Team Members</TabsTrigger>
         </TabsList>
@@ -898,6 +991,10 @@ export default function Settings() {
 
         <TabsContent value="non-engagement">
           <NonEngagementCategoriesTab />
+        </TabsContent>
+
+        <TabsContent value="data-export">
+          <DataExportTab />
         </TabsContent>
 
         <TabsContent value="account">

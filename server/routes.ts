@@ -1623,13 +1623,8 @@ export async function registerRoutes(
           filename = "tasks";
           break;
         }
-        case "form-templates": {
-          data = await storage.getAllFormTemplates();
-          filename = "form-templates";
-          break;
-        }
         default:
-          return res.status(400).json({ error: "Invalid export type. Use: clients, clinicians, tasks, form-templates, form-responses" });
+          return res.status(400).json({ error: "Invalid export type. Use: clients, clinicians, tasks, form-responses" });
       }
 
       const timestamp = new Date().toISOString().slice(0, 10);

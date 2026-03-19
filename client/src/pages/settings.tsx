@@ -777,7 +777,6 @@ function DataExportTab() {
     { key: "clients", label: "Clients", description: "All client records including archived clients, status, notes, and assignment details" },
     { key: "clinicians", label: "Clinicians", description: "All clinician profiles including specialties, capacity, and insurance panels" },
     { key: "tasks", label: "Tasks", description: "All tasks including assignments, priorities, due dates, and completion status" },
-    { key: "form-templates", label: "Form Templates", description: "All intake form templates and their field definitions" },
     { key: "form-responses", label: "Completed Form Responses", description: "All submitted client intake forms — one row per submission with each question as a separate column" },
   ];
 

@@ -14,7 +14,7 @@ import {
   type NonEngagementCategory, type InsertNonEngagementCategory
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, or, desc, sql, isNull } from "drizzle-orm";
+import { eq, and, or, desc, sql, isNull, inArray } from "drizzle-orm";
 
 // Storage interface for all CRUD operations
 export interface IStorage {
@@ -640,20 +640,40 @@ export class DatabaseStorage implements IStorage {
 
   // ============ FORM SUBMISSIONS ============
   async getAllCompletedFormSubmissions(): Promise<{ submission: FormSubmission; clientName: string; clientDisplayId: string; formTitle: string; formFields: any[] }[]> {
-    const rows = await db
-      .select({
-        submission: formSubmissions,
-        clientName: clients.name,
-        clientDisplayId: clients.displayId,
-        formTitle: formTemplates.title,
-        formFields: formTemplates.fields,
-      })
+    const submissions = await db
+      .select()
       .from(formSubmissions)
-      .innerJoin(clients, eq(formSubmissions.clientId, clients.id))
-      .innerJoin(formTemplates, eq(formSubmissions.formTemplateId, formTemplates.id))
       .where(eq(formSubmissions.isDraft, false))
       .orderBy(formSubmissions.submittedAt);
-    return rows as any[];
+
+    if (submissions.length === 0) return [];
+
+    const clientIds = [...new Set(submissions.map(s => s.clientId))];
+    const templateIds = [...new Set(submissions.map(s => s.formTemplateId))];
+
+    const [clientRows, templateRows] = await Promise.all([
+      db.select({ id: clients.id, name: clients.name, displayId: clients.displayId })
+        .from(clients)
+        .where(inArray(clients.id, clientIds)),
+      db.select({ id: formTemplates.id, title: formTemplates.title, fields: formTemplates.fields })
+        .from(formTemplates)
+        .where(inArray(formTemplates.id, templateIds)),
+    ]);
+
+    const clientMap = new Map(clientRows.map(c => [c.id, c]));
+    const templateMap = new Map(templateRows.map(t => [t.id, t]));
+
+    return submissions.map(submission => {
+      const client = clientMap.get(submission.clientId);
+      const template = templateMap.get(submission.formTemplateId);
+      return {
+        submission,
+        clientName: client?.name ?? "",
+        clientDisplayId: client?.displayId ?? "",
+        formTitle: template?.title ?? "",
+        formFields: Array.isArray(template?.fields) ? template.fields as any[] : [],
+      };
+    });
   }
 
   async getFormSubmissionsByClientId(clientId: string): Promise<FormSubmission[]> {

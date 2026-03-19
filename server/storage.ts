@@ -652,12 +652,8 @@ export class DatabaseStorage implements IStorage {
     const templateIds = [...new Set(submissions.map(s => s.formTemplateId))];
 
     const [clientRows, templateRows] = await Promise.all([
-      db.select({ id: clients.id, name: clients.name, displayId: clients.displayId })
-        .from(clients)
-        .where(inArray(clients.id, clientIds)),
-      db.select({ id: formTemplates.id, title: formTemplates.title, fields: formTemplates.fields })
-        .from(formTemplates)
-        .where(inArray(formTemplates.id, templateIds)),
+      db.select().from(clients).where(inArray(clients.id, clientIds)),
+      db.select().from(formTemplates).where(inArray(formTemplates.id, templateIds)),
     ]);
 
     const clientMap = new Map(clientRows.map(c => [c.id, c]));

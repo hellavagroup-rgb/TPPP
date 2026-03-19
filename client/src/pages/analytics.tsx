@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Users, UserCheck, UserX, TrendingUp, CalendarDays, FileText } from "lucide-react";
+import { Users, UserCheck, UserX, TrendingUp, CalendarDays, FileText, CreditCard } from "lucide-react";
 import type { Client, Clinician, TimeSlot } from "@shared/schema";
 
 type ClinicianWithAvailability = Clinician & { name?: string; availability?: TimeSlot[] };
@@ -112,7 +112,16 @@ export default function Analytics() {
       }
     });
 
-    return { totalNew, totalAllocated, totalArchived, allocatedPct, archivedPct, statusBreakdown };
+    const fundingBreakdown: Record<string, number> = {};
+    newClients.forEach(c => {
+      const raw = (c.insurer || "").trim();
+      const label = raw === "" || raw.toLowerCase() === "private" || raw.toLowerCase() === "self pay" || raw.toLowerCase() === "self-pay"
+        ? "Private / Self-Pay"
+        : raw;
+      fundingBreakdown[label] = (fundingBreakdown[label] || 0) + 1;
+    });
+
+    return { totalNew, totalAllocated, totalArchived, allocatedPct, archivedPct, statusBreakdown, fundingBreakdown };
   }, [allClients, selectedYear, selectedMonth]);
 
   const periodLabel = selectedMonth === "all"
@@ -230,6 +239,62 @@ export default function Analytics() {
                     <div key={status} className="space-y-2">
                       <div className="flex items-center justify-between text-sm">
                         <span className="font-medium">{status}</span>
+                        <span className="text-muted-foreground">{count} ({percentage}%)</span>
+                      </div>
+                      <div className="h-2 w-full bg-secondary rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full ${colorClass}`}
+                          style={{ width: `${percentage}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <CreditCard className="h-5 w-5 text-violet-500" />
+            <CardTitle>Funding Source Distribution</CardTitle>
+          </div>
+          <CardDescription>How clients in {periodLabel} are funding their sessions.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {metrics.totalNew === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <CreditCard className="h-12 w-12 text-muted-foreground/50 mb-4" />
+              <h3 className="text-lg font-medium text-slate-900">No clients in this period</h3>
+              <p className="text-sm text-muted-foreground mt-1 max-w-md">
+                Try selecting a different month or year to view analytics.
+              </p>
+            </div>
+          ) : Object.keys(metrics.fundingBreakdown).length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <CreditCard className="h-12 w-12 text-muted-foreground/50 mb-4" />
+              <h3 className="text-lg font-medium text-slate-900">No funding data</h3>
+              <p className="text-sm text-muted-foreground mt-1 max-w-md">
+                Funding source information hasn't been recorded for clients in this period.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {Object.entries(metrics.fundingBreakdown)
+                .sort(([, a], [, b]) => b - a)
+                .map(([label, count], index) => {
+                  const percentage = Math.round((count / metrics.totalNew) * 100);
+                  const colors = [
+                    "bg-violet-500", "bg-blue-500", "bg-emerald-500", "bg-amber-500",
+                    "bg-rose-500", "bg-cyan-500", "bg-orange-500", "bg-pink-500",
+                  ];
+                  const colorClass = label === "Private / Self-Pay" ? "bg-slate-500" : colors[index % colors.length];
+                  return (
+                    <div key={label} className="space-y-2">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="font-medium">{label}</span>
                         <span className="text-muted-foreground">{count} ({percentage}%)</span>
                       </div>
                       <div className="h-2 w-full bg-secondary rounded-full overflow-hidden">

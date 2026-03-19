@@ -1,6 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import crypto from "crypto";
+import * as XLSX from "xlsx";
 import { storage } from "./storage";
 import { setupAuth, requireAuth, requireAdmin, requireClinician, hashPassword, auditLog } from "./auth";
 import passport from "passport";
@@ -1541,6 +1542,71 @@ export async function registerRoutes(
       let data: any[] = [];
       let filename = "";
 
+      if (type === "form-responses") {
+        const rows = await storage.getAllCompletedFormSubmissions();
+        filename = "form-responses";
+
+        // Collect all unique field labels across all forms
+        const allFieldLabels = new Set<string>();
+        const processedRows = rows.map(({ submission, clientName, clientDisplayId, formTitle, formFields }) => {
+          const fields = Array.isArray(formFields) ? formFields : [];
+          const responses = (submission.responses || {}) as Record<string, any>;
+          const fieldMap: Record<string, string> = {};
+          fields.forEach((f: any) => {
+            if (f.label) {
+              allFieldLabels.add(f.label);
+              const raw = responses[f.id];
+              fieldMap[f.label] = Array.isArray(raw) ? raw.join(", ") : raw != null ? String(raw) : "";
+            }
+          });
+          return { clientDisplayId, clientName, formTitle, submittedAt: submission.submittedAt, fieldMap };
+        });
+
+        const fieldLabelsList = Array.from(allFieldLabels);
+
+        if (format === "xlsx") {
+          const wsData = [
+            ["Client ID", "Client Name", "Form", "Submitted At", ...fieldLabelsList],
+            ...processedRows.map(r => [
+              r.clientDisplayId,
+              r.clientName,
+              r.formTitle,
+              r.submittedAt ? new Date(r.submittedAt).toISOString() : "",
+              ...fieldLabelsList.map(l => r.fieldMap[l] ?? ""),
+            ]),
+          ];
+          const wb = XLSX.utils.book_new();
+          const ws = XLSX.utils.aoa_to_sheet(wsData);
+          XLSX.utils.book_append_sheet(wb, ws, "Form Responses");
+          const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+          const timestamp = new Date().toISOString().slice(0, 10);
+          res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+          res.setHeader("Content-Disposition", `attachment; filename="${filename}_${timestamp}.xlsx"`);
+          return res.send(buf);
+        }
+
+        // CSV for form-responses
+        const timestamp = new Date().toISOString().slice(0, 10);
+        const csvHeaders = ["Client ID", "Client Name", "Form", "Submitted At", ...fieldLabelsList];
+        const csvEscape = (v: any) => {
+          const s = v != null ? String(v) : "";
+          return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s;
+        };
+        const csvRows = [
+          csvHeaders.map(csvEscape).join(","),
+          ...processedRows.map(r => [
+            csvEscape(r.clientDisplayId),
+            csvEscape(r.clientName),
+            csvEscape(r.formTitle),
+            csvEscape(r.submittedAt ? new Date(r.submittedAt).toISOString() : ""),
+            ...fieldLabelsList.map(l => csvEscape(r.fieldMap[l] ?? "")),
+          ].join(",")),
+        ];
+        res.setHeader("Content-Type", "text/csv");
+        res.setHeader("Content-Disposition", `attachment; filename="${filename}_${timestamp}.csv"`);
+        return res.send(csvRows.join("\n"));
+      }
+
       switch (type) {
         case "clients": {
           data = await storage.getAllClients(true);
@@ -1563,15 +1629,25 @@ export async function registerRoutes(
           break;
         }
         default:
-          return res.status(400).json({ error: "Invalid export type. Use: clients, clinicians, tasks, form-templates" });
+          return res.status(400).json({ error: "Invalid export type. Use: clients, clinicians, tasks, form-templates, form-responses" });
       }
 
       const timestamp = new Date().toISOString().slice(0, 10);
 
-      if (format === "json") {
-        res.setHeader("Content-Type", "application/json");
-        res.setHeader("Content-Disposition", `attachment; filename="${filename}_${timestamp}.json"`);
-        return res.json(data);
+      if (format === "xlsx") {
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.json_to_sheet(data.map(row => {
+          const flat: Record<string, any> = {};
+          for (const [k, v] of Object.entries(row)) {
+            flat[k] = v != null && typeof v === "object" ? JSON.stringify(v) : v;
+          }
+          return flat;
+        }));
+        XLSX.utils.book_append_sheet(wb, ws, filename);
+        const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        res.setHeader("Content-Disposition", `attachment; filename="${filename}_${timestamp}.xlsx"`);
+        return res.send(buf);
       }
 
       // CSV format

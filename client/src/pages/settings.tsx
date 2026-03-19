@@ -778,9 +778,10 @@ function DataExportTab() {
     { key: "clinicians", label: "Clinicians", description: "All clinician profiles including specialties, capacity, and insurance panels" },
     { key: "tasks", label: "Tasks", description: "All tasks including assignments, priorities, due dates, and completion status" },
     { key: "form-templates", label: "Form Templates", description: "All intake form templates and their field definitions" },
+    { key: "form-responses", label: "Completed Form Responses", description: "All submitted client intake forms — one row per submission with each question as a separate column" },
   ];
 
-  const handleExport = async (type: string, format: "csv" | "json") => {
+  const handleExport = async (type: string, format: "csv" | "xlsx") => {
     setDownloading(`${type}-${format}`);
     try {
       const response = await fetch(`/api/export/${type}?format=${format}`, { credentials: "include" });
@@ -815,7 +816,7 @@ function DataExportTab() {
           Data Export
         </CardTitle>
         <CardDescription>
-          Download your practice data as CSV or JSON files. Use these for backups or external analysis. Exports include all records including archived data.
+          Download your practice data as CSV or XLSX files. Use these for backups or external analysis. Exports include all records including archived data.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -841,12 +842,12 @@ function DataExportTab() {
                 variant="outline"
                 size="sm"
                 className="gap-1"
-                onClick={() => handleExport(key, "json")}
-                disabled={downloading === `${key}-json`}
-                data-testid={`btn-export-${key}-json`}
+                onClick={() => handleExport(key, "xlsx")}
+                disabled={downloading === `${key}-xlsx`}
+                data-testid={`btn-export-${key}-xlsx`}
               >
-                {downloading === `${key}-json` ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
-                JSON
+                {downloading === `${key}-xlsx` ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+                XLSX
               </Button>
             </div>
           </div>

@@ -74,6 +74,7 @@ export interface IStorage {
   deleteFormTemplate(id: string): Promise<void>;
   
   // ============ FORM SUBMISSIONS ============
+  getAllCompletedFormSubmissions(): Promise<{ submission: FormSubmission; clientName: string; clientDisplayId: string; formTitle: string; formFields: any[] }[]>;
   getFormSubmissionsByClientId(clientId: string): Promise<FormSubmission[]>;
   createFormSubmission(submission: InsertFormSubmission): Promise<FormSubmission>;
   getDraftSubmission(clientId: string, formTemplateId: string): Promise<FormSubmission | undefined>;
@@ -638,6 +639,23 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ============ FORM SUBMISSIONS ============
+  async getAllCompletedFormSubmissions(): Promise<{ submission: FormSubmission; clientName: string; clientDisplayId: string; formTitle: string; formFields: any[] }[]> {
+    const rows = await db
+      .select({
+        submission: formSubmissions,
+        clientName: clients.name,
+        clientDisplayId: clients.displayId,
+        formTitle: formTemplates.title,
+        formFields: formTemplates.fields,
+      })
+      .from(formSubmissions)
+      .innerJoin(clients, eq(formSubmissions.clientId, clients.id))
+      .innerJoin(formTemplates, eq(formSubmissions.formTemplateId, formTemplates.id))
+      .where(eq(formSubmissions.isDraft, false))
+      .orderBy(formSubmissions.submittedAt);
+    return rows as any[];
+  }
+
   async getFormSubmissionsByClientId(clientId: string): Promise<FormSubmission[]> {
     return await db.select().from(formSubmissions).where(eq(formSubmissions.clientId, clientId));
   }

@@ -112,16 +112,24 @@ export default function Analytics() {
       }
     });
 
-    const fundingBreakdown: Record<string, number> = {};
+    const SELF_PAY_TERMS = ["", "private", "self pay", "self-pay", "self_pay", "selfpay"];
+    const isSelfPay = (raw: string) => SELF_PAY_TERMS.includes(raw.toLowerCase().trim());
+
+    let totalSelfPay = 0;
+    let totalInsured = 0;
+    const insurerBreakdown: Record<string, number> = {};
+
     newClients.forEach(c => {
       const raw = (c.insurer || "").trim();
-      const label = raw === "" || raw.toLowerCase() === "private" || raw.toLowerCase() === "self pay" || raw.toLowerCase() === "self-pay"
-        ? "Private / Self-Pay"
-        : raw;
-      fundingBreakdown[label] = (fundingBreakdown[label] || 0) + 1;
+      if (isSelfPay(raw)) {
+        totalSelfPay++;
+      } else {
+        totalInsured++;
+        insurerBreakdown[raw] = (insurerBreakdown[raw] || 0) + 1;
+      }
     });
 
-    return { totalNew, totalAllocated, totalArchived, allocatedPct, archivedPct, statusBreakdown, fundingBreakdown };
+    return { totalNew, totalAllocated, totalArchived, allocatedPct, archivedPct, statusBreakdown, totalSelfPay, totalInsured, insurerBreakdown };
   }, [allClients, selectedYear, selectedMonth]);
 
   const periodLabel = selectedMonth === "all"
@@ -272,40 +280,62 @@ export default function Analytics() {
                 Try selecting a different month or year to view analytics.
               </p>
             </div>
-          ) : Object.keys(metrics.fundingBreakdown).length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <CreditCard className="h-12 w-12 text-muted-foreground/50 mb-4" />
-              <h3 className="text-lg font-medium text-slate-900">No funding data</h3>
-              <p className="text-sm text-muted-foreground mt-1 max-w-md">
-                Funding source information hasn't been recorded for clients in this period.
-              </p>
-            </div>
           ) : (
-            <div className="space-y-4">
-              {Object.entries(metrics.fundingBreakdown)
-                .sort(([, a], [, b]) => b - a)
-                .map(([label, count], index) => {
-                  const percentage = Math.round((count / metrics.totalNew) * 100);
-                  const colors = [
-                    "bg-violet-500", "bg-blue-500", "bg-emerald-500", "bg-amber-500",
-                    "bg-rose-500", "bg-cyan-500", "bg-orange-500", "bg-pink-500",
-                  ];
-                  const colorClass = label === "Private / Self-Pay" ? "bg-slate-500" : colors[index % colors.length];
-                  return (
-                    <div key={label} className="space-y-2">
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="font-medium">{label}</span>
-                        <span className="text-muted-foreground">{count} ({percentage}%)</span>
-                      </div>
-                      <div className="h-2 w-full bg-secondary rounded-full overflow-hidden">
-                        <div
-                          className={`h-full rounded-full ${colorClass}`}
-                          style={{ width: `${percentage}%` }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
+            <div className="space-y-6">
+              {/* Self-Pay vs Insured summary */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="rounded-lg border bg-slate-50 p-4 text-center">
+                  <div className="text-2xl font-bold text-slate-700" data-testid="text-self-pay-total">{metrics.totalSelfPay}</div>
+                  <div className="text-sm text-muted-foreground mt-1">Self-Pay / Private</div>
+                  <div className="text-xs text-muted-foreground">
+                    {metrics.totalNew > 0 ? Math.round((metrics.totalSelfPay / metrics.totalNew) * 100) : 0}% of clients
+                  </div>
+                </div>
+                <div className="rounded-lg border bg-violet-50 p-4 text-center">
+                  <div className="text-2xl font-bold text-violet-700" data-testid="text-insured-total">{metrics.totalInsured}</div>
+                  <div className="text-sm text-muted-foreground mt-1">Insurance / Funded</div>
+                  <div className="text-xs text-muted-foreground">
+                    {metrics.totalNew > 0 ? Math.round((metrics.totalInsured / metrics.totalNew) * 100) : 0}% of clients
+                  </div>
+                </div>
+              </div>
+
+              {/* Insurer breakdown */}
+              {Object.keys(metrics.insurerBreakdown).length > 0 && (
+                <div>
+                  <h4 className="text-sm font-semibold text-slate-700 mb-3">Insurer Breakdown</h4>
+                  <div className="space-y-3">
+                    {Object.entries(metrics.insurerBreakdown)
+                      .sort(([, a], [, b]) => b - a)
+                      .map(([label, count], index) => {
+                        const percentage = Math.round((count / metrics.totalInsured) * 100);
+                        const colors = [
+                          "bg-violet-500", "bg-blue-500", "bg-emerald-500", "bg-amber-500",
+                          "bg-rose-500", "bg-cyan-500", "bg-orange-500", "bg-pink-500",
+                        ];
+                        const colorClass = colors[index % colors.length];
+                        return (
+                          <div key={label} className="space-y-1.5">
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="font-medium">{label}</span>
+                              <span className="text-muted-foreground">{count} ({percentage}% of insured)</span>
+                            </div>
+                            <div className="h-2 w-full bg-secondary rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${colorClass}`}
+                                style={{ width: `${percentage}%` }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
+                </div>
+              )}
+
+              {Object.keys(metrics.insurerBreakdown).length === 0 && metrics.totalInsured === 0 && (
+                <p className="text-sm text-muted-foreground text-center">All clients in this period are self-pay.</p>
+              )}
             </div>
           )}
         </CardContent>

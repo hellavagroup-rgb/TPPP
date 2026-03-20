@@ -1714,9 +1714,9 @@ export default function Clients() {
                           <Button 
                             key={slot.id}
                             variant={slot.isBooked ? "ghost" : "outline"}
-                            disabled={slot.isBooked || (clinician.maxNewClients ?? 0) === 0}
+                            disabled={slot.isBooked || (!showAllClinicians && (clinician.maxNewClients ?? 0) === 0)}
                             className={`justify-start h-auto py-2 px-3 text-xs relative ${
-                              slot.isBooked || (clinician.maxNewClients ?? 0) === 0
+                              slot.isBooked || (!showAllClinicians && (clinician.maxNewClients ?? 0) === 0)
                                 ? "opacity-50 cursor-not-allowed" 
                                 : isPending
                                   ? "bg-amber-50 border-amber-300 hover:border-amber-400 hover:bg-amber-100"

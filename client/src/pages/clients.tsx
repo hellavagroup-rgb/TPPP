@@ -1042,7 +1042,7 @@ export default function Clients() {
             </div>
             <div className="space-y-2">
               {filteredClients.filter(c => c.status === "New").map(client => (
-                <Card key={client.id} className="bg-white shadow-sm hover:shadow-md transition-shadow cursor-pointer" data-testid={`kanban-card-${client.id}`}>
+                <Card key={client.id} className="bg-white shadow-sm hover:shadow-md transition-shadow cursor-pointer overflow-hidden" data-testid={`kanban-card-${client.id}`}>
                   <CardContent className="p-3">
                     <div className="flex items-center justify-between mb-2">
                       <span className="font-mono font-semibold text-sm">{client.displayId}</span>
@@ -1076,11 +1076,11 @@ export default function Clients() {
                     {client.notes && (
                       <p className="text-[10px] text-muted-foreground mt-1 italic line-clamp-2" data-testid={`notes-${client.id}`}>"{client.notes}"</p>
                     )}
-                    <div className="flex gap-1 mt-2">
-                      <Button size="sm" variant="outline" className="flex-1 gap-1 text-xs" onClick={() => handleOpenSendForms(client)}>
+                    <div className="flex flex-col gap-1 mt-2">
+                      <Button size="sm" variant="outline" className="w-full gap-1 text-xs" onClick={() => handleOpenSendForms(client)}>
                         <Mail className="h-3 w-3" /> Send Forms
                       </Button>
-                      <Button size="sm" variant="outline" className="flex-1 gap-1 text-xs" onClick={() => handleOpenPhoneFill(client)}>
+                      <Button size="sm" variant="outline" className="w-full gap-1 text-xs" onClick={() => handleOpenPhoneFill(client)}>
                         <Phone className="h-3 w-3" /> Fill by Phone
                       </Button>
                     </div>
@@ -1101,7 +1101,7 @@ export default function Clients() {
             </div>
             <div className="space-y-2">
               {filteredClients.filter(c => c.status === "Forms Sent").map(client => (
-                <Card key={client.id} className="bg-white shadow-sm hover:shadow-md transition-shadow cursor-pointer" data-testid={`kanban-card-${client.id}`}>
+                <Card key={client.id} className="bg-white shadow-sm hover:shadow-md transition-shadow cursor-pointer overflow-hidden" data-testid={`kanban-card-${client.id}`}>
                   <CardContent className="p-3">
                     <div className="flex items-center justify-between mb-2">
                       <span className="font-mono font-semibold text-sm">{client.displayId}</span>
@@ -1161,7 +1161,7 @@ export default function Clients() {
             </div>
             <div className="space-y-2">
               {filteredClients.filter(c => c.status === "Forms Completed").map(client => (
-                <Card key={client.id} className="bg-white shadow-sm hover:shadow-md transition-shadow cursor-pointer" data-testid={`kanban-card-${client.id}`}>
+                <Card key={client.id} className="bg-white shadow-sm hover:shadow-md transition-shadow cursor-pointer overflow-hidden" data-testid={`kanban-card-${client.id}`}>
                   <CardContent className="p-3">
                     <div className="flex items-center justify-between mb-2">
                       <span className="font-mono font-semibold text-sm">{client.displayId}</span>
@@ -1218,7 +1218,7 @@ export default function Clients() {
             </div>
             <div className="space-y-2">
               {filteredClients.filter(c => c.status === "Assigned").map(client => (
-                <Card key={client.id} className="bg-white shadow-sm hover:shadow-md transition-shadow cursor-pointer" data-testid={`kanban-card-${client.id}`}>
+                <Card key={client.id} className="bg-white shadow-sm hover:shadow-md transition-shadow cursor-pointer overflow-hidden" data-testid={`kanban-card-${client.id}`}>
                   <CardContent className="p-3">
                     <div className="flex items-center justify-between mb-2">
                       <span className="font-mono font-semibold text-sm">{client.displayId}</span>
@@ -1298,7 +1298,7 @@ export default function Clients() {
             </div>
             <div className="space-y-2">
               {filteredClients.filter(c => c.status === "AwaitingConfirmation").map(client => (
-                <Card key={client.id} className="bg-white shadow-sm hover:shadow-md transition-shadow cursor-pointer" data-testid={`kanban-card-${client.id}`}>
+                <Card key={client.id} className="bg-white shadow-sm hover:shadow-md transition-shadow cursor-pointer overflow-hidden" data-testid={`kanban-card-${client.id}`}>
                   <CardContent className="p-3">
                     <div className="flex items-center justify-between mb-2">
                       <span className="font-mono font-semibold text-sm">{client.displayId}</span>

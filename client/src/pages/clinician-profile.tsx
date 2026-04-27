@@ -21,7 +21,8 @@ export default function ClinicianProfile() {
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { data: insurerList = [] } = useInsurers();
+  const { data: rawInsurerList = [] } = useInsurers();
+  const insurerList = rawInsurerList.filter(i => i !== "Private");
   
   const { data: clinicianData, isLoading, error } = useQuery<ClinicianWithAvailability>({
     queryKey: ["/api/clinicians/me"],

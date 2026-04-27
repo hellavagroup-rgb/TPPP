@@ -59,7 +59,8 @@ function getSlotCounts(availability?: TimeSlot[]) {
 export default function Clinicians() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const { data: insurerList = [] } = useInsurers();
+  const { data: rawInsurerList = [] } = useInsurers();
+  const insurerList = rawInsurerList.filter(i => i !== "Private");
   
   const [selectedClinician, setSelectedClinician] = useState<ClinicianWithName | null>(null);
   const [editedClinician, setEditedClinician] = useState<Partial<ClinicianWithName & { email?: string }>>({});

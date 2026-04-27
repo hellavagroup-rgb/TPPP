@@ -265,6 +265,17 @@ export const insertInviteTokenSchema = createInsertSchema(inviteTokens).omit({ i
 export type InsertInviteToken = z.infer<typeof insertInviteTokenSchema>;
 export type InviteToken = typeof inviteTokens.$inferSelect;
 
+// ============ CUSTOM INSURERS ============
+export const customInsurers = pgTable("custom_insurers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull().unique(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertCustomInsurerSchema = createInsertSchema(customInsurers).omit({ id: true, createdAt: true });
+export type InsertCustomInsurer = z.infer<typeof insertCustomInsurerSchema>;
+export type CustomInsurer = typeof customInsurers.$inferSelect;
+
 // ============ NON-ENGAGEMENT CATEGORIES ============
 export const nonEngagementCategories = pgTable("non_engagement_categories", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

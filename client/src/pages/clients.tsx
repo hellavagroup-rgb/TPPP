@@ -57,6 +57,7 @@ import { useToast } from "@/hooks/use-toast";
 import { format, parseISO, isSameDay } from "date-fns";
 import { apiRequest } from "@/lib/queryClient";
 import type { Client as ClientType, Clinician, FormTemplate as FormTemplateType, TimeSlot } from "@shared/schema";
+import { useInsurers, useAddInsurer } from "@/hooks/use-insurers";
 
 type ClinicianWithAvailability = Clinician & { name: string; availability: TimeSlot[] };
 
@@ -111,6 +112,13 @@ export default function Clients() {
   const [, setLocation] = useLocation();
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedClient, setSelectedClient] = useState<ClientType | null>(null);
+
+  // Custom insurer management
+  const { data: insurerList = [] } = useInsurers();
+  const addInsurerMutation = useAddInsurer();
+  const [showAddInsurerDialog, setShowAddInsurerDialog] = useState(false);
+  const [newInsurerName, setNewInsurerName] = useState("");
+  const [addInsurerTarget, setAddInsurerTarget] = useState<"new" | "edit">("new");
 
   // View toggle states - defined early for query dependency
   const [showConfirmedState, setShowConfirmedState] = useState(false);
@@ -932,19 +940,25 @@ export default function Clients() {
                         <Label>Insurer</Label>
                         <Select 
                             value={newClientData.insurer} 
-                            onValueChange={v => setNewClientData({...newClientData, insurer: v})}
+                            onValueChange={v => {
+                              if (v === "__add_new__") {
+                                setAddInsurerTarget("new");
+                                setNewInsurerName("");
+                                setShowAddInsurerDialog(true);
+                              } else {
+                                setNewClientData({...newClientData, insurer: v});
+                              }
+                            }}
                         >
                             <SelectTrigger>
                                 <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
                                 <SelectItem value="Private">Private / Self-Pay</SelectItem>
-                                <SelectItem value="Bupa">Bupa</SelectItem>
-                                <SelectItem value="Axa">Axa</SelectItem>
-                                <SelectItem value="Aviva">Aviva</SelectItem>
-                                <SelectItem value="Cigna">Cigna</SelectItem>
-                                <SelectItem value="Vitality">Vitality</SelectItem>
-                                <SelectItem value="WPA">WPA</SelectItem>
+                                {insurerList.map(ins => (
+                                  <SelectItem key={ins} value={ins}>{ins}</SelectItem>
+                                ))}
+                                <SelectItem value="__add_new__" className="text-blue-600 font-medium">+ Add new insurer...</SelectItem>
                             </SelectContent>
                         </Select>
                     </div>
@@ -1795,17 +1809,23 @@ export default function Clients() {
                 <Label>Insurer</Label>
                 <Select 
                   value={editClientData.insurer} 
-                  onValueChange={v => setEditClientData({...editClientData, insurer: v})}
+                  onValueChange={v => {
+                    if (v === "__add_new__") {
+                      setAddInsurerTarget("edit");
+                      setNewInsurerName("");
+                      setShowAddInsurerDialog(true);
+                    } else {
+                      setEditClientData({...editClientData, insurer: v});
+                    }
+                  }}
                 >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="Private">Private / Self-Pay</SelectItem>
-                    <SelectItem value="Bupa">Bupa</SelectItem>
-                    <SelectItem value="Axa">Axa</SelectItem>
-                    <SelectItem value="Aviva">Aviva</SelectItem>
-                    <SelectItem value="Cigna">Cigna</SelectItem>
-                    <SelectItem value="Vitality">Vitality</SelectItem>
-                    <SelectItem value="WPA">WPA</SelectItem>
+                    {insurerList.map(ins => (
+                      <SelectItem key={ins} value={ins}>{ins}</SelectItem>
+                    ))}
+                    <SelectItem value="__add_new__" className="text-blue-600 font-medium">+ Add new insurer...</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -2360,6 +2380,68 @@ export default function Clients() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsViewResponsesOpen(false)}>
               Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add New Insurer Dialog */}
+      <Dialog open={showAddInsurerDialog} onOpenChange={setShowAddInsurerDialog}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Add New Insurer</DialogTitle>
+            <DialogDescription>Enter the name of the insurer to add it to the list for all future referrals.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3 py-2">
+            <Label>Insurer Name</Label>
+            <Input
+              data-testid="input-new-insurer-name"
+              placeholder="e.g. AXA PPP, Allianz..."
+              value={newInsurerName}
+              onChange={e => setNewInsurerName(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === "Enter" && newInsurerName.trim()) {
+                  e.preventDefault();
+                  addInsurerMutation.mutate(newInsurerName.trim(), {
+                    onSuccess: () => {
+                      const name = newInsurerName.trim();
+                      if (addInsurerTarget === "new") {
+                        setNewClientData(d => ({ ...d, insurer: name }));
+                      } else {
+                        setEditClientData(d => ({ ...d, insurer: name }));
+                      }
+                      setShowAddInsurerDialog(false);
+                      setNewInsurerName("");
+                      toast({ title: "Insurer added", description: `"${name}" is now available in the insurer list.` });
+                    },
+                  });
+                }
+              }}
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAddInsurerDialog(false)}>Cancel</Button>
+            <Button
+              data-testid="button-confirm-add-insurer"
+              disabled={!newInsurerName.trim() || addInsurerMutation.isPending}
+              onClick={() => {
+                addInsurerMutation.mutate(newInsurerName.trim(), {
+                  onSuccess: () => {
+                    const name = newInsurerName.trim();
+                    if (addInsurerTarget === "new") {
+                      setNewClientData(d => ({ ...d, insurer: name }));
+                    } else {
+                      setEditClientData(d => ({ ...d, insurer: name }));
+                    }
+                    setShowAddInsurerDialog(false);
+                    setNewInsurerName("");
+                    toast({ title: "Insurer added", description: `"${name}" is now available in the insurer list.` });
+                  },
+                });
+              }}
+            >
+              {addInsurerMutation.isPending ? "Adding..." : "Add Insurer"}
             </Button>
           </DialogFooter>
         </DialogContent>

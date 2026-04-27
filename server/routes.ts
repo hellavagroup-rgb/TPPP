@@ -1677,6 +1677,39 @@ export async function registerRoutes(
     }
   });
 
+  // ============ CUSTOM INSURERS ============
+  const BUILTIN_INSURERS = ["Aviva", "Axa", "Bupa", "Bupa Global", "Cigna", "Vitality", "WPA"];
+
+  app.get("/api/insurers", requireAuth, async (req, res) => {
+    try {
+      const custom = await storage.getCustomInsurers();
+      const customNames = custom.map(c => c.name).filter(n => !BUILTIN_INSURERS.includes(n));
+      res.json([...BUILTIN_INSURERS, ...customNames]);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch insurers" });
+    }
+  });
+
+  app.post("/api/insurers", requireAdmin, async (req, res) => {
+    try {
+      const { name } = req.body;
+      if (!name || !name.trim()) {
+        return res.status(400).json({ error: "Insurer name is required" });
+      }
+      const trimmed = name.trim();
+      if (BUILTIN_INSURERS.map(i => i.toLowerCase()).includes(trimmed.toLowerCase())) {
+        return res.status(409).json({ error: "This insurer already exists" });
+      }
+      const insurer = await storage.addCustomInsurer(trimmed);
+      res.json(insurer);
+    } catch (error: any) {
+      if (error?.code === "23505") {
+        return res.status(409).json({ error: "This insurer already exists" });
+      }
+      res.status(500).json({ error: "Failed to add insurer" });
+    }
+  });
+
   // ============ NON-ENGAGEMENT CATEGORIES ============
   app.get("/api/non-engagement-categories", requireAdmin, async (req, res) => {
     try {

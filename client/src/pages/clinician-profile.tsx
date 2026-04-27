@@ -13,8 +13,7 @@ import { useEffect, useState } from "react";
 import { MapPin, Building, Shield, User, Loader2 } from "lucide-react";
 import type { Clinician } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
-
-const INSURERS = ["Aviva", "Axa", "Bupa", "Bupa Global", "Cigna", "Vitality", "WPA", "Other"];
+import { useInsurers } from "@/hooks/use-insurers";
 
 type ClinicianWithAvailability = Clinician & { availability: any[] };
 
@@ -22,6 +21,7 @@ export default function ClinicianProfile() {
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { data: insurerList = [] } = useInsurers();
   
   const { data: clinicianData, isLoading, error } = useQuery<ClinicianWithAvailability>({
     queryKey: ["/api/clinicians/me"],
@@ -179,7 +179,7 @@ export default function ClinicianProfile() {
               <div className="space-y-2">
                 <Label>Insurers Accepted</Label>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 border p-3 rounded-md bg-slate-50/50">
-                  {INSURERS.map(insurer => (
+                  {insurerList.map(insurer => (
                     <div key={insurer} className="flex items-center space-x-2">
                       <Checkbox 
                         id={`ins-${insurer}`} 

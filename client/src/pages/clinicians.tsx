@@ -15,8 +15,8 @@ import { MapPin, Building, Users, Shield, Edit, Briefcase, Lock, Mail, MessageSq
 import { useToast } from "@/hooks/use-toast";
 import type { Clinician, TimeSlot } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
+import { useInsurers } from "@/hooks/use-insurers";
 
-const INSURERS = ["Aviva", "Axa", "Bupa", "Bupa Global", "Cigna", "Vitality", "WPA", "Other"];
 const CONTACT_METHODS = ["Email", "Text", "WhatsApp"];
 
 type ClinicianWithName = Clinician & { name: string; email?: string | null; availability?: TimeSlot[] };
@@ -59,6 +59,7 @@ function getSlotCounts(availability?: TimeSlot[]) {
 export default function Clinicians() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { data: insurerList = [] } = useInsurers();
   
   const [selectedClinician, setSelectedClinician] = useState<ClinicianWithName | null>(null);
   const [editedClinician, setEditedClinician] = useState<Partial<ClinicianWithName & { email?: string }>>({});
@@ -476,7 +477,7 @@ export default function Clinicians() {
               <div className="space-y-2">
                 <Label>Insurers Accepted</Label>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 border p-3 rounded-md bg-slate-50/50">
-                  {INSURERS.map(insurer => (
+                  {insurerList.map(insurer => (
                     <div key={insurer} className="flex items-center space-x-2">
                       <Checkbox 
                         id={`ins-${insurer}`} 
@@ -675,7 +676,7 @@ export default function Clinicians() {
             <div className="space-y-2">
               <Label>Insurers Accepted</Label>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 border p-3 rounded-md bg-slate-50/50">
-                {INSURERS.map(insurer => (
+                {insurerList.map(insurer => (
                   <div key={insurer} className="flex items-center space-x-2">
                     <Checkbox 
                       id={`new-ins-${insurer}`} 

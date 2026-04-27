@@ -1,5 +1,5 @@
 import { 
-  users, clients, clinicians, timeSlots, formTemplates, formSubmissions, tasks, auditLogs, emailTemplates, inviteTokens, passwordResetTokens, nonEngagementCategories,
+  users, clients, clinicians, timeSlots, formTemplates, formSubmissions, tasks, auditLogs, emailTemplates, inviteTokens, passwordResetTokens, nonEngagementCategories, customInsurers,
   type User, type InsertUser, type SafeUser,
   type Client, type InsertClient,
   type Clinician, type InsertClinician,
@@ -11,7 +11,8 @@ import {
   type EmailTemplate, type InsertEmailTemplate,
   type InviteToken,
   type PasswordResetToken,
-  type NonEngagementCategory, type InsertNonEngagementCategory
+  type NonEngagementCategory, type InsertNonEngagementCategory,
+  type CustomInsurer, type InsertCustomInsurer
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, or, desc, sql, isNull, inArray } from "drizzle-orm";
@@ -102,6 +103,10 @@ export interface IStorage {
   getAllNonEngagementCategories(): Promise<NonEngagementCategory[]>;
   createNonEngagementCategory(category: InsertNonEngagementCategory): Promise<NonEngagementCategory>;
   deleteNonEngagementCategory(id: string): Promise<boolean>;
+
+  // ============ CUSTOM INSURERS ============
+  getCustomInsurers(): Promise<CustomInsurer[]>;
+  addCustomInsurer(name: string): Promise<CustomInsurer>;
 }
 
 // Database implementation with PostgreSQL
@@ -813,6 +818,16 @@ export class DatabaseStorage implements IStorage {
   async deleteNonEngagementCategory(id: string): Promise<boolean> {
     const result = await db.delete(nonEngagementCategories).where(eq(nonEngagementCategories.id, id));
     return (result.rowCount ?? 0) > 0;
+  }
+
+  // ============ CUSTOM INSURERS ============
+  async getCustomInsurers(): Promise<CustomInsurer[]> {
+    return await db.select().from(customInsurers).orderBy(customInsurers.name);
+  }
+
+  async addCustomInsurer(name: string): Promise<CustomInsurer> {
+    const [result] = await db.insert(customInsurers).values({ name }).returning();
+    return result;
   }
 }
 

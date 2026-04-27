@@ -21,10 +21,11 @@ export function useAddInsurer() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/insurers"] });
     },
-    onError: (error: any) => {
+    onError: (error: unknown) => {
+      const message = error instanceof Error ? error.message : "Please try again.";
       toast({
         title: "Failed to add insurer",
-        description: error?.message || "Please try again.",
+        description: message,
         variant: "destructive",
       });
     },

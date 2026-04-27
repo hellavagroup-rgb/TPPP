@@ -1678,7 +1678,7 @@ export async function registerRoutes(
   });
 
   // ============ CUSTOM INSURERS ============
-  const BUILTIN_INSURERS = ["Aviva", "Axa", "Bupa", "Bupa Global", "Cigna", "Vitality", "WPA"];
+  const BUILTIN_INSURERS = ["Aviva", "Axa", "Bupa", "Bupa Global", "Cigna", "Other", "Vitality", "WPA"];
 
   app.get("/api/insurers", requireAuth, async (req, res) => {
     try {
@@ -1697,13 +1697,18 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Insurer name is required" });
       }
       const trimmed = name.trim();
-      if (BUILTIN_INSURERS.map(i => i.toLowerCase()).includes(trimmed.toLowerCase())) {
+      const normalised = trimmed.toLowerCase();
+      if (BUILTIN_INSURERS.some(i => i.toLowerCase() === normalised)) {
+        return res.status(409).json({ error: "This insurer already exists" });
+      }
+      const existing = await storage.getCustomInsurers();
+      if (existing.some(c => c.name.toLowerCase() === normalised)) {
         return res.status(409).json({ error: "This insurer already exists" });
       }
       const insurer = await storage.addCustomInsurer(trimmed);
       res.json(insurer);
-    } catch (error: any) {
-      if (error?.code === "23505") {
+    } catch (error: unknown) {
+      if (typeof error === "object" && error !== null && "code" in error && (error as { code: unknown }).code === "23505") {
         return res.status(409).json({ error: "This insurer already exists" });
       }
       res.status(500).json({ error: "Failed to add insurer" });

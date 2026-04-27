@@ -58,6 +58,7 @@ import { format, parseISO, isSameDay } from "date-fns";
 import { apiRequest } from "@/lib/queryClient";
 import type { Client as ClientType, Clinician, FormTemplate as FormTemplateType, TimeSlot } from "@shared/schema";
 import { useInsurers, useAddInsurer } from "@/hooks/use-insurers";
+import { useAuth } from "@/lib/auth";
 
 type ClinicianWithAvailability = Clinician & { name: string; availability: TimeSlot[] };
 
@@ -109,6 +110,8 @@ function getSlotCounts(availability?: TimeSlot[]) {
 export default function Clients() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const [, setLocation] = useLocation();
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedClient, setSelectedClient] = useState<ClientType | null>(null);
@@ -958,7 +961,7 @@ export default function Clients() {
                                 {insurerList.map(ins => (
                                   <SelectItem key={ins} value={ins}>{ins}</SelectItem>
                                 ))}
-                                <SelectItem value="__add_new__" className="text-blue-600 font-medium">+ Add new insurer...</SelectItem>
+                                {isAdmin && <SelectItem value="__add_new__" className="text-blue-600 font-medium">+ Add new insurer...</SelectItem>}
                             </SelectContent>
                         </Select>
                     </div>
@@ -1825,7 +1828,7 @@ export default function Clients() {
                     {insurerList.map(ins => (
                       <SelectItem key={ins} value={ins}>{ins}</SelectItem>
                     ))}
-                    <SelectItem value="__add_new__" className="text-blue-600 font-medium">+ Add new insurer...</SelectItem>
+                    {isAdmin && <SelectItem value="__add_new__" className="text-blue-600 font-medium">+ Add new insurer...</SelectItem>}
                   </SelectContent>
                 </Select>
               </div>

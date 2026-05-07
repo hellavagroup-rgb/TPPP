@@ -129,7 +129,13 @@ export default function Availability() {
     enabled: user?.role === "admin",
   });
 
+  const { data: clinicianSlotClients = {} } = useQuery<Record<string, { displayId: string; status: string }>>({
+    queryKey: ["/api/clinicians/me/slot-clients"],
+    enabled: user?.role === "clinician",
+  });
+
   const slotToClientMap = useMemo(() => {
+    if (user?.role === "clinician") return clinicianSlotClients;
     const map: Record<string, { displayId: string; status: string }> = {};
     for (const client of clients) {
       if (client.assignedSlotId && client.displayId) {
@@ -137,7 +143,7 @@ export default function Availability() {
       }
     }
     return map;
-  }, [clients]);
+  }, [clients, clinicianSlotClients, user?.role]);
 
   const cliniciansWithSlots = useQuery<ClinicianWithSlots[]>({
     queryKey: ["/api/clinicians/with-slots"],
@@ -300,7 +306,6 @@ export default function Availability() {
       }
 
       if (slot.isBooked) {
-        if (user?.role === "clinician") return;
         const clientInfo = slotToClientMap[slot.id];
         if (clientInfo && clientInfo.status === "Scheduled") return;
       }

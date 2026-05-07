@@ -194,6 +194,23 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/clinicians/me/slot-clients", requireClinician, async (req, res) => {
+    try {
+      const clinician = await storage.getClinicianByUserId(req.user!.id);
+      if (!clinician) return res.status(404).json({ error: "Clinician profile not found" });
+      const allClients = await storage.getAllClients();
+      const map: Record<string, { displayId: string; status: string }> = {};
+      for (const client of allClients) {
+        if (client.assignedClinicianId === clinician.id && client.assignedSlotId && client.displayId) {
+          map[client.assignedSlotId] = { displayId: client.displayId, status: client.status };
+        }
+      }
+      res.json(map);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch slot client info" });
+    }
+  });
+
   app.patch("/api/clinicians/me", requireClinician, async (req, res) => {
     try {
       const clinician = await storage.getClinicianByUserId(req.user!.id);

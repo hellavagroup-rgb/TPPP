@@ -300,6 +300,7 @@ export default function Availability() {
       }
 
       if (slot.isBooked) {
+        if (user?.role === "clinician") return;
         const clientInfo = slotToClientMap[slot.id];
         if (clientInfo && clientInfo.status === "Scheduled") return;
       }

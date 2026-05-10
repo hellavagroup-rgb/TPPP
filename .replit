@@ -51,3 +51,7 @@ integrations = ["javascript_database:1.0.0"]
 
 [userenv.shared]
 FROM_EMAIL = "The Perinatal Psychology Practice <noreply@notifications.unboundly.io>"
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 120000

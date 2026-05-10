@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import crypto from "crypto";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import { storage } from "./storage";
 import { setupAuth, requireAuth, requireAdmin, requireClinician, hashPassword, auditLog } from "./auth";
 import passport from "passport";
@@ -1592,14 +1592,14 @@ export async function registerRoutes(
               ...fieldLabelsList.map(l => r.fieldMap[l] ?? ""),
             ]),
           ];
-          const wb = XLSX.utils.book_new();
-          const ws = XLSX.utils.aoa_to_sheet(wsData);
-          XLSX.utils.book_append_sheet(wb, ws, "Form Responses");
-          const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+          const wb = new ExcelJS.Workbook();
+          const ws = wb.addWorksheet("Form Responses");
+          wsData.forEach(row => ws.addRow(row));
+          const buf = await wb.xlsx.writeBuffer();
           const timestamp = new Date().toISOString().slice(0, 10);
           res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
           res.setHeader("Content-Disposition", `attachment; filename="${filename}_${timestamp}.xlsx"`);
-          return res.send(buf);
+          return res.send(Buffer.from(buf));
         }
 
         // CSV for form-responses
@@ -1649,19 +1649,22 @@ export async function registerRoutes(
       const timestamp = new Date().toISOString().slice(0, 10);
 
       if (format === "xlsx") {
-        const wb = XLSX.utils.book_new();
-        const ws = XLSX.utils.json_to_sheet(data.map(row => {
-          const flat: Record<string, any> = {};
+        const flatRows = data.map(row => {
+          const flat: Record<string, unknown> = {};
           for (const [k, v] of Object.entries(row)) {
             flat[k] = v != null && typeof v === "object" ? JSON.stringify(v) : v;
           }
           return flat;
-        }));
-        XLSX.utils.book_append_sheet(wb, ws, filename);
-        const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+        });
+        const headers = flatRows.length > 0 ? Object.keys(flatRows[0]) : [];
+        const wb = new ExcelJS.Workbook();
+        const ws = wb.addWorksheet(filename);
+        ws.addRow(headers);
+        flatRows.forEach(row => ws.addRow(headers.map(h => row[h])));
+        const buf = await wb.xlsx.writeBuffer();
         res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
         res.setHeader("Content-Disposition", `attachment; filename="${filename}_${timestamp}.xlsx"`);
-        return res.send(buf);
+        return res.send(Buffer.from(buf));
       }
 
       // CSV format

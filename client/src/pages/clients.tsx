@@ -438,6 +438,15 @@ export default function Clients() {
     }
   };
 
+  const escapeHtml = (str: string): string => {
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#x27;');
+  };
+
   const generatePDF = (submission: any) => {
     const formTitle = submission.formTitle;
     const responses = submission.responses || {};
@@ -447,7 +456,7 @@ export default function Clients() {
     let content = `
       <html>
       <head>
-        <title>${formTitle} - ${viewResponsesClient?.displayId}</title>
+        <title>${escapeHtml(String(formTitle))} - ${escapeHtml(String(viewResponsesClient?.displayId ?? ''))}</title>
         <style>
           body { font-family: Arial, sans-serif; padding: 40px; max-width: 800px; margin: 0 auto; }
           h1 { color: #1f2937; border-bottom: 2px solid #3b82f6; padding-bottom: 10px; }
@@ -460,37 +469,39 @@ export default function Clients() {
         </style>
       </head>
       <body>
-        <h1>${formTitle}</h1>
-        <p class="meta">Client ID: ${viewResponsesClient?.displayId} | Submitted: ${submission.submittedAt ? formatDateUK(submission.submittedAt) : 'N/A'}</p>
+        <h1>${escapeHtml(String(formTitle))}</h1>
+        <p class="meta">Client ID: ${escapeHtml(String(viewResponsesClient?.displayId ?? ''))} | Submitted: ${escapeHtml(submission.submittedAt ? formatDateUK(submission.submittedAt) : 'N/A')}</p>
     `;
 
     // Group responses by field
     fields.forEach((field: any) => {
       const value = responses[field.id];
       if (value !== undefined && value !== null && value !== '') {
-        let displayValue = value;
+        let displayValue: string;
         if (Array.isArray(value)) {
-          displayValue = value.join(', ');
+          displayValue = escapeHtml(value.join(', '));
         } else if (typeof value === 'boolean') {
           displayValue = value ? 'Yes' : 'No';
         } else if (typeof value === 'object' && value !== null) {
           // Handle availability picker or other object values
           const entries = Object.entries(value as Record<string, string[]>);
           if (entries.length > 0 && Array.isArray(entries[0][1])) {
-            // This is an availability picker value
+            // This is an availability picker value - day names and times come from our own schema, still escape for safety
             const availabilityLines = entries
               .filter(([_, times]) => times.length > 0)
-              .map(([day, times]) => `<strong>${day}:</strong> ${(times as string[]).sort().join(', ')}`)
+              .map(([day, times]) => `<strong>${escapeHtml(day)}:</strong> ${escapeHtml((times as string[]).sort().join(', '))}`)
               .join('<br>');
             displayValue = availabilityLines || 'No times selected';
           } else {
-            // Generic object - stringify it
-            displayValue = JSON.stringify(value);
+            // Generic object - stringify and escape it
+            displayValue = escapeHtml(JSON.stringify(value));
           }
+        } else {
+          displayValue = escapeHtml(String(value));
         }
         content += `
           <div class="field">
-            <div class="label">${field.label}</div>
+            <div class="label">${escapeHtml(String(field.label))}</div>
             <div class="value">${displayValue}</div>
           </div>
         `;

@@ -1607,7 +1607,9 @@ export async function registerRoutes(
         const csvHeaders = ["Client ID", "Client Name", "Form", "Submitted At", ...fieldLabelsList];
         const csvEscape = (v: any) => {
           const s = v != null ? String(v) : "";
-          return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s;
+          // Neutralize spreadsheet formula injection by prefixing dangerous lead chars
+          const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+          return safe.includes(",") || safe.includes('"') || safe.includes("\n") || safe.includes("\t") ? `"${safe.replace(/"/g, '""')}"` : safe;
         };
         const csvRows = [
           csvHeaders.map(csvEscape).join(","),
@@ -1670,18 +1672,20 @@ export async function registerRoutes(
       }
 
       const headers = Object.keys(data[0]);
+      const genericCsvEscape = (val: any): string => {
+        if (val === null || val === undefined) return "";
+        const str = String(val);
+        // Neutralize spreadsheet formula injection by prefixing dangerous lead chars
+        const safe = /^[=+\-@\t\r]/.test(str) ? `'${str}` : str;
+        if (safe.includes(",") || safe.includes('"') || safe.includes("\n") || safe.includes("\t")) {
+          return `"${safe.replace(/"/g, '""')}"`;
+        }
+        return safe;
+      };
       const csvRows = [
         headers.join(","),
         ...data.map(row =>
-          headers.map(h => {
-            const val = row[h];
-            if (val === null || val === undefined) return "";
-            const str = String(val);
-            if (str.includes(",") || str.includes('"') || str.includes("\n")) {
-              return `"${str.replace(/"/g, '""')}"`;
-            }
-            return str;
-          }).join(",")
+          headers.map(h => genericCsvEscape(row[h])).join(",")
         )
       ];
 

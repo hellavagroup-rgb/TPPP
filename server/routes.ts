@@ -689,6 +689,14 @@ export async function registerRoutes(
         }
       }
 
+      const slot = await storage.getTimeSlotById(req.params.slotId);
+      if (!slot) {
+        return res.status(404).json({ error: "Time slot not found" });
+      }
+      if (slot.clinicianId !== req.params.clinicianId) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+
       await storage.deleteTimeSlotById(req.params.slotId);
       const allSlots = await storage.getTimeSlotsByClinicianId(req.params.clinicianId);
       res.json(allSlots);

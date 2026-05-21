@@ -49,6 +49,7 @@ export interface IStorage {
   
   // ============ TIME SLOTS ============
   getTimeSlotsByClinicianId(clinicianId: string): Promise<TimeSlot[]>;
+  getTimeSlotById(id: string): Promise<TimeSlot | undefined>;
   createTimeSlot(slot: InsertTimeSlot): Promise<TimeSlot>;
   deleteTimeSlot(id: string): Promise<void>;
   addTimeSlots(clinicianId: string, newSlots: Omit<TimeSlot, 'id' | 'createdAt'>[]): Promise<TimeSlot[]>;
@@ -285,6 +286,11 @@ export class DatabaseStorage implements IStorage {
     }).where(eq(clinicians.id, clinicianId));
     
     return insertedSlots;
+  }
+
+  async getTimeSlotById(id: string): Promise<TimeSlot | undefined> {
+    const [slot] = await db.select().from(timeSlots).where(eq(timeSlots.id, id));
+    return slot;
   }
 
   async deleteTimeSlotById(id: string): Promise<boolean> {

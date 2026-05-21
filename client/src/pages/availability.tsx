@@ -120,7 +120,7 @@ export default function Availability() {
   const [allocatingClientId, setAllocatingClientId] = useState<string | null>(null);
   const [allocatingClient, setAllocatingClient] = useState<Client | null>(null);
 
-  const { data: clinicians = [] } = useQuery<(Clinician & { name: string })[]>({
+  const { data: clinicians = [] } = useQuery<(Clinician & { name: string; availability?: TimeSlot[] })[]>({
     queryKey: ["/api/clinicians"],
   });
 
@@ -145,26 +145,13 @@ export default function Availability() {
     return map;
   }, [clients, clinicianSlotClients, user?.role]);
 
-  const cliniciansWithSlots = useQuery<ClinicianWithSlots[]>({
-    queryKey: ["/api/clinicians/with-slots"],
-    queryFn: async () => {
-      const slotsPromises = clinicians.map(async (clinician) => {
-        try {
-          const response = await fetch(`/api/timeslots/${clinician.id}`, { credentials: "include" });
-          const slots = response.ok ? await response.json() : [];
-          return {
-            ...clinician,
-            avatar: clinician.name?.substring(0, 2).toUpperCase() || "??",
-            slots,
-          };
-        } catch {
-          return { ...clinician, avatar: clinician.name?.substring(0, 2).toUpperCase() || "??", slots: [] };
-        }
-      });
-      return Promise.all(slotsPromises);
-    },
-    enabled: clinicians.length > 0,
-  });
+  const cliniciansWithSlots = useMemo(() => ({
+    data: clinicians.map(clinician => ({
+      ...clinician,
+      avatar: clinician.name?.substring(0, 2).toUpperCase() || "??",
+      slots: clinician.availability || [],
+    })),
+  }), [clinicians]);
 
   const addSlotsMutation = useMutation({
     mutationFn: async ({ clinicianId, newSlots }: { clinicianId: string; newSlots: Partial<TimeSlot>[] }) => {
@@ -172,7 +159,7 @@ export default function Availability() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/clinicians/with-slots"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/clinicians"] });
     },
   });
 
@@ -182,7 +169,7 @@ export default function Availability() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/clinicians/with-slots"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/clinicians"] });
       toast({ title: "Slot Deleted", description: "Time slot has been permanently removed." });
       setIsDeleteOpen(false);
       setDeletingSlot(null);
@@ -207,7 +194,7 @@ export default function Availability() {
       window.history.replaceState({}, "", url.pathname);
       
       queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/clinicians/with-slots"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/clinicians"] });
       toast({ title: "Client Allocated", description: "Client has been assigned to the selected slot." });
       setIsAllocating(false);
       setAllocatingClientId(null);

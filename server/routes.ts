@@ -147,13 +147,18 @@ export async function registerRoutes(
       const clinicians = await storage.getAllClinicians();
       const allClients = await storage.getAllClients();
       
-      const legacyBookedSlots = new Map<string, Set<string>>();
+      // Build a count map: clinicianId -> { "day startTime" -> number of legacy clients }
+      // Using counts (not a Set) so two slots with the same day+time only get marked
+      // booked proportionally to the number of legacy clients at that exact time.
+      const legacyBookedSlots = new Map<string, Map<string, number>>();
       allClients.forEach(client => {
         if (client.assignedSlot && client.assignedClinicianId && !client.assignedSlotId &&
             !["Archived"].includes(client.status)) {
           const key = client.assignedClinicianId;
-          if (!legacyBookedSlots.has(key)) legacyBookedSlots.set(key, new Set());
-          legacyBookedSlots.get(key)!.add(client.assignedSlot.toLowerCase());
+          if (!legacyBookedSlots.has(key)) legacyBookedSlots.set(key, new Map());
+          const slotKey = client.assignedSlot.toLowerCase();
+          const clinicianMap = legacyBookedSlots.get(key)!;
+          clinicianMap.set(slotKey, (clinicianMap.get(slotKey) || 0) + 1);
         }
       });
 
@@ -161,10 +166,14 @@ export async function registerRoutes(
         clinicians.map(async (clinician) => {
           const availability = await storage.getTimeSlotsByClinicianId(clinician.id);
           const legacySlots = legacyBookedSlots.get(clinician.id);
+          // Clone the map so we can decrement counts as we consume them
+          const remainingCounts = legacySlots ? new Map(legacySlots) : null;
           const enrichedAvailability = availability.map(slot => {
-            if (!slot.isBooked && legacySlots && slot.day && slot.startTime) {
+            if (!slot.isBooked && remainingCounts && slot.day && slot.startTime) {
               const slotKey = `${slot.day} ${slot.startTime}`.toLowerCase();
-              if (legacySlots.has(slotKey)) {
+              const count = remainingCounts.get(slotKey) || 0;
+              if (count > 0) {
+                remainingCounts.set(slotKey, count - 1);
                 return { ...slot, isBooked: true };
               }
             }

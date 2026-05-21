@@ -174,7 +174,7 @@ export async function registerRoutes(
               const count = remainingCounts.get(slotKey) || 0;
               if (count > 0) {
                 remainingCounts.set(slotKey, count - 1);
-                return { ...slot, isBooked: true };
+                return { ...slot, isBooked: true, legacyBooked: true };
               }
             }
             return slot;

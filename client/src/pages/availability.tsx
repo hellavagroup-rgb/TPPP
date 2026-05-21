@@ -293,6 +293,7 @@ export default function Availability() {
       }
 
       if (slot.isBooked) {
+        if ((slot as any).legacyBooked) return;
         const clientInfo = slotToClientMap[slot.id];
         if (clientInfo && clientInfo.status === "Scheduled") return;
       }

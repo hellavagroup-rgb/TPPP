@@ -448,6 +448,35 @@ export default function Availability() {
       }
     }
 
+    // Prevent duplicate recurring slots (same day + startTime)
+    if (newSlotType === "Recurring") {
+      const existingClinician = cliniciansWithSlots.data.find((c: any) => c.id === dialogClinicianId);
+      const existingSlots: any[] = existingClinician?.slots || [];
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const activeExisting = existingSlots.filter((s: any) => {
+        if (s.type !== "Recurring") return false;
+        if (s.endDate) {
+          const end = new Date(s.endDate);
+          end.setHours(0, 0, 0, 0);
+          if (end < today) return false;
+        }
+        return true;
+      });
+      const duplicates = newSlots.filter(ns =>
+        activeExisting.some((es: any) => es.day === ns.day && es.startTime === (ns as any).startTime)
+      );
+      if (duplicates.length > 0) {
+        const dupDesc = duplicates.map(d => `${(d as any).day} at ${(d as any).startTime}`).join(", ");
+        toast({
+          title: "Duplicate Slot",
+          description: `This clinician already has an active slot on ${dupDesc}. Delete the existing slot first.`,
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
     addSlotsMutation.mutate({ clinicianId: dialogClinicianId, newSlots }, {
       onSuccess: () => {
         toast({

@@ -650,6 +650,35 @@ export async function registerRoutes(
       }
 
       const newSlots = req.body; // Array of new slots to add
+
+      // Prevent duplicate recurring slots (same day + startTime)
+      const newRecurring = Array.isArray(newSlots)
+        ? newSlots.filter((s: any) => s.type === "Recurring")
+        : [];
+      if (newRecurring.length > 0) {
+        const existing = await storage.getTimeSlotsByClinicianId(req.params.clinicianId);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const activeExisting = existing.filter(s => {
+          if (s.type !== "Recurring") return false;
+          if (s.endDate) {
+            const end = new Date(s.endDate);
+            end.setHours(0, 0, 0, 0);
+            if (end < today) return false;
+          }
+          return true;
+        });
+        const duplicates = newRecurring.filter((ns: any) =>
+          activeExisting.some(es => es.day === ns.day && es.startTime === ns.startTime)
+        );
+        if (duplicates.length > 0) {
+          const dupDesc = duplicates.map((d: any) => `${d.day} at ${d.startTime}`).join(", ");
+          return res.status(409).json({
+            error: `Duplicate slot: ${dupDesc}. This clinician already has an active slot at this time. Delete the existing slot first.`
+          });
+        }
+      }
+
       const inserted = await storage.addTimeSlots(req.params.clinicianId, newSlots);
       
       const clinician = await storage.getClinicianById(req.params.clinicianId);

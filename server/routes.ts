@@ -652,16 +652,43 @@ export async function registerRoutes(
       const newSlots = req.body; // Array of new slots to add
 
       // Prevent duplicate recurring slots (same day + startTime)
+      // Uses the same legacy-enrichment logic as the calendar so the check
+      // matches exactly what is visible as "open" on the availability calendar.
       const newRecurring = Array.isArray(newSlots)
         ? newSlots.filter((s: any) => s.type === "Recurring")
         : [];
       if (newRecurring.length > 0) {
         const existing = await storage.getTimeSlotsByClinicianId(req.params.clinicianId);
+        const allClients = await storage.getAllClients();
+
+        // Build legacy count map: "day starttime" -> number of legacy clients
+        const legacyCounts = new Map<string, number>();
+        allClients.forEach(c => {
+          if (c.assignedClinicianId === req.params.clinicianId &&
+              c.assignedSlot && !c.assignedSlotId &&
+              c.status !== "Archived") {
+            const key = c.assignedSlot.toLowerCase();
+            legacyCounts.set(key, (legacyCounts.get(key) || 0) + 1);
+          }
+        });
+
+        // Apply legacy enrichment to determine which slots are visible as open
+        const remainingCounts = new Map(legacyCounts);
         const today = new Date();
         today.setHours(0, 0, 0, 0);
-        const activeExisting = existing.filter(s => {
+        const visibleOpenSlots = existing.filter(s => {
           if (s.type !== "Recurring") return false;
-          if (s.isBooked) return false; // booked slots don't block new open slots
+          if (s.isBooked) return false;
+          // Check if a legacy client consumes this slot (making it invisible on calendar)
+          if (s.day && s.startTime) {
+            const key = `${s.day} ${s.startTime}`.toLowerCase();
+            const count = remainingCounts.get(key) || 0;
+            if (count > 0) {
+              remainingCounts.set(key, count - 1);
+              return false; // legacy-booked, not visible
+            }
+          }
+          // Check if expired
           if (s.endDate) {
             const end = new Date(s.endDate);
             end.setHours(0, 0, 0, 0);
@@ -669,13 +696,14 @@ export async function registerRoutes(
           }
           return true;
         });
+
         const duplicates = newRecurring.filter((ns: any) =>
-          activeExisting.some(es => es.day === ns.day && es.startTime === ns.startTime)
+          visibleOpenSlots.some(es => es.day === ns.day && es.startTime === ns.startTime)
         );
         if (duplicates.length > 0) {
           const dupDesc = duplicates.map((d: any) => `${d.day} at ${d.startTime}`).join(", ");
           return res.status(409).json({
-            error: `Duplicate slot: ${dupDesc}. This clinician already has an active slot at this time. Delete the existing slot first.`
+            error: `Duplicate slot: ${dupDesc}. This clinician already has an open slot at this time visible on the calendar.`
           });
         }
       }

@@ -295,7 +295,8 @@ export default function Availability() {
       if (slot.isBooked) {
         if ((slot as any).legacyBooked) return;
         const clientInfo = slotToClientMap[slot.id];
-        if (clientInfo && clientInfo.status === "Scheduled") return;
+        if (!clientInfo) return; // no active client linked — orphaned or legacy booking
+        if (clientInfo.status === "Scheduled") return;
       }
 
       if (slot.type === "Recurring") {

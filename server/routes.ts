@@ -74,21 +74,22 @@ export async function registerRoutes(
         ));
       const activeIds = activeSlotIds.map(r => r.assignedSlotId!);
 
-      let freedCount = 0;
+      let deletedCount = 0;
       if (staleSlotIds.length > 0) {
-        const slotsToFree = staleSlotIds.filter(id => !activeIds.includes(id));
-        if (slotsToFree.length > 0) {
-          await db.update(timeSlots)
-            .set({ isBooked: false })
-            .where(inArray(timeSlots.id, slotsToFree));
-          freedCount = slotsToFree.length;
+        // Delete orphaned booked slots — slots no active non-Scheduled client points at.
+        // These should have been deleted when the client was confirmed (matching intended
+        // behaviour). Deleting rather than freeing means they won't reappear as open slots.
+        const slotsToDelete = staleSlotIds.filter(id => !activeIds.includes(id));
+        if (slotsToDelete.length > 0) {
+          await db.delete(timeSlots).where(inArray(timeSlots.id, slotsToDelete));
+          deletedCount = slotsToDelete.length;
         }
       }
 
       res.json({
         success: true,
         clearedClientRefs: clearedCount,
-        freedSlots: freedCount,
+        deletedOrphanedSlots: deletedCount,
         affectedClients: staleClients.map(c => ({ displayId: c.displayId, slotId: c.assignedSlotId }))
       });
     } catch (error: any) {

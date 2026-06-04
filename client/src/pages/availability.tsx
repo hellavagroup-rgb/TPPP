@@ -457,7 +457,6 @@ export default function Availability() {
       today.setHours(0, 0, 0, 0);
       const activeExisting = existingSlots.filter((s: any) => {
         if (s.type !== "Recurring") return false;
-        if (s.isBooked) return false; // booked slots don't block new open slots
         if (s.endDate) {
           const end = new Date(s.endDate);
           end.setHours(0, 0, 0, 0);

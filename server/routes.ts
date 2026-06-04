@@ -672,23 +672,12 @@ export async function registerRoutes(
           }
         });
 
-        // Apply legacy enrichment to determine which slots are visible as open
-        const remainingCounts = new Map(legacyCounts);
+        // Block adding a slot if any active (non-expired) recurring slot already exists
+        // at the same day+time — regardless of whether it is currently booked or open.
         const today = new Date();
         today.setHours(0, 0, 0, 0);
-        const visibleOpenSlots = existing.filter(s => {
+        const activeSlots = existing.filter(s => {
           if (s.type !== "Recurring") return false;
-          if (s.isBooked) return false;
-          // Check if a legacy client consumes this slot (making it invisible on calendar)
-          if (s.day && s.startTime) {
-            const key = `${s.day} ${s.startTime}`.toLowerCase();
-            const count = remainingCounts.get(key) || 0;
-            if (count > 0) {
-              remainingCounts.set(key, count - 1);
-              return false; // legacy-booked, not visible
-            }
-          }
-          // Check if expired
           if (s.endDate) {
             const end = new Date(s.endDate);
             end.setHours(0, 0, 0, 0);
@@ -698,12 +687,12 @@ export async function registerRoutes(
         });
 
         const duplicates = newRecurring.filter((ns: any) =>
-          visibleOpenSlots.some(es => es.day === ns.day && es.startTime === ns.startTime)
+          activeSlots.some(es => es.day === ns.day && es.startTime === ns.startTime)
         );
         if (duplicates.length > 0) {
           const dupDesc = duplicates.map((d: any) => `${d.day} at ${d.startTime}`).join(", ");
           return res.status(409).json({
-            error: `Duplicate slot: ${dupDesc}. This clinician already has an open slot at this time visible on the calendar.`
+            error: `Duplicate slot: ${dupDesc}. This clinician already has a slot at this time. It will become available to re-add once the current client is confirmed.`
           });
         }
       }

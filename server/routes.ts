@@ -37,66 +37,6 @@ export async function registerRoutes(
     }
   });
 
-  // ONE-TIME DATA FIX: clear stale assigned_slot_id from Scheduled clients and
-  // free any orphaned booked slots. Remove this endpoint after running in production.
-  app.post("/api/admin/fix-stale-slot-references", requireAdmin, async (req, res) => {
-    try {
-      const { db } = await import("./db");
-      const { clients, timeSlots } = await import("../shared/schema");
-      const { eq, isNotNull, isNull, and, not, inArray } = await import("drizzle-orm");
-
-      // Step 1: find all Scheduled clients that still have an assigned_slot_id
-      const staleClients = await db
-        .select({ id: clients.id, displayId: clients.displayId, assignedSlotId: clients.assignedSlotId })
-        .from(clients)
-        .where(and(eq(clients.status, "Scheduled"), isNotNull(clients.assignedSlotId)));
-
-      const staleSlotIds = staleClients.map(c => c.assignedSlotId!);
-
-      // Step 2: clear the stale references
-      let clearedCount = 0;
-      if (staleClients.length > 0) {
-        await db.update(clients)
-          .set({ assignedSlotId: null })
-          .where(and(eq(clients.status, "Scheduled"), isNotNull(clients.assignedSlotId)));
-        clearedCount = staleClients.length;
-      }
-
-      // Step 3: free any booked slots that now have no active non-Scheduled client
-      // (slots where is_booked=true but nothing non-Scheduled points at them)
-      const activeSlotIds = await db
-        .select({ assignedSlotId: clients.assignedSlotId })
-        .from(clients)
-        .where(and(
-          isNotNull(clients.assignedSlotId),
-          isNull(clients.archivedAt),
-          not(eq(clients.status, "Scheduled"))
-        ));
-      const activeIds = activeSlotIds.map(r => r.assignedSlotId!);
-
-      let deletedCount = 0;
-      if (staleSlotIds.length > 0) {
-        // Delete orphaned booked slots — slots no active non-Scheduled client points at.
-        // These should have been deleted when the client was confirmed (matching intended
-        // behaviour). Deleting rather than freeing means they won't reappear as open slots.
-        const slotsToDelete = staleSlotIds.filter(id => !activeIds.includes(id));
-        if (slotsToDelete.length > 0) {
-          await db.delete(timeSlots).where(inArray(timeSlots.id, slotsToDelete));
-          deletedCount = slotsToDelete.length;
-        }
-      }
-
-      res.json({
-        success: true,
-        clearedClientRefs: clearedCount,
-        deletedOrphanedSlots: deletedCount,
-        affectedClients: staleClients.map(c => ({ displayId: c.displayId, slotId: c.assignedSlotId }))
-      });
-    } catch (error: any) {
-      console.error("fix-stale-slot-references failed:", error);
-      res.status(500).json({ error: error.message || "Fix failed" });
-    }
-  });
 
   // ============ AUTH ROUTES ============
   app.post("/api/auth/login", (req, res, next) => {

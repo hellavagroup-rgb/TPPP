@@ -14,7 +14,7 @@ import { sendEmail, generateFormInviteEmail, generatePasswordResetEmail, generat
 import { forceReseedDatabase } from "./seed";
 import { requireTenant } from './middleware/tenant';
 import { db } from "./db";
-import { tenants, users } from "@shared/schema";
+import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs } from "@shared/schema";
 import { isNull } from "drizzle-orm";
 
 export async function registerRoutes(
@@ -56,8 +56,25 @@ export async function registerRoutes(
       } else {
         console.log("Tenant already exists:", tenant.id);
       }
-      const updated = await db.update(users).set({ tenantId: tenant.id }).where(isNull(users.tenantId)).returning();
-      res.json({ success: true, tenantId: tenant.id, usersUpdated: updated.length });
+      const tables = [
+        { name: "users", table: users },
+        { name: "clients", table: clients },
+        { name: "clinicians", table: clinicians },
+        { name: "tasks", table: tasks },
+        { name: "formTemplates", table: formTemplates },
+        { name: "formSubmissions", table: formSubmissions },
+        { name: "timeSlots", table: timeSlots },
+        { name: "emailTemplates", table: emailTemplates },
+        { name: "nonEngagementCategories", table: nonEngagementCategories },
+        { name: "customInsurers", table: customInsurers },
+        { name: "auditLogs", table: auditLogs },
+      ];
+      const counts: Record<string, number> = {};
+      for (const { name, table } of tables) {
+        const updated = await (db.update(table) as any).set({ tenantId: tenant.id }).where(isNull((table as any).tenantId)).returning();
+        counts[name] = updated.length;
+      }
+      res.json({ success: true, tenantId: tenant.id, updated: counts });
     } catch (error) {
       console.error("Seed tenant error:", error);
       res.status(500).json({ error: "Failed to seed tenant" });

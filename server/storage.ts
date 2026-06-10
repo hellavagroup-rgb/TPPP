@@ -98,7 +98,7 @@ export interface IStorage {
   // ============ EMAIL TEMPLATES ============
   getAllEmailTemplates(tenantId: string): Promise<EmailTemplate[]>;
   getEmailTemplateByKey(templateKey: string): Promise<EmailTemplate | undefined>;
-  upsertEmailTemplate(template: InsertEmailTemplate): Promise<EmailTemplate>;
+  upsertEmailTemplate(template: InsertEmailTemplate & { tenantId: string }): Promise<EmailTemplate>;
 
   // ============ NON-ENGAGEMENT CATEGORIES ============
   getAllNonEngagementCategories(tenantId: string): Promise<NonEngagementCategory[]>;
@@ -796,21 +796,35 @@ export class DatabaseStorage implements IStorage {
     return template || undefined;
   }
 
-  async upsertEmailTemplate(template: InsertEmailTemplate): Promise<EmailTemplate> {
-    const [result] = await db
-      .insert(emailTemplates)
-      .values(template)
-      .onConflictDoUpdate({
-        target: emailTemplates.templateKey,
-        set: {
+  async upsertEmailTemplate(template: InsertEmailTemplate & { tenantId: string }): Promise<EmailTemplate> {
+    const existing = await db
+      .select()
+      .from(emailTemplates)
+      .where(and(
+        eq(emailTemplates.templateKey, template.templateKey),
+        eq(emailTemplates.tenantId, template.tenantId)
+      ))
+      .limit(1);
+
+    if (existing.length > 0) {
+      const [result] = await db
+        .update(emailTemplates)
+        .set({
           name: template.name,
           subject: template.subject,
           bodyText: template.bodyText,
           updatedAt: new Date(),
-        },
-      })
-      .returning();
-    return result;
+        })
+        .where(eq(emailTemplates.id, existing[0].id))
+        .returning();
+      return result;
+    } else {
+      const [result] = await db
+        .insert(emailTemplates)
+        .values(template)
+        .returning();
+      return result;
+    }
   }
 
   // ============ NON-ENGAGEMENT CATEGORIES ============

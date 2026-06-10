@@ -3,8 +3,27 @@ import { users, tenants } from "@shared/schema";
 import { eq } from "drizzle-orm";
 
 export async function requireTenant(req: any, res: any, next: any) {
-  if (!req.user?.id) {
+  const openPaths = [
+    '/api/auth/login',
+    '/api/auth/logout',
+    '/api/auth/forgot-password',
+    '/api/admin-users/accept-invite',
+  ];
+
+  if (
+    openPaths.some(path => req.path === path) ||
+    req.path.startsWith('/api/admin-users/invite/') ||
+    req.path.startsWith('/api/clients/public/') ||
+    req.path.startsWith('/api/forms/') ||
+    req.path.startsWith('/api/form-submissions') ||
+    req.path.startsWith('/api/form-drafts') ||
+    req.path === '/api/auth/me'
+  ) {
     return next();
+  }
+
+  if (!req.user?.id) {
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
   try {
@@ -15,11 +34,14 @@ export async function requireTenant(req: any, res: any, next: any) {
       .where(eq(users.id, req.user.id))
       .limit(1);
 
-    req.tenant = result[0]?.tenant || null;
+    if (!result.length || !result[0].tenant) {
+      return res.status(403).json({ error: 'No tenant found for this user' });
+    }
+
+    req.tenant = result[0].tenant;
     next();
   } catch (err) {
-    console.error("Tenant middleware error:", err);
-    req.tenant = null;
-    next();
+    console.error('Tenant middleware error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 }

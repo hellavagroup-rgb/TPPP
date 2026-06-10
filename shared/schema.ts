@@ -290,7 +290,7 @@ export type InviteToken = typeof inviteTokens.$inferSelect;
 // ============ CUSTOM INSURERS ============
 export const customInsurers = pgTable("custom_insurers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  name: text("name").notNull().unique(),
+  name: text("name").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   tenantId: varchar("tenant_id").references(() => tenants.id),
 });
@@ -302,7 +302,7 @@ export type CustomInsurer = typeof customInsurers.$inferSelect;
 // ============ NON-ENGAGEMENT CATEGORIES ============
 export const nonEngagementCategories = pgTable("non_engagement_categories", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  name: text("name").notNull().unique(),
+  name: text("name").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   tenantId: varchar("tenant_id").references(() => tenants.id),
 });

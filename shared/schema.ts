@@ -259,7 +259,7 @@ export type AuditLog = typeof auditLogs.$inferSelect;
 // ============ EMAIL TEMPLATES ============
 export const emailTemplates = pgTable("email_templates", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  templateKey: text("template_key").notNull().unique(), // "form_invite", "password_reset", "task_reminder", "availability_reminder"
+  templateKey: text("template_key").notNull(), // "form_invite", "password_reset", "task_reminder", "availability_reminder"
   name: text("name").notNull(), // Human-readable name
   subject: text("subject").notNull(),
   bodyText: text("body_text").notNull(), // Plain text version with placeholders

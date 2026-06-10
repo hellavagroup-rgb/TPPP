@@ -4,6 +4,19 @@ import { relations } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { z } from "zod";
 
+// ============ TENANTS ============
+export const tenants = pgTable("tenants", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  pmsType: text("pms_type"),
+  clinikoApiKey: text("cliniko_api_key"),
+  whatsappEnabled: boolean("whatsapp_enabled").default(false),
+  gmailAddress: text("gmail_address"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export type Tenant = typeof tenants.$inferSelect;
+
 // ============ USERS & AUTHENTICATION ============
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -18,6 +31,7 @@ export const users = pgTable("users", {
     taskAssignments?: boolean;
   }>().default({ newReferrals: true, waitlistUpdates: true, taskAssignments: true }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  tenantId: varchar("tenant_id").references(() => tenants.id),
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });
@@ -47,6 +61,7 @@ export const clinicians = pgTable("clinicians", {
   isActive: boolean("is_active").default(true).notNull(),
   lastUpdatedAvailability: timestamp("last_updated_availability"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  tenantId: varchar("tenant_id").references(() => tenants.id),
 });
 
 export const cliniciansRelations = relations(clinicians, ({ one, many }) => ({
@@ -80,6 +95,7 @@ export const timeSlots = pgTable("time_slots", {
   frequency: text("frequency", { enum: ["weekly", "fortnightly"] }).default("weekly"), // Schedule frequency
   isOngoing: boolean("is_ongoing").default(false), // Whether schedule continues indefinitely
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  tenantId: varchar("tenant_id").references(() => tenants.id),
 });
 
 export const timeSlotsRelations = relations(timeSlots, ({ one }) => ({
@@ -128,6 +144,7 @@ export const clients = pgTable("clients", {
   intakeDate: timestamp("intake_date").defaultNow().notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  tenantId: varchar("tenant_id").references(() => tenants.id),
 });
 
 export const clientsRelations = relations(clients, ({ one, many }) => ({
@@ -158,6 +175,7 @@ export const formTemplates = pgTable("form_templates", {
   fields: json("fields").notNull(), // Store form structure as JSON
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  tenantId: varchar("tenant_id").references(() => tenants.id),
 });
 
 export const insertFormTemplateSchema = createInsertSchema(formTemplates).omit({ id: true, createdAt: true, updatedAt: true });
@@ -174,6 +192,7 @@ export const formSubmissions = pgTable("form_submissions", {
   responses: json("responses").notNull(), // Encrypted sensitive health data
   isDraft: boolean("is_draft").default(false).notNull(),
   submittedAt: timestamp("submitted_at").defaultNow().notNull(),
+  tenantId: varchar("tenant_id").references(() => tenants.id),
 });
 
 export const formSubmissionsRelations = relations(formSubmissions, ({ one }) => ({
@@ -205,6 +224,7 @@ export const tasks = pgTable("tasks", {
   comments: text("comments"), // Comments added during task progress
   relatedClientId: varchar("related_client_id").references(() => clients.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  tenantId: varchar("tenant_id").references(() => tenants.id),
 });
 
 export const tasksRelations = relations(tasks, ({ one }) => ({
@@ -229,6 +249,7 @@ export const auditLogs = pgTable("audit_logs", {
   resourceId: varchar("resource_id"),
   ipAddress: text("ip_address"),
   timestamp: timestamp("timestamp").defaultNow().notNull(),
+  tenantId: varchar("tenant_id").references(() => tenants.id),
 });
 
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, timestamp: true });
@@ -243,6 +264,7 @@ export const emailTemplates = pgTable("email_templates", {
   subject: text("subject").notNull(),
   bodyText: text("body_text").notNull(), // Plain text version with placeholders
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  tenantId: varchar("tenant_id").references(() => tenants.id),
 });
 
 export const insertEmailTemplateSchema = createInsertSchema(emailTemplates).omit({ id: true, updatedAt: true });
@@ -270,6 +292,7 @@ export const customInsurers = pgTable("custom_insurers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull().unique(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  tenantId: varchar("tenant_id").references(() => tenants.id),
 });
 
 export const insertCustomInsurerSchema = createInsertSchema(customInsurers).omit({ id: true, createdAt: true });
@@ -281,6 +304,7 @@ export const nonEngagementCategories = pgTable("non_engagement_categories", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull().unique(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  tenantId: varchar("tenant_id").references(() => tenants.id),
 });
 
 export const insertNonEngagementCategorySchema = createInsertSchema(nonEngagementCategories).omit({ id: true, createdAt: true });

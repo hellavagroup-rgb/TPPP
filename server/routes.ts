@@ -13,6 +13,9 @@ import { z } from "zod";
 import { sendEmail, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateNewReferralEmail, generateWaitlistUpdateEmail } from "./email";
 import { forceReseedDatabase } from "./seed";
 import { requireTenant } from './middleware/tenant';
+import { db } from "./db";
+import { tenants, users } from "@shared/schema";
+import { isNull } from "drizzle-orm";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -36,6 +39,28 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Force reseed failed:", error);
       res.status(500).json({ error: "Failed to reseed database" });
+    }
+  });
+
+  // ONE-TIME migration: create default tenant and assign all users to it
+  app.post("/api/admin/seed-tenant", requireAdmin, async (req, res) => {
+    try {
+      const existing = await db.select().from(tenants).limit(1);
+      let tenant = existing[0];
+      if (!tenant) {
+        const [created] = await db.insert(tenants).values({
+          name: "The Perinatal Psychology Practice",
+        }).returning();
+        tenant = created;
+        console.log("Created tenant:", tenant.id);
+      } else {
+        console.log("Tenant already exists:", tenant.id);
+      }
+      const updated = await db.update(users).set({ tenantId: tenant.id }).where(isNull(users.tenantId)).returning();
+      res.json({ success: true, tenantId: tenant.id, usersUpdated: updated.length });
+    } catch (error) {
+      console.error("Seed tenant error:", error);
+      res.status(500).json({ error: "Failed to seed tenant" });
     }
   });
 

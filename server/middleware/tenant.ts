@@ -9,6 +9,7 @@ export async function requireTenant(req: any, res: any, next: any) {
     '/auth/forgot-password',
     '/admin-users/accept-invite',
     '/auth/me',
+    '/admin/seed-tenant',
   ];
 
   if (

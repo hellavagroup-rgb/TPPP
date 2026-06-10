@@ -34,14 +34,11 @@ export async function requireTenant(req: any, res: any, next: any) {
       .where(eq(users.id, req.user.id))
       .limit(1);
 
-    if (!result.length || !result[0].tenant) {
-      return res.status(403).json({ error: 'No tenant found for this user' });
-    }
-
-    req.tenant = result[0].tenant;
+    req.tenant = result[0]?.tenant || null;
     next();
   } catch (err) {
     console.error('Tenant middleware error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    req.tenant = null;
+    next();
   }
 }

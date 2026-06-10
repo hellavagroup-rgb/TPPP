@@ -147,8 +147,8 @@ export async function registerRoutes(
   // ============ CLINICIAN ROUTES ============
   app.get("/api/clinicians", requireAuth, async (req, res) => {
     try {
-      const clinicians = await storage.getAllClinicians();
-      const allClients = await storage.getAllClients();
+      const clinicians = await storage.getAllClinicians(req.tenant.id);
+      const allClients = await storage.getAllClients(false, req.tenant.id);
       
       // Build a count map: clinicianId -> { "day startTime" -> number of legacy clients }
       // Using counts (not a Set) so two slots with the same day+time only get marked
@@ -210,7 +210,7 @@ export async function registerRoutes(
     try {
       const clinician = await storage.getClinicianByUserId(req.user!.id);
       if (!clinician) return res.status(404).json({ error: "Clinician profile not found" });
-      const allClients = await storage.getAllClients();
+      const allClients = await storage.getAllClients(false, req.tenant.id);
       const map: Record<string, { displayId: string; status: string }> = {};
       for (const client of allClients) {
         if (client.assignedClinicianId === clinician.id && client.assignedSlotId && client.displayId) {
@@ -246,7 +246,7 @@ export async function registerRoutes(
   app.post("/api/clinicians", requireAdmin, async (req, res) => {
     try {
       const validated = insertClinicianSchema.parse(req.body);
-      const clinician = await storage.createClinician(validated);
+      const clinician = await storage.createClinician(validated, req.tenant.id);
       res.json(clinician);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -295,7 +295,7 @@ export async function registerRoutes(
         insurers: insurers || [],
         contactMethods: contactMethods || [],
         specialties: specialties || [],
-      });
+      }, req.tenant.id);
 
       res.json({ clinician });
     } catch (error) {
@@ -662,7 +662,7 @@ export async function registerRoutes(
         : [];
       if (newRecurring.length > 0) {
         const existing = await storage.getTimeSlotsByClinicianId(req.params.clinicianId);
-        const allClients = await storage.getAllClients();
+        const allClients = await storage.getAllClients(false, req.tenant.id);
 
         // Build legacy count map: "day starttime" -> number of legacy clients
         const legacyCounts = new Map<string, number>();
@@ -760,7 +760,7 @@ export async function registerRoutes(
   app.get("/api/clients", requireAdmin, auditLog("view", "client"), async (req, res) => {
     try {
       const includeArchived = req.query.includeArchived === "true";
-      const clients = await storage.getAllClients(includeArchived);
+      const clients = await storage.getAllClients(includeArchived, req.tenant.id);
       res.json(clients);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch clients" });
@@ -830,7 +830,7 @@ export async function registerRoutes(
   app.post("/api/clients", requireAdmin, auditLog("create", "client"), async (req, res) => {
     try {
       const validated = insertClientSchema.parse(req.body);
-      const client = await storage.createClient(validated);
+      const client = await storage.createClient(validated, req.tenant.id);
 
       // Send new referral notification to admins with newReferrals enabled
       try {
@@ -1057,7 +1057,7 @@ export async function registerRoutes(
           formTemplateId: formId,
           clientId,
           responses: data,
-        });
+        }, req.tenant.id);
       }
 
       // Extract insurer from form data if present
@@ -1209,7 +1209,7 @@ export async function registerRoutes(
   // ============ FORM TEMPLATES ============
   app.get("/api/forms", requireAuth, async (req, res) => {
     try {
-      const forms = await storage.getAllFormTemplates();
+      const forms = await storage.getAllFormTemplates(req.tenant.id);
       res.json(forms);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch forms" });
@@ -1238,7 +1238,7 @@ export async function registerRoutes(
   app.post("/api/forms", requireAdmin, async (req, res) => {
     try {
       const validated = insertFormTemplateSchema.parse(req.body);
-      const form = await storage.createFormTemplate(validated);
+      const form = await storage.createFormTemplate(validated, req.tenant.id);
       res.json(form);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -1282,7 +1282,7 @@ export async function registerRoutes(
 
   app.get("/api/tasks", requireAdmin, async (req, res) => {
     try {
-      const tasks = await storage.getAllTasks();
+      const tasks = await storage.getAllTasks(req.tenant.id);
       res.json(tasks);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch tasks" });
@@ -1297,7 +1297,7 @@ export async function registerRoutes(
         body.dueDate = new Date(body.dueDate);
       }
       const validated = insertTaskSchema.parse(body);
-      const task = await storage.createTask(validated);
+      const task = await storage.createTask(validated, req.tenant.id);
 
       if (validated.assignee) {
         try {
@@ -1450,7 +1450,7 @@ export async function registerRoutes(
   // Send availability reminders to all clinicians
   app.post("/api/email/availability-reminders", requireAdmin, async (req, res) => {
     try {
-      const clinicians = await storage.getAllClinicians();
+      const clinicians = await storage.getAllClinicians(req.tenant.id);
       
       // Get the login URL
       const baseUrl = req.headers.host?.includes('replit.app')
@@ -1578,7 +1578,7 @@ export async function registerRoutes(
   // ============ EMAIL TEMPLATES ============
   app.get("/api/email-templates", requireAdmin, async (req, res) => {
     try {
-      const templates = await storage.getAllEmailTemplates();
+      const templates = await storage.getAllEmailTemplates(req.tenant.id);
       res.json(templates);
     } catch (error) {
       console.error("Get email templates error:", error);
@@ -1610,6 +1610,7 @@ export async function registerRoutes(
         name,
         subject,
         bodyText,
+        tenantId: req.tenant.id,
       });
       res.json(template);
     } catch (error) {
@@ -1695,17 +1696,17 @@ export async function registerRoutes(
 
       switch (type) {
         case "clients": {
-          data = await storage.getAllClients(true);
+          data = await storage.getAllClients(true, req.tenant.id);
           filename = "clients";
           break;
         }
         case "clinicians": {
-          data = await storage.getAllClinicians();
+          data = await storage.getAllClinicians(req.tenant.id);
           filename = "clinicians";
           break;
         }
         case "tasks": {
-          data = await storage.getAllTasks();
+          data = await storage.getAllTasks(req.tenant.id);
           filename = "tasks";
           break;
         }
@@ -1773,7 +1774,7 @@ export async function registerRoutes(
 
   app.get("/api/insurers", requireAuth, async (req, res) => {
     try {
-      const custom = await storage.getCustomInsurers();
+      const custom = await storage.getCustomInsurers(req.tenant.id);
       const customNames = custom.map(c => c.name).filter(n => !BUILTIN_INSURERS.includes(n));
       res.json([...BUILTIN_INSURERS, ...customNames]);
     } catch (error) {
@@ -1792,11 +1793,11 @@ export async function registerRoutes(
       if (BUILTIN_INSURERS.some(i => i.toLowerCase() === normalised)) {
         return res.status(409).json({ error: "This insurer already exists" });
       }
-      const existing = await storage.getCustomInsurers();
+      const existing = await storage.getCustomInsurers(req.tenant.id);
       if (existing.some(c => c.name.toLowerCase() === normalised)) {
         return res.status(409).json({ error: "This insurer already exists" });
       }
-      const insurer = await storage.addCustomInsurer(trimmed);
+      const insurer = await storage.addCustomInsurer(trimmed, req.tenant.id);
       res.json(insurer);
     } catch (error: unknown) {
       if (typeof error === "object" && error !== null && "code" in error && (error as { code: unknown }).code === "23505") {
@@ -1809,7 +1810,7 @@ export async function registerRoutes(
   // ============ NON-ENGAGEMENT CATEGORIES ============
   app.get("/api/non-engagement-categories", requireAdmin, async (req, res) => {
     try {
-      const categories = await storage.getAllNonEngagementCategories();
+      const categories = await storage.getAllNonEngagementCategories(req.tenant.id);
       res.json(categories);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch categories" });
@@ -1822,7 +1823,7 @@ export async function registerRoutes(
       if (!name || !name.trim()) {
         return res.status(400).json({ error: "Category name is required" });
       }
-      const category = await storage.createNonEngagementCategory({ name: name.trim() });
+      const category = await storage.createNonEngagementCategory({ name: name.trim() }, req.tenant.id);
       res.json(category);
     } catch (error: any) {
       if (error?.constraint || error?.code === "23505") {

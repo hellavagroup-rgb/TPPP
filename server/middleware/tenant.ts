@@ -4,20 +4,20 @@ import { eq } from "drizzle-orm";
 
 export async function requireTenant(req: any, res: any, next: any) {
   const openPaths = [
-    '/api/auth/login',
-    '/api/auth/logout',
-    '/api/auth/forgot-password',
-    '/api/admin-users/accept-invite',
+    '/auth/login',
+    '/auth/logout',
+    '/auth/forgot-password',
+    '/admin-users/accept-invite',
+    '/auth/me',
   ];
 
   if (
     openPaths.some(path => req.path === path) ||
-    req.path.startsWith('/api/admin-users/invite/') ||
-    req.path.startsWith('/api/clients/public/') ||
-    req.path.startsWith('/api/forms/') ||
-    req.path.startsWith('/api/form-submissions') ||
-    req.path.startsWith('/api/form-drafts') ||
-    req.path === '/api/auth/me'
+    req.path.startsWith('/admin-users/invite/') ||
+    req.path.startsWith('/clients/public/') ||
+    req.path.startsWith('/forms/') ||
+    req.path.startsWith('/form-submissions') ||
+    req.path.startsWith('/form-drafts')
   ) {
     return next();
   }

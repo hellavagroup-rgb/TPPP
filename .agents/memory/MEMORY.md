@@ -1,0 +1,1 @@
+- [Express middleware mount path stripping](express-middleware-mount-path.md) — app.use('/api', fn): req.path inside fn is the path AFTER the mount prefix, not the full URL.

@@ -43,7 +43,7 @@ export interface IStorage {
   getAllClinicians(tenantId: string): Promise<Clinician[]>;
   getClinicianById(id: string): Promise<Clinician | undefined>;
   getClinicianByUserId(userId: string): Promise<Clinician | undefined>;
-  createClinician(clinician: InsertClinician): Promise<Clinician>;
+  createClinician(clinician: InsertClinician, tenantId: string): Promise<Clinician>;
   updateClinician(id: string, updates: Partial<InsertClinician>): Promise<Clinician | undefined>;
   deleteClinician(id: string): Promise<void>;
   
@@ -60,7 +60,7 @@ export interface IStorage {
   getAllClients(includeArchived?: boolean, tenantId?: string): Promise<Client[]>;
   getClientById(id: string): Promise<Client | undefined>;
   getClientByDisplayId(displayId: string): Promise<Client | undefined>;
-  createClient(client: InsertClient): Promise<Client>;
+  createClient(client: InsertClient, tenantId: string): Promise<Client>;
   updateClient(id: string, updates: Partial<InsertClient>): Promise<Client | undefined>;
   archiveClient(id: string, reason?: string, category?: string): Promise<Client | undefined>;
   restoreClient(id: string): Promise<Client | undefined>;
@@ -71,14 +71,14 @@ export interface IStorage {
   // ============ FORMS ============
   getAllFormTemplates(tenantId: string): Promise<FormTemplate[]>;
   getFormTemplateById(id: string): Promise<FormTemplate | undefined>;
-  createFormTemplate(form: InsertFormTemplate): Promise<FormTemplate>;
+  createFormTemplate(form: InsertFormTemplate, tenantId: string): Promise<FormTemplate>;
   updateFormTemplate(id: string, updates: Partial<InsertFormTemplate>): Promise<FormTemplate | undefined>;
   deleteFormTemplate(id: string): Promise<void>;
   
   // ============ FORM SUBMISSIONS ============
   getAllCompletedFormSubmissions(): Promise<{ submission: FormSubmission; clientName: string; clientDisplayId: string; formTitle: string; formFields: any[] }[]>;
   getFormSubmissionsByClientId(clientId: string): Promise<FormSubmission[]>;
-  createFormSubmission(submission: InsertFormSubmission): Promise<FormSubmission>;
+  createFormSubmission(submission: InsertFormSubmission, tenantId: string): Promise<FormSubmission>;
   getDraftSubmission(clientId: string, formTemplateId: string): Promise<FormSubmission | undefined>;
   saveOrUpdateDraft(clientId: string, formTemplateId: string, responses: any): Promise<FormSubmission>;
   submitDraft(submissionId: string, responses: any): Promise<FormSubmission | undefined>;
@@ -86,7 +86,7 @@ export interface IStorage {
   // ============ TASKS ============
   getAllTasks(tenantId: string): Promise<Task[]>;
   getTaskById(id: string): Promise<Task | undefined>;
-  createTask(task: InsertTask): Promise<Task>;
+  createTask(task: InsertTask, tenantId: string): Promise<Task>;
   updateTask(id: string, updates: Partial<InsertTask>): Promise<Task | undefined>;
   deleteTask(id: string): Promise<void>;
   
@@ -102,12 +102,12 @@ export interface IStorage {
 
   // ============ NON-ENGAGEMENT CATEGORIES ============
   getAllNonEngagementCategories(tenantId: string): Promise<NonEngagementCategory[]>;
-  createNonEngagementCategory(category: InsertNonEngagementCategory): Promise<NonEngagementCategory>;
+  createNonEngagementCategory(category: InsertNonEngagementCategory, tenantId: string): Promise<NonEngagementCategory>;
   deleteNonEngagementCategory(id: string): Promise<boolean>;
 
   // ============ CUSTOM INSURERS ============
   getCustomInsurers(tenantId: string): Promise<CustomInsurer[]>;
-  addCustomInsurer(name: string): Promise<CustomInsurer>;
+  addCustomInsurer(name: string, tenantId: string): Promise<CustomInsurer>;
 }
 
 // Database implementation with PostgreSQL
@@ -231,8 +231,8 @@ export class DatabaseStorage implements IStorage {
     return clinician || undefined;
   }
 
-  async createClinician(insertClinician: InsertClinician): Promise<Clinician> {
-    const [clinician] = await db.insert(clinicians).values(insertClinician).returning();
+  async createClinician(insertClinician: InsertClinician, tenantId: string): Promise<Clinician> {
+    const [clinician] = await db.insert(clinicians).values({ ...insertClinician, tenantId }).returning();
     return clinician;
   }
 
@@ -420,8 +420,8 @@ export class DatabaseStorage implements IStorage {
     return client || undefined;
   }
 
-  async createClient(insertClient: InsertClient): Promise<Client> {
-    const [client] = await db.insert(clients).values(insertClient).returning();
+  async createClient(insertClient: InsertClient, tenantId: string): Promise<Client> {
+    const [client] = await db.insert(clients).values({ ...insertClient, tenantId }).returning();
     return client;
   }
 
@@ -634,8 +634,8 @@ export class DatabaseStorage implements IStorage {
     return form || undefined;
   }
 
-  async createFormTemplate(insertForm: InsertFormTemplate): Promise<FormTemplate> {
-    const [form] = await db.insert(formTemplates).values(insertForm).returning();
+  async createFormTemplate(insertForm: InsertFormTemplate, tenantId: string): Promise<FormTemplate> {
+    const [form] = await db.insert(formTemplates).values({ ...insertForm, tenantId }).returning();
     return form;
   }
 
@@ -689,8 +689,8 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(formSubmissions).where(eq(formSubmissions.clientId, clientId));
   }
 
-  async createFormSubmission(submission: InsertFormSubmission): Promise<FormSubmission> {
-    const [newSubmission] = await db.insert(formSubmissions).values(submission).returning();
+  async createFormSubmission(submission: InsertFormSubmission, tenantId: string): Promise<FormSubmission> {
+    const [newSubmission] = await db.insert(formSubmissions).values({ ...submission, tenantId }).returning();
     return newSubmission;
   }
 
@@ -750,8 +750,8 @@ export class DatabaseStorage implements IStorage {
     return task || undefined;
   }
 
-  async createTask(insertTask: InsertTask): Promise<Task> {
-    const [task] = await db.insert(tasks).values(insertTask).returning();
+  async createTask(insertTask: InsertTask, tenantId: string): Promise<Task> {
+    const [task] = await db.insert(tasks).values({ ...insertTask, tenantId }).returning();
     return task;
   }
 
@@ -818,8 +818,8 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(nonEngagementCategories).where(eq(nonEngagementCategories.tenantId, tenantId)).orderBy(nonEngagementCategories.name);
   }
 
-  async createNonEngagementCategory(category: InsertNonEngagementCategory): Promise<NonEngagementCategory> {
-    const [result] = await db.insert(nonEngagementCategories).values(category).returning();
+  async createNonEngagementCategory(category: InsertNonEngagementCategory, tenantId: string): Promise<NonEngagementCategory> {
+    const [result] = await db.insert(nonEngagementCategories).values({ ...category, tenantId }).returning();
     return result;
   }
 
@@ -833,8 +833,8 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(customInsurers).where(eq(customInsurers.tenantId, tenantId)).orderBy(customInsurers.name);
   }
 
-  async addCustomInsurer(name: string): Promise<CustomInsurer> {
-    const [result] = await db.insert(customInsurers).values({ name }).returning();
+  async addCustomInsurer(name: string, tenantId: string): Promise<CustomInsurer> {
+    const [result] = await db.insert(customInsurers).values({ name, tenantId }).returning();
     return result;
   }
 }

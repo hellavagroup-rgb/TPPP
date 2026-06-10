@@ -40,10 +40,10 @@ export interface IStorage {
   markPasswordResetTokenUsed(tokenId: string): Promise<void>;
   
   // ============ CLINICIANS ============
-  getAllClinicians(tenantId: string): Promise<Clinician[]>;
+  getAllClinicians(tenantId?: string | null): Promise<Clinician[]>;
   getClinicianById(id: string): Promise<Clinician | undefined>;
   getClinicianByUserId(userId: string): Promise<Clinician | undefined>;
-  createClinician(clinician: InsertClinician, tenantId: string): Promise<Clinician>;
+  createClinician(clinician: InsertClinician, tenantId?: string | null): Promise<Clinician>;
   updateClinician(id: string, updates: Partial<InsertClinician>): Promise<Clinician | undefined>;
   deleteClinician(id: string): Promise<void>;
   
@@ -60,7 +60,7 @@ export interface IStorage {
   getAllClients(includeArchived?: boolean, tenantId?: string): Promise<Client[]>;
   getClientById(id: string): Promise<Client | undefined>;
   getClientByDisplayId(displayId: string): Promise<Client | undefined>;
-  createClient(client: InsertClient, tenantId: string): Promise<Client>;
+  createClient(client: InsertClient, tenantId?: string | null): Promise<Client>;
   updateClient(id: string, updates: Partial<InsertClient>): Promise<Client | undefined>;
   archiveClient(id: string, reason?: string, category?: string): Promise<Client | undefined>;
   restoreClient(id: string): Promise<Client | undefined>;
@@ -69,24 +69,24 @@ export interface IStorage {
   reassignClient(clientId: string, newClinicianId: string | null, newSlotId: string | null, newStatus: string): Promise<Client | undefined>;
   
   // ============ FORMS ============
-  getAllFormTemplates(tenantId: string): Promise<FormTemplate[]>;
+  getAllFormTemplates(tenantId?: string | null): Promise<FormTemplate[]>;
   getFormTemplateById(id: string): Promise<FormTemplate | undefined>;
-  createFormTemplate(form: InsertFormTemplate, tenantId: string): Promise<FormTemplate>;
+  createFormTemplate(form: InsertFormTemplate, tenantId?: string | null): Promise<FormTemplate>;
   updateFormTemplate(id: string, updates: Partial<InsertFormTemplate>): Promise<FormTemplate | undefined>;
   deleteFormTemplate(id: string): Promise<void>;
   
   // ============ FORM SUBMISSIONS ============
   getAllCompletedFormSubmissions(): Promise<{ submission: FormSubmission; clientName: string; clientDisplayId: string; formTitle: string; formFields: any[] }[]>;
   getFormSubmissionsByClientId(clientId: string): Promise<FormSubmission[]>;
-  createFormSubmission(submission: InsertFormSubmission, tenantId: string): Promise<FormSubmission>;
+  createFormSubmission(submission: InsertFormSubmission, tenantId?: string | null): Promise<FormSubmission>;
   getDraftSubmission(clientId: string, formTemplateId: string): Promise<FormSubmission | undefined>;
   saveOrUpdateDraft(clientId: string, formTemplateId: string, responses: any): Promise<FormSubmission>;
   submitDraft(submissionId: string, responses: any): Promise<FormSubmission | undefined>;
   
   // ============ TASKS ============
-  getAllTasks(tenantId: string): Promise<Task[]>;
+  getAllTasks(tenantId?: string | null): Promise<Task[]>;
   getTaskById(id: string): Promise<Task | undefined>;
-  createTask(task: InsertTask, tenantId: string): Promise<Task>;
+  createTask(task: InsertTask, tenantId?: string | null): Promise<Task>;
   updateTask(id: string, updates: Partial<InsertTask>): Promise<Task | undefined>;
   deleteTask(id: string): Promise<void>;
   
@@ -96,18 +96,18 @@ export interface IStorage {
   getRecentAuditLogs(limit?: number, action?: string): Promise<AuditLog[]>;
 
   // ============ EMAIL TEMPLATES ============
-  getAllEmailTemplates(tenantId: string): Promise<EmailTemplate[]>;
+  getAllEmailTemplates(tenantId?: string | null): Promise<EmailTemplate[]>;
   getEmailTemplateByKey(templateKey: string): Promise<EmailTemplate | undefined>;
-  upsertEmailTemplate(template: InsertEmailTemplate & { tenantId: string }): Promise<EmailTemplate>;
+  upsertEmailTemplate(template: InsertEmailTemplate & { tenantId?: string | null }): Promise<EmailTemplate>;
 
   // ============ NON-ENGAGEMENT CATEGORIES ============
-  getAllNonEngagementCategories(tenantId: string): Promise<NonEngagementCategory[]>;
-  createNonEngagementCategory(category: InsertNonEngagementCategory, tenantId: string): Promise<NonEngagementCategory>;
+  getAllNonEngagementCategories(tenantId?: string | null): Promise<NonEngagementCategory[]>;
+  createNonEngagementCategory(category: InsertNonEngagementCategory, tenantId?: string | null): Promise<NonEngagementCategory>;
   deleteNonEngagementCategory(id: string): Promise<boolean>;
 
   // ============ CUSTOM INSURERS ============
-  getCustomInsurers(tenantId: string): Promise<CustomInsurer[]>;
-  addCustomInsurer(name: string, tenantId: string): Promise<CustomInsurer>;
+  getCustomInsurers(tenantId?: string | null): Promise<CustomInsurer[]>;
+  addCustomInsurer(name: string, tenantId?: string | null): Promise<CustomInsurer>;
 }
 
 // Database implementation with PostgreSQL
@@ -190,7 +190,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ============ CLINICIANS ============
-  async getAllClinicians(tenantId: string): Promise<(Clinician & { name: string })[]> {
+  async getAllClinicians(tenantId?: string | null): Promise<(Clinician & { name: string })[]> {
     const result = await db
       .select({
         id: clinicians.id,
@@ -216,7 +216,7 @@ export class DatabaseStorage implements IStorage {
       })
       .from(clinicians)
       .leftJoin(users, eq(clinicians.userId, users.id))
-      .where(eq(clinicians.tenantId, tenantId))
+      .where(tenantId ? eq(clinicians.tenantId, tenantId) : undefined)
       .orderBy(clinicians.createdAt);
     return result.map(r => ({ ...r, name: r.name || 'Unknown' }));
   }
@@ -231,8 +231,8 @@ export class DatabaseStorage implements IStorage {
     return clinician || undefined;
   }
 
-  async createClinician(insertClinician: InsertClinician, tenantId: string): Promise<Clinician> {
-    const [clinician] = await db.insert(clinicians).values({ ...insertClinician, tenantId }).returning();
+  async createClinician(insertClinician: InsertClinician, tenantId?: string | null): Promise<Clinician> {
+    const [clinician] = await db.insert(clinicians).values({ ...insertClinician, ...(tenantId ? { tenantId } : {}) }).returning();
     return clinician;
   }
 
@@ -420,8 +420,8 @@ export class DatabaseStorage implements IStorage {
     return client || undefined;
   }
 
-  async createClient(insertClient: InsertClient, tenantId: string): Promise<Client> {
-    const [client] = await db.insert(clients).values({ ...insertClient, tenantId }).returning();
+  async createClient(insertClient: InsertClient, tenantId?: string | null): Promise<Client> {
+    const [client] = await db.insert(clients).values({ ...insertClient, ...(tenantId ? { tenantId } : {}) }).returning();
     return client;
   }
 
@@ -625,8 +625,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ============ FORMS ============
-  async getAllFormTemplates(tenantId: string): Promise<FormTemplate[]> {
-    return await db.select().from(formTemplates).where(eq(formTemplates.tenantId, tenantId)).orderBy(formTemplates.createdAt);
+  async getAllFormTemplates(tenantId?: string | null): Promise<FormTemplate[]> {
+    return await db.select().from(formTemplates).where(tenantId ? eq(formTemplates.tenantId, tenantId) : undefined).orderBy(formTemplates.createdAt);
   }
 
   async getFormTemplateById(id: string): Promise<FormTemplate | undefined> {
@@ -634,8 +634,8 @@ export class DatabaseStorage implements IStorage {
     return form || undefined;
   }
 
-  async createFormTemplate(insertForm: InsertFormTemplate, tenantId: string): Promise<FormTemplate> {
-    const [form] = await db.insert(formTemplates).values({ ...insertForm, tenantId }).returning();
+  async createFormTemplate(insertForm: InsertFormTemplate, tenantId?: string | null): Promise<FormTemplate> {
+    const [form] = await db.insert(formTemplates).values({ ...insertForm, ...(tenantId ? { tenantId } : {}) }).returning();
     return form;
   }
 
@@ -689,8 +689,8 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(formSubmissions).where(eq(formSubmissions.clientId, clientId));
   }
 
-  async createFormSubmission(submission: InsertFormSubmission, tenantId: string): Promise<FormSubmission> {
-    const [newSubmission] = await db.insert(formSubmissions).values({ ...submission, tenantId }).returning();
+  async createFormSubmission(submission: InsertFormSubmission, tenantId?: string | null): Promise<FormSubmission> {
+    const [newSubmission] = await db.insert(formSubmissions).values({ ...submission, ...(tenantId ? { tenantId } : {}) }).returning();
     return newSubmission;
   }
 
@@ -741,8 +741,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ============ TASKS ============
-  async getAllTasks(tenantId: string): Promise<Task[]> {
-    return await db.select().from(tasks).where(eq(tasks.tenantId, tenantId)).orderBy(desc(tasks.dueDate));
+  async getAllTasks(tenantId?: string | null): Promise<Task[]> {
+    return await db.select().from(tasks).where(tenantId ? eq(tasks.tenantId, tenantId) : undefined).orderBy(desc(tasks.dueDate));
   }
 
   async getTaskById(id: string): Promise<Task | undefined> {
@@ -750,8 +750,8 @@ export class DatabaseStorage implements IStorage {
     return task || undefined;
   }
 
-  async createTask(insertTask: InsertTask, tenantId: string): Promise<Task> {
-    const [task] = await db.insert(tasks).values({ ...insertTask, tenantId }).returning();
+  async createTask(insertTask: InsertTask, tenantId?: string | null): Promise<Task> {
+    const [task] = await db.insert(tasks).values({ ...insertTask, ...(tenantId ? { tenantId } : {}) }).returning();
     return task;
   }
 
@@ -787,8 +787,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ============ EMAIL TEMPLATES ============
-  async getAllEmailTemplates(tenantId: string): Promise<EmailTemplate[]> {
-    return await db.select().from(emailTemplates).where(eq(emailTemplates.tenantId, tenantId));
+  async getAllEmailTemplates(tenantId?: string | null): Promise<EmailTemplate[]> {
+    return await db.select().from(emailTemplates).where(tenantId ? eq(emailTemplates.tenantId, tenantId) : undefined);
   }
 
   async getEmailTemplateByKey(templateKey: string): Promise<EmailTemplate | undefined> {
@@ -796,14 +796,14 @@ export class DatabaseStorage implements IStorage {
     return template || undefined;
   }
 
-  async upsertEmailTemplate(template: InsertEmailTemplate & { tenantId: string }): Promise<EmailTemplate> {
+  async upsertEmailTemplate(template: InsertEmailTemplate & { tenantId?: string | null }): Promise<EmailTemplate> {
     const existing = await db
       .select()
       .from(emailTemplates)
-      .where(and(
-        eq(emailTemplates.templateKey, template.templateKey),
-        eq(emailTemplates.tenantId, template.tenantId)
-      ))
+      .where(template.tenantId
+        ? and(eq(emailTemplates.templateKey, template.templateKey), eq(emailTemplates.tenantId, template.tenantId))
+        : eq(emailTemplates.templateKey, template.templateKey)
+      )
       .limit(1);
 
     if (existing.length > 0) {
@@ -828,12 +828,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ============ NON-ENGAGEMENT CATEGORIES ============
-  async getAllNonEngagementCategories(tenantId: string): Promise<NonEngagementCategory[]> {
-    return await db.select().from(nonEngagementCategories).where(eq(nonEngagementCategories.tenantId, tenantId)).orderBy(nonEngagementCategories.name);
+  async getAllNonEngagementCategories(tenantId?: string | null): Promise<NonEngagementCategory[]> {
+    return await db.select().from(nonEngagementCategories).where(tenantId ? eq(nonEngagementCategories.tenantId, tenantId) : undefined).orderBy(nonEngagementCategories.name);
   }
 
-  async createNonEngagementCategory(category: InsertNonEngagementCategory, tenantId: string): Promise<NonEngagementCategory> {
-    const [result] = await db.insert(nonEngagementCategories).values({ ...category, tenantId }).returning();
+  async createNonEngagementCategory(category: InsertNonEngagementCategory, tenantId?: string | null): Promise<NonEngagementCategory> {
+    const [result] = await db.insert(nonEngagementCategories).values({ ...category, ...(tenantId ? { tenantId } : {}) }).returning();
     return result;
   }
 
@@ -843,12 +843,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ============ CUSTOM INSURERS ============
-  async getCustomInsurers(tenantId: string): Promise<CustomInsurer[]> {
-    return await db.select().from(customInsurers).where(eq(customInsurers.tenantId, tenantId)).orderBy(customInsurers.name);
+  async getCustomInsurers(tenantId?: string | null): Promise<CustomInsurer[]> {
+    return await db.select().from(customInsurers).where(tenantId ? eq(customInsurers.tenantId, tenantId) : undefined).orderBy(customInsurers.name);
   }
 
-  async addCustomInsurer(name: string, tenantId: string): Promise<CustomInsurer> {
-    const [result] = await db.insert(customInsurers).values({ name, tenantId }).returning();
+  async addCustomInsurer(name: string, tenantId?: string | null): Promise<CustomInsurer> {
+    const [result] = await db.insert(customInsurers).values({ name, ...(tenantId ? { tenantId } : {}) }).returning();
     return result;
   }
 }

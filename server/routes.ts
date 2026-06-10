@@ -12,6 +12,7 @@ import {
 import { z } from "zod";
 import { sendEmail, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateNewReferralEmail, generateWaitlistUpdateEmail } from "./email";
 import { forceReseedDatabase } from "./seed";
+import { requireTenant } from './middleware/tenant';
 
 export async function registerRoutes(
   httpServer: Server,
@@ -24,6 +25,7 @@ export async function registerRoutes(
 
   // Setup authentication
   setupAuth(app);
+  app.use('/api', requireTenant as any);
 
   // Admin endpoint to force reseed database (must be after auth setup)
   app.post("/api/admin/reseed", requireAdmin, async (req, res) => {

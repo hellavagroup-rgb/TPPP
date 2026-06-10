@@ -40,7 +40,7 @@ export interface IStorage {
   markPasswordResetTokenUsed(tokenId: string): Promise<void>;
   
   // ============ CLINICIANS ============
-  getAllClinicians(): Promise<Clinician[]>;
+  getAllClinicians(tenantId: string): Promise<Clinician[]>;
   getClinicianById(id: string): Promise<Clinician | undefined>;
   getClinicianByUserId(userId: string): Promise<Clinician | undefined>;
   createClinician(clinician: InsertClinician): Promise<Clinician>;
@@ -57,7 +57,7 @@ export interface IStorage {
   getAllTimeSlots(): Promise<TimeSlot[]>;
   
   // ============ CLIENTS ============
-  getAllClients(includeArchived?: boolean): Promise<Client[]>;
+  getAllClients(includeArchived?: boolean, tenantId?: string): Promise<Client[]>;
   getClientById(id: string): Promise<Client | undefined>;
   getClientByDisplayId(displayId: string): Promise<Client | undefined>;
   createClient(client: InsertClient): Promise<Client>;
@@ -69,7 +69,7 @@ export interface IStorage {
   reassignClient(clientId: string, newClinicianId: string | null, newSlotId: string | null, newStatus: string): Promise<Client | undefined>;
   
   // ============ FORMS ============
-  getAllFormTemplates(): Promise<FormTemplate[]>;
+  getAllFormTemplates(tenantId: string): Promise<FormTemplate[]>;
   getFormTemplateById(id: string): Promise<FormTemplate | undefined>;
   createFormTemplate(form: InsertFormTemplate): Promise<FormTemplate>;
   updateFormTemplate(id: string, updates: Partial<InsertFormTemplate>): Promise<FormTemplate | undefined>;
@@ -84,7 +84,7 @@ export interface IStorage {
   submitDraft(submissionId: string, responses: any): Promise<FormSubmission | undefined>;
   
   // ============ TASKS ============
-  getAllTasks(): Promise<Task[]>;
+  getAllTasks(tenantId: string): Promise<Task[]>;
   getTaskById(id: string): Promise<Task | undefined>;
   createTask(task: InsertTask): Promise<Task>;
   updateTask(id: string, updates: Partial<InsertTask>): Promise<Task | undefined>;
@@ -96,17 +96,17 @@ export interface IStorage {
   getRecentAuditLogs(limit?: number, action?: string): Promise<AuditLog[]>;
 
   // ============ EMAIL TEMPLATES ============
-  getAllEmailTemplates(): Promise<EmailTemplate[]>;
+  getAllEmailTemplates(tenantId: string): Promise<EmailTemplate[]>;
   getEmailTemplateByKey(templateKey: string): Promise<EmailTemplate | undefined>;
   upsertEmailTemplate(template: InsertEmailTemplate): Promise<EmailTemplate>;
 
   // ============ NON-ENGAGEMENT CATEGORIES ============
-  getAllNonEngagementCategories(): Promise<NonEngagementCategory[]>;
+  getAllNonEngagementCategories(tenantId: string): Promise<NonEngagementCategory[]>;
   createNonEngagementCategory(category: InsertNonEngagementCategory): Promise<NonEngagementCategory>;
   deleteNonEngagementCategory(id: string): Promise<boolean>;
 
   // ============ CUSTOM INSURERS ============
-  getCustomInsurers(): Promise<CustomInsurer[]>;
+  getCustomInsurers(tenantId: string): Promise<CustomInsurer[]>;
   addCustomInsurer(name: string): Promise<CustomInsurer>;
 }
 
@@ -190,7 +190,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ============ CLINICIANS ============
-  async getAllClinicians(): Promise<(Clinician & { name: string })[]> {
+  async getAllClinicians(tenantId: string): Promise<(Clinician & { name: string })[]> {
     const result = await db
       .select({
         id: clinicians.id,
@@ -216,6 +216,7 @@ export class DatabaseStorage implements IStorage {
       })
       .from(clinicians)
       .leftJoin(users, eq(clinicians.userId, users.id))
+      .where(eq(clinicians.tenantId, tenantId))
       .orderBy(clinicians.createdAt);
     return result.map(r => ({ ...r, name: r.name || 'Unknown' }));
   }
@@ -313,13 +314,14 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ============ CLIENTS ============
-  async getAllClients(includeArchived?: boolean): Promise<Client[]> {
+  async getAllClients(includeArchived?: boolean, tenantId?: string): Promise<Client[]> {
     if (includeArchived) {
       return await db.select().from(clients)
+        .where(tenantId ? eq(clients.tenantId, tenantId) : undefined)
         .orderBy(desc(clients.intakeDate));
     }
     return await db.select().from(clients)
-      .where(eq(clients.isArchived, false))
+      .where(tenantId ? and(eq(clients.isArchived, false), eq(clients.tenantId, tenantId)) : eq(clients.isArchived, false))
       .orderBy(desc(clients.intakeDate));
   }
 
@@ -623,8 +625,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ============ FORMS ============
-  async getAllFormTemplates(): Promise<FormTemplate[]> {
-    return await db.select().from(formTemplates).orderBy(formTemplates.createdAt);
+  async getAllFormTemplates(tenantId: string): Promise<FormTemplate[]> {
+    return await db.select().from(formTemplates).where(eq(formTemplates.tenantId, tenantId)).orderBy(formTemplates.createdAt);
   }
 
   async getFormTemplateById(id: string): Promise<FormTemplate | undefined> {
@@ -739,8 +741,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ============ TASKS ============
-  async getAllTasks(): Promise<Task[]> {
-    return await db.select().from(tasks).orderBy(desc(tasks.dueDate));
+  async getAllTasks(tenantId: string): Promise<Task[]> {
+    return await db.select().from(tasks).where(eq(tasks.tenantId, tenantId)).orderBy(desc(tasks.dueDate));
   }
 
   async getTaskById(id: string): Promise<Task | undefined> {
@@ -785,8 +787,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ============ EMAIL TEMPLATES ============
-  async getAllEmailTemplates(): Promise<EmailTemplate[]> {
-    return await db.select().from(emailTemplates);
+  async getAllEmailTemplates(tenantId: string): Promise<EmailTemplate[]> {
+    return await db.select().from(emailTemplates).where(eq(emailTemplates.tenantId, tenantId));
   }
 
   async getEmailTemplateByKey(templateKey: string): Promise<EmailTemplate | undefined> {
@@ -812,8 +814,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ============ NON-ENGAGEMENT CATEGORIES ============
-  async getAllNonEngagementCategories(): Promise<NonEngagementCategory[]> {
-    return await db.select().from(nonEngagementCategories).orderBy(nonEngagementCategories.name);
+  async getAllNonEngagementCategories(tenantId: string): Promise<NonEngagementCategory[]> {
+    return await db.select().from(nonEngagementCategories).where(eq(nonEngagementCategories.tenantId, tenantId)).orderBy(nonEngagementCategories.name);
   }
 
   async createNonEngagementCategory(category: InsertNonEngagementCategory): Promise<NonEngagementCategory> {
@@ -827,8 +829,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ============ CUSTOM INSURERS ============
-  async getCustomInsurers(): Promise<CustomInsurer[]> {
-    return await db.select().from(customInsurers).orderBy(customInsurers.name);
+  async getCustomInsurers(tenantId: string): Promise<CustomInsurer[]> {
+    return await db.select().from(customInsurers).where(eq(customInsurers.tenantId, tenantId)).orderBy(customInsurers.name);
   }
 
   async addCustomInsurer(name: string): Promise<CustomInsurer> {

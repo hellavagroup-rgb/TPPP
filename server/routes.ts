@@ -1929,6 +1929,34 @@ export async function registerRoutes(
   });
 
   // ============ INTAKE MESSAGES ============
+  app.post("/api/intake-messages", requireAdmin, async (req, res) => {
+    try {
+      if (!req.tenant?.gmailIntakeEnabled) {
+        return res.status(403).json({ error: "Gmail Intake is not enabled for this tenant" });
+      }
+      const { channel, threadId, fromAddress, subject, body } = req.body;
+      if (!channel || !fromAddress || !subject || !body) {
+        return res.status(400).json({ error: "channel, fromAddress, subject and body are required" });
+      }
+      const parsed = parseIntakeEmailBody(body);
+      const [message] = await db.insert(intakeMessages).values({
+        tenantId: req.tenant.id,
+        channel,
+        threadId: threadId ?? null,
+        fromAddress,
+        subject,
+        body,
+        extractedName: parsed.name,
+        extractedPhone: parsed.phone,
+        extractedData: parsed.fields,
+        status: "new",
+      } as any).returning();
+      res.json(message);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create intake message" });
+    }
+  });
+
   app.get("/api/intake-messages", requireAdmin, async (req, res) => {
     try {
       if (!req.tenant?.gmailIntakeEnabled) {

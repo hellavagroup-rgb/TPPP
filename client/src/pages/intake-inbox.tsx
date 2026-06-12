@@ -57,7 +57,7 @@ function ViewEmailDialog({ message, open, onClose }: { message: IntakeMessage; o
           </DialogDescription>
         </DialogHeader>
 
-        {hasStructured ? (
+        {hasStructured && (
           <div className="space-y-1 mt-2">
             {Object.entries(fields!).map(([label, value]) => (
               <div key={label} className="grid grid-cols-[180px_1fr] gap-2 py-1.5 border-b border-border/50 last:border-0">
@@ -66,11 +66,15 @@ function ViewEmailDialog({ message, open, onClose }: { message: IntakeMessage; o
               </div>
             ))}
           </div>
-        ) : (
+        )}
+        <details className="mt-4">
+          <summary className="text-xs text-muted-foreground cursor-pointer select-none hover:text-foreground transition-colors">
+            {hasStructured ? "View raw email body" : "Raw email body"}
+          </summary>
           <div className="mt-2 p-4 bg-muted rounded-md text-sm whitespace-pre-wrap font-mono leading-relaxed">
             {message.body}
           </div>
-        )}
+        </details>
       </DialogContent>
     </Dialog>
   );

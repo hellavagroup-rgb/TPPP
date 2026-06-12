@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -5,7 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Mail, UserPlus, EyeOff } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Mail, UserPlus, EyeOff, Eye } from "lucide-react";
 import { format } from "date-fns";
 
 interface IntakeMessage {
@@ -16,6 +18,7 @@ interface IntakeMessage {
   body: string;
   extractedName: string | null;
   extractedPhone: string | null;
+  extractedData: Record<string, string> | null;
   status: "new" | "linked" | "ignored";
   linkedClientId: string | null;
   receivedAt: string;
@@ -28,9 +31,55 @@ const STATUS_BADGE: Record<IntakeMessage["status"], { label: string; variant: "d
   ignored: { label: "Ignored", variant: "outline" },
 };
 
+function extractedField(data: Record<string, string> | null, ...keys: string[]): string | null {
+  if (!data) return null;
+  for (const key of keys) {
+    const found = Object.entries(data).find(([k]) => k.toLowerCase().includes(key.toLowerCase()));
+    if (found?.[1]) return found[1];
+  }
+  return null;
+}
+
+function ViewEmailDialog({ message, open, onClose }: { message: IntakeMessage; open: boolean; onClose: () => void }) {
+  const fields = message.extractedData;
+  const hasStructured = fields && Object.keys(fields).length > 0;
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Mail className="h-4 w-4" />
+            {message.subject}
+          </DialogTitle>
+          <DialogDescription>
+            From {message.fromAddress} · {format(new Date(message.receivedAt), "dd MMM yyyy HH:mm")}
+          </DialogDescription>
+        </DialogHeader>
+
+        {hasStructured ? (
+          <div className="space-y-1 mt-2">
+            {Object.entries(fields!).map(([label, value]) => (
+              <div key={label} className="grid grid-cols-[180px_1fr] gap-2 py-1.5 border-b border-border/50 last:border-0">
+                <span className="text-sm font-medium text-muted-foreground">{label}</span>
+                <span className="text-sm break-words">{value}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="mt-2 p-4 bg-muted rounded-md text-sm whitespace-pre-wrap font-mono leading-relaxed">
+            {message.body}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function IntakeInbox() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [viewingMessage, setViewingMessage] = useState<IntakeMessage | null>(null);
 
   const { data: messages = [], isLoading } = useQuery<IntakeMessage[]>({
     queryKey: ["/api/intake-messages"],
@@ -51,7 +100,10 @@ export default function IntakeInbox() {
       return res.json();
     },
     onSuccess: (data) => {
-      toast({ title: "Client created", description: `New client record created (${data.client?.displayId}).` });
+      toast({
+        title: "Client record created",
+        description: `Created with pending ID ${data.client?.displayId}. Assign a WriteUpp W-number once allocated.`,
+      });
       queryClient.invalidateQueries({ queryKey: ["/api/intake-messages"] });
       queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
     },
@@ -108,10 +160,10 @@ export default function IntakeInbox() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>From</TableHead>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Phone</TableHead>
                   <TableHead>Subject</TableHead>
-                  <TableHead>Extracted Name</TableHead>
-                  <TableHead>Extracted Phone</TableHead>
                   <TableHead>Received</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
@@ -120,12 +172,25 @@ export default function IntakeInbox() {
               <TableBody>
                 {messages.map((msg) => {
                   const { label, variant } = STATUS_BADGE[msg.status];
+                  const displayName = msg.extractedName
+                    || extractedField(msg.extractedData, "name")
+                    || null;
+                  const displayEmail = extractedField(msg.extractedData, "email")
+                    || msg.fromAddress;
+                  const displayPhone = msg.extractedPhone
+                    || extractedField(msg.extractedData, "phone", "telephone", "mobile");
                   return (
                     <TableRow key={msg.id} data-testid={`row-intake-${msg.id}`}>
-                      <TableCell className="font-mono text-sm">{msg.fromAddress}</TableCell>
-                      <TableCell className="max-w-[200px] truncate">{msg.subject}</TableCell>
-                      <TableCell>{msg.extractedName ?? <span className="text-muted-foreground">—</span>}</TableCell>
-                      <TableCell>{msg.extractedPhone ?? <span className="text-muted-foreground">—</span>}</TableCell>
+                      <TableCell className="font-medium">
+                        {displayName ?? <span className="text-muted-foreground">—</span>}
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{displayEmail}</TableCell>
+                      <TableCell className="text-sm">
+                        {displayPhone ?? <span className="text-muted-foreground">—</span>}
+                      </TableCell>
+                      <TableCell className="max-w-[180px] truncate text-sm text-muted-foreground">
+                        {msg.subject}
+                      </TableCell>
                       <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
                         {format(new Date(msg.receivedAt), "dd MMM yyyy HH:mm")}
                       </TableCell>
@@ -133,7 +198,16 @@ export default function IntakeInbox() {
                         <Badge variant={variant} data-testid={`badge-status-${msg.id}`}>{label}</Badge>
                       </TableCell>
                       <TableCell className="text-right">
-                        <div className="flex items-center justify-end gap-2">
+                        <div className="flex items-center justify-end gap-1">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            data-testid={`button-view-${msg.id}`}
+                            onClick={() => setViewingMessage(msg)}
+                          >
+                            <Eye className="h-3.5 w-3.5 mr-1" />
+                            View
+                          </Button>
                           {msg.status === "new" && (
                             <>
                               <Button
@@ -143,7 +217,7 @@ export default function IntakeInbox() {
                                 disabled={convertMutation.isPending}
                               >
                                 <UserPlus className="h-3.5 w-3.5 mr-1" />
-                                Convert to Client
+                                Convert
                               </Button>
                               <Button
                                 size="sm"
@@ -167,6 +241,14 @@ export default function IntakeInbox() {
           )}
         </CardContent>
       </Card>
+
+      {viewingMessage && (
+        <ViewEmailDialog
+          message={viewingMessage}
+          open={!!viewingMessage}
+          onClose={() => setViewingMessage(null)}
+        />
+      )}
     </div>
   );
 }

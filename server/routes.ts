@@ -12,6 +12,7 @@ import {
 import { z } from "zod";
 import { sendEmail, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateNewReferralEmail, generateWaitlistUpdateEmail } from "./email";
 import { forceReseedDatabase } from "./seed";
+import { parseIntakeEmailBody } from "./intakeParser";
 import { requireTenant } from './middleware/tenant';
 import { db } from "./db";
 import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs, intakeMessages } from "@shared/schema";
@@ -1887,6 +1888,36 @@ export async function registerRoutes(
     }
   });
 
+  // Backfill: re-parse all existing intake message bodies for this tenant
+  app.post("/api/intake-messages/backfill-parse", requireAdmin, async (req, res) => {
+    try {
+      if (!req.tenant?.gmailIntakeEnabled) {
+        return res.status(403).json({ error: "Gmail Intake is not enabled for this tenant" });
+      }
+      const rows = await db
+        .select()
+        .from(intakeMessages)
+        .where(eq(intakeMessages.tenantId, req.tenant.id));
+
+      let updated = 0;
+      for (const row of rows) {
+        const parsed = parseIntakeEmailBody(row.body);
+        await db
+          .update(intakeMessages)
+          .set({
+            extractedData: parsed.fields,
+            extractedName: parsed.name ?? row.extractedName,
+            extractedPhone: parsed.phone ?? row.extractedPhone,
+          })
+          .where(eq(intakeMessages.id, row.id));
+        updated++;
+      }
+      res.json({ success: true, updated });
+    } catch (error) {
+      res.status(500).json({ error: "Backfill failed" });
+    }
+  });
+
   // ============ TENANT INFO ============
   app.get("/api/tenant", requireAuth, async (req, res) => {
     try {
@@ -1930,13 +1961,24 @@ export async function registerRoutes(
       if (message.status !== "new") {
         return res.status(400).json({ error: "Message has already been processed" });
       }
-      const displayId = "WI" + Math.floor(10000000 + Math.random() * 90000000).toString();
+      const suffix = Math.random().toString(36).toUpperCase().slice(2, 8);
+      const displayId = `PENDING-${suffix}`;
+      const parsed = message.extractedData as Record<string, string> | null;
+      const clientEmail = (parsed && Object.entries(parsed).find(([k]) => k.toLowerCase().includes("email"))?.[1])
+        || message.fromAddress;
+      const clientPhone = message.extractedPhone
+        || (parsed && Object.entries(parsed).find(([k]) => ["phone","telephone","mobile"].some(p => k.toLowerCase().includes(p)))?.[1])
+        || "";
+      const clientName = message.extractedName
+        || (parsed && Object.entries(parsed).find(([k]) => ["your name","name"].some(p => k.toLowerCase() === p))?.[1])
+        || null;
       const [newClient] = await db.insert(clients).values({
         displayId,
-        email: message.fromAddress,
-        phone: message.extractedPhone ?? "",
+        email: clientEmail,
+        phone: clientPhone,
         status: "New",
         tenantId: req.tenant.id,
+        ...(clientName ? { notes: `Converted from intake email. Name extracted: ${clientName}` } : {}),
       } as any).returning();
       await db
         .update(intakeMessages)

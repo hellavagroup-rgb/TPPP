@@ -323,6 +323,7 @@ export const intakeMessages = pgTable("intake_messages", {
   body: text("body").notNull(),
   extractedName: text("extracted_name"),
   extractedPhone: text("extracted_phone"),
+  extractedData: json("extracted_data").$type<Record<string, string>>(),
   status: text("status", { enum: ["new", "linked", "ignored"] }).notNull().default("new"),
   linkedClientId: varchar("linked_client_id").references(() => clients.id),
   receivedAt: timestamp("received_at").defaultNow().notNull(),

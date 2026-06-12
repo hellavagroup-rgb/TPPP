@@ -1,7 +1,16 @@
 import { Resend } from 'resend';
 import { storage } from './storage';
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+let resend: Resend | null = null;
+function getResend(): Resend {
+  if (!resend) {
+    if (!process.env.RESEND_API_KEY) {
+      throw new Error('RESEND_API_KEY is not set. Email sending is unavailable.');
+    }
+    resend = new Resend(process.env.RESEND_API_KEY);
+  }
+  return resend;
+}
 
 // From address - defaults to Resend sandbox for testing, should be set to verified domain in production
 const FROM_EMAIL = process.env.FROM_EMAIL || 'The Perinatal Psychology Practice <onboarding@resend.dev>';
@@ -67,7 +76,7 @@ export interface EmailOptions {
 
 export async function sendEmail(options: EmailOptions): Promise<{ success: boolean; error?: string }> {
   try {
-    const { data, error } = await resend.emails.send({
+    const { data, error } = await getResend().emails.send({
       from: FROM_EMAIL,
       to: options.to,
       subject: options.subject,

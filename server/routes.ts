@@ -14,8 +14,8 @@ import { sendEmail, generateFormInviteEmail, generatePasswordResetEmail, generat
 import { forceReseedDatabase } from "./seed";
 import { requireTenant } from './middleware/tenant';
 import { db } from "./db";
-import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs } from "@shared/schema";
-import { isNull } from "drizzle-orm";
+import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs, intakeMessages } from "@shared/schema";
+import { isNull, eq, and } from "drizzle-orm";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -1884,6 +1884,91 @@ export async function registerRoutes(
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete category" });
+    }
+  });
+
+  // ============ TENANT INFO ============
+  app.get("/api/tenant", requireAuth, async (req, res) => {
+    try {
+      if (!req.tenant) return res.status(403).json({ error: "No tenant" });
+      res.json(req.tenant);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch tenant" });
+    }
+  });
+
+  // ============ INTAKE MESSAGES ============
+  app.get("/api/intake-messages", requireAdmin, async (req, res) => {
+    try {
+      if (!req.tenant?.gmailIntakeEnabled) {
+        return res.json([]);
+      }
+      const messages = await db
+        .select()
+        .from(intakeMessages)
+        .where(eq(intakeMessages.tenantId, req.tenant.id))
+        .orderBy(intakeMessages.receivedAt);
+      res.json(messages);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch intake messages" });
+    }
+  });
+
+  app.post("/api/intake-messages/:id/convert-to-client", requireAdmin, async (req, res) => {
+    try {
+      if (!req.tenant?.gmailIntakeEnabled) {
+        return res.status(403).json({ error: "Gmail Intake is not enabled for this tenant" });
+      }
+      const [message] = await db
+        .select()
+        .from(intakeMessages)
+        .where(and(eq(intakeMessages.id, req.params.id), eq(intakeMessages.tenantId, req.tenant.id)))
+        .limit(1);
+      if (!message) {
+        return res.status(404).json({ error: "Intake message not found" });
+      }
+      if (message.status !== "new") {
+        return res.status(400).json({ error: "Message has already been processed" });
+      }
+      const displayId = "WI" + Math.floor(10000000 + Math.random() * 90000000).toString();
+      const [newClient] = await db.insert(clients).values({
+        displayId,
+        email: message.fromAddress,
+        phone: message.extractedPhone ?? "",
+        status: "New",
+        tenantId: req.tenant.id,
+      } as any).returning();
+      await db
+        .update(intakeMessages)
+        .set({ status: "linked", linkedClientId: newClient.id })
+        .where(eq(intakeMessages.id, message.id));
+      res.json({ success: true, client: newClient });
+    } catch (error: any) {
+      if (error?.code === "23505") {
+        return res.status(409).json({ error: "A client with this email address already exists" });
+      }
+      res.status(500).json({ error: "Failed to convert intake message to client" });
+    }
+  });
+
+  app.post("/api/intake-messages/:id/ignore", requireAdmin, async (req, res) => {
+    try {
+      if (!req.tenant?.gmailIntakeEnabled) {
+        return res.status(403).json({ error: "Gmail Intake is not enabled for this tenant" });
+      }
+      const [message] = await db
+        .select()
+        .from(intakeMessages)
+        .where(and(eq(intakeMessages.id, req.params.id), eq(intakeMessages.tenantId, req.tenant.id)))
+        .limit(1);
+      if (!message) return res.status(404).json({ error: "Intake message not found" });
+      await db
+        .update(intakeMessages)
+        .set({ status: "ignored" })
+        .where(eq(intakeMessages.id, message.id));
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to ignore intake message" });
     }
   });
 

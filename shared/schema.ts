@@ -12,6 +12,7 @@ export const tenants = pgTable("tenants", {
   clinikoApiKey: text("cliniko_api_key"),
   whatsappEnabled: boolean("whatsapp_enabled").default(false),
   gmailAddress: text("gmail_address"),
+  gmailIntakeEnabled: boolean("gmail_intake_enabled").default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -310,6 +311,26 @@ export const nonEngagementCategories = pgTable("non_engagement_categories", {
 export const insertNonEngagementCategorySchema = createInsertSchema(nonEngagementCategories).omit({ id: true, createdAt: true });
 export type InsertNonEngagementCategory = z.infer<typeof insertNonEngagementCategorySchema>;
 export type NonEngagementCategory = typeof nonEngagementCategories.$inferSelect;
+
+// ============ INTAKE MESSAGES ============
+export const intakeMessages = pgTable("intake_messages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").references(() => tenants.id).notNull(),
+  channel: text("channel", { enum: ["email", "whatsapp", "phone"] }).notNull(),
+  threadId: text("thread_id"),
+  fromAddress: text("from_address").notNull(),
+  subject: text("subject").notNull(),
+  body: text("body").notNull(),
+  extractedName: text("extracted_name"),
+  extractedPhone: text("extracted_phone"),
+  status: text("status", { enum: ["new", "linked", "ignored"] }).notNull().default("new"),
+  linkedClientId: varchar("linked_client_id").references(() => clients.id),
+  receivedAt: timestamp("received_at").defaultNow().notNull(),
+});
+
+export const insertIntakeMessageSchema = createInsertSchema(intakeMessages).omit({ id: true, receivedAt: true });
+export type InsertIntakeMessage = z.infer<typeof insertIntakeMessageSchema>;
+export type IntakeMessage = typeof intakeMessages.$inferSelect;
 
 // ============ PASSWORD RESET TOKENS ============
 export const passwordResetTokens = pgTable("password_reset_tokens", {

@@ -2,6 +2,7 @@ import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 import { useData } from "@/lib/mockData";
 import { useAuth } from "@/lib/auth";
+import { useQuery } from "@tanstack/react-query";
 import { 
   LayoutDashboard, 
   Users, 
@@ -16,7 +17,8 @@ import {
   BarChart3,
   Brain,
   UserCircle,
-  KeyRound
+  KeyRound,
+  Inbox
 } from "lucide-react";
 import logo from "@assets/xPerinatalPP-logo-large-digital.png.pagespeed.ic.wAjk_RUOnf_1766008188694.png";
 import { useState } from "react";
@@ -34,6 +36,17 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const { notifications } = useData();
   const { user, logout } = useAuth();
+
+  const { data: tenant } = useQuery({
+    queryKey: ["/api/tenant"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/tenant");
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: !!user && user.role === "admin",
+    staleTime: 60_000,
+  });
   const { toast } = useToast();
   
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
@@ -89,6 +102,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     { name: "Availability", href: "/availability", icon: CalendarClock },
     { name: "Forms", href: "/forms", icon: FileText },
     { name: "Analytics", href: "/analytics", icon: BarChart3 },
+    ...(tenant?.gmailIntakeEnabled ? [{ name: "Intake Inbox", href: "/intake-inbox", icon: Inbox }] : []),
     { name: "Settings", href: "/settings", icon: Settings },
   ];
 

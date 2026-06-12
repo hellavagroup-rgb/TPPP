@@ -14,6 +14,7 @@ import FormBuilder from "@/pages/form-builder";
 import FormFill from "@/pages/form-fill";
 import Analytics from "@/pages/analytics";
 import Clinicians from "@/pages/clinicians";
+import IntakeInbox from "@/pages/intake-inbox";
 import Layout from "@/components/layout";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import Login from "@/pages/login";
@@ -70,6 +71,7 @@ function Router() {
         <Route path="/forms" component={() => <ProtectedRoute component={Forms} />} />
         <Route path="/forms/:id" component={() => <ProtectedRoute component={FormBuilder} />} />
         <Route path="/analytics" component={() => <ProtectedRoute component={Analytics} />} />
+        <Route path="/intake-inbox" component={() => <ProtectedRoute component={IntakeInbox} />} />
         
         {/* Clinician Routes */}
         <Route path="/clinician-profile" component={() => <ProtectedRoute component={ClinicianProfile} />} />

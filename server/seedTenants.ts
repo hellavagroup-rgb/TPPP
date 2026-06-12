@@ -29,7 +29,7 @@ import { eq } from "drizzle-orm";
 // generated with the same scrypt + salt approach used in auth.ts
 // To regenerate: node -e "const crypto=require('crypto'); const salt=crypto.randomBytes(16).toString('hex'); crypto.scrypt('testpass123',salt,64,(e,h)=>console.log(h.toString('hex')+'.'+salt))"
 const PASSWORD_HASH =
-  "8bc4e92520fde54e409f63f50ba09b3e49fea1a1cbd96ebf85824f18869b3d05273362ed339570a7ed5db41d701879dc3f0f6007b9635ce6a821d905d9ccc3c2.5f61d83615ee1052ce80da165e8d7a41";
+  "fcb409dfa9deef417f034fbb3122e06ae20d47362393f0e0882a256d2dae5a5c18b0d2e41246fb5be12e6e0570aeacb156a3faac32d133fcfe9512b1a5d37925.a5e9b48006f6596c64a5231f551ae24c";
 
 // ─── Tenant A ────────────────────────────────────────────────────────────────
 const TENANT_A_ID = "11111111-0000-0000-0000-000000000001";

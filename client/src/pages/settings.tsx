@@ -975,6 +975,19 @@ function GmailConnectionsTab() {
   const queryClient = useQueryClient();
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [deleteDialogId, setDeleteDialogId] = useState<string | null>(null);
+  const [debugInfo, setDebugInfo] = useState<{ redirectUri: string; clientId: string; url: string } | null>(null);
+  const [showDebug, setShowDebug] = useState(false);
+
+  async function loadDebugInfo() {
+    try {
+      const res = await fetch("/api/auth/gmail/debug-oauth-url");
+      const data = await res.json();
+      setDebugInfo(data);
+      setShowDebug(true);
+    } catch {
+      toast.error("Failed to load debug info");
+    }
+  }
 
   const redirectUri = `${window.location.origin}/api/auth/gmail/callback`;
 
@@ -1047,14 +1060,33 @@ function GmailConnectionsTab() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <Button
-            variant="outline"
-            onClick={() => { window.location.href = "/api/auth/gmail/connect"; }}
-            data-testid="button-connect-gmail"
-          >
-            <ExternalLink className="h-4 w-4 mr-2" />
-            Connect a Gmail inbox
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() => { window.location.href = "/api/auth/gmail/connect"; }}
+              data-testid="button-connect-gmail"
+            >
+              <ExternalLink className="h-4 w-4 mr-2" />
+              Connect a Gmail inbox
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground text-xs"
+              onClick={loadDebugInfo}
+            >
+              Show debug info
+            </Button>
+          </div>
+
+          {showDebug && debugInfo && (
+            <div className="rounded-md bg-slate-50 border border-slate-200 p-3 text-xs space-y-2 font-mono break-all">
+              <p><span className="font-semibold text-slate-700">Client ID:</span> {debugInfo.clientId}</p>
+              <p><span className="font-semibold text-slate-700">Redirect URI (server):</span> {debugInfo.redirectUri}</p>
+              <p><span className="font-semibold text-slate-700">Full OAuth URL:</span> {debugInfo.url}</p>
+              <Button size="sm" variant="ghost" className="text-xs h-6 px-2" onClick={() => setShowDebug(false)}>Hide</Button>
+            </div>
+          )}
 
           {isLoading && (
             <div className="flex items-center gap-2 text-muted-foreground text-sm py-2">

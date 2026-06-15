@@ -2208,5 +2208,25 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/intake-messages/bulk-ignore", requireAdmin, async (req, res) => {
+    try {
+      if (!req.tenant?.gmailIntakeEnabled) {
+        return res.status(403).json({ error: "Gmail Intake is not enabled for this tenant" });
+      }
+      const { ids } = req.body as { ids: string[] };
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ error: "ids must be a non-empty array" });
+      }
+      const { inArray } = await import("drizzle-orm");
+      await db
+        .update(intakeMessages)
+        .set({ status: "ignored" })
+        .where(and(eq(intakeMessages.tenantId, req.tenant.id), inArray(intakeMessages.id, ids)));
+      res.json({ success: true, count: ids.length });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to bulk ignore intake messages" });
+    }
+  });
+
   return httpServer;
 }

@@ -5,6 +5,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Mail, UserPlus, EyeOff, Eye } from "lucide-react";
@@ -42,7 +43,6 @@ function extractedField(data: Record<string, string> | null, ...keys: string[]):
 
 function ViewEmailDialog({ message, open, onClose }: { message: IntakeMessage; open: boolean; onClose: () => void }) {
   const fields = message.extractedData;
-  // Only treat as structured if there are at least 3 fields (otherwise likely a plain email)
   const hasStructured = fields && Object.keys(fields).length >= 3;
 
   return (
@@ -91,6 +91,8 @@ export default function IntakeInbox() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [viewingMessage, setViewingMessage] = useState<IntakeMessage | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [showIgnored, setShowIgnored] = useState(false);
 
   const { data: messages = [], isLoading } = useQuery<IntakeMessage[]>({
     queryKey: ["/api/intake-messages"],
@@ -100,6 +102,27 @@ export default function IntakeInbox() {
       return res.json();
     },
   });
+
+  const visibleMessages = showIgnored ? messages : messages.filter(m => m.status !== "ignored");
+  const selectableIds = visibleMessages.filter(m => m.status === "new").map(m => m.id);
+  const allSelected = selectableIds.length > 0 && selectableIds.every(id => selected.has(id));
+  const someSelected = selected.size > 0;
+
+  function toggleAll() {
+    if (allSelected) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(selectableIds));
+    }
+  }
+
+  function toggleOne(id: string) {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
 
   const convertMutation = useMutation({
     mutationFn: async (id: string) => {
@@ -137,7 +160,24 @@ export default function IntakeInbox() {
     },
   });
 
+  const bulkIgnoreMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const res = await apiRequest("POST", "/api/intake-messages/bulk-ignore", { ids });
+      if (!res.ok) throw new Error("Failed to bulk ignore");
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({ title: `${data.count} message${data.count !== 1 ? "s" : ""} ignored` });
+      setSelected(new Set());
+      queryClient.invalidateQueries({ queryKey: ["/api/intake-messages"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
   const newCount = messages.filter((m) => m.status === "new").length;
+  const ignoredCount = messages.filter((m) => m.status === "ignored").length;
 
   return (
     <div className="space-y-6">
@@ -157,20 +197,57 @@ export default function IntakeInbox() {
 
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Mail className="h-4 w-4" />
-            Messages
-          </CardTitle>
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Mail className="h-4 w-4" />
+              Messages
+            </CardTitle>
+            <div className="flex items-center gap-2">
+              {someSelected && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="text-destructive border-destructive/40 hover:bg-destructive/5"
+                  data-testid="button-bulk-ignore"
+                  disabled={bulkIgnoreMutation.isPending}
+                  onClick={() => bulkIgnoreMutation.mutate([...selected])}
+                >
+                  <EyeOff className="h-3.5 w-3.5 mr-1.5" />
+                  Ignore {selected.size} selected
+                </Button>
+              )}
+              <Button
+                size="sm"
+                variant={showIgnored ? "secondary" : "outline"}
+                onClick={() => setShowIgnored(v => !v)}
+                data-testid="button-toggle-ignored"
+              >
+                <EyeOff className="h-3.5 w-3.5 mr-1.5" />
+                {showIgnored ? "Hide ignored" : `Show ignored${ignoredCount > 0 ? ` (${ignoredCount})` : ""}`}
+              </Button>
+            </div>
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           {isLoading ? (
             <div className="p-6 text-center text-muted-foreground">Loading…</div>
-          ) : messages.length === 0 ? (
-            <div className="p-6 text-center text-muted-foreground">No intake messages yet.</div>
+          ) : visibleMessages.length === 0 ? (
+            <div className="p-6 text-center text-muted-foreground">
+              {showIgnored ? "No intake messages yet." : "No active messages. " + (ignoredCount > 0 ? `${ignoredCount} ignored message${ignoredCount !== 1 ? "s" : ""} hidden.` : "")}
+            </div>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-10 pr-0">
+                    <Checkbox
+                      checked={allSelected}
+                      onCheckedChange={toggleAll}
+                      aria-label="Select all"
+                      data-testid="checkbox-select-all"
+                      disabled={selectableIds.length === 0}
+                    />
+                  </TableHead>
                   <TableHead>Name</TableHead>
                   <TableHead>Email</TableHead>
                   <TableHead>Phone</TableHead>
@@ -181,8 +258,10 @@ export default function IntakeInbox() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {messages.map((msg) => {
+                {visibleMessages.map((msg) => {
                   const { label, variant } = STATUS_BADGE[msg.status];
+                  const isNew = msg.status === "new";
+                  const isChecked = selected.has(msg.id);
                   const displayName = msg.extractedName
                     || extractedField(msg.extractedData, "name")
                     || null;
@@ -191,7 +270,21 @@ export default function IntakeInbox() {
                   const displayPhone = msg.extractedPhone
                     || extractedField(msg.extractedData, "phone", "telephone", "mobile");
                   return (
-                    <TableRow key={msg.id} data-testid={`row-intake-${msg.id}`}>
+                    <TableRow
+                      key={msg.id}
+                      data-testid={`row-intake-${msg.id}`}
+                      className={msg.status === "ignored" ? "opacity-50" : ""}
+                    >
+                      <TableCell className="pr-0">
+                        {isNew && (
+                          <Checkbox
+                            checked={isChecked}
+                            onCheckedChange={() => toggleOne(msg.id)}
+                            aria-label={`Select message ${msg.id}`}
+                            data-testid={`checkbox-${msg.id}`}
+                          />
+                        )}
+                      </TableCell>
                       <TableCell className="font-medium">
                         {displayName ?? <span className="text-muted-foreground">—</span>}
                       </TableCell>
@@ -219,7 +312,7 @@ export default function IntakeInbox() {
                             <Eye className="h-3.5 w-3.5 mr-1" />
                             View
                           </Button>
-                          {msg.status === "new" && (
+                          {isNew && (
                             <>
                               <Button
                                 size="sm"

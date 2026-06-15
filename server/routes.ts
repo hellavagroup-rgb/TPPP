@@ -1936,6 +1936,17 @@ export async function registerRoutes(
     res.json({ redirectUri: buildRedirectUri(req) });
   });
 
+  // Debug: return the full OAuth URL without redirecting so it can be inspected
+  app.get("/api/auth/gmail/debug-oauth-url", requireAdmin, (req, res) => {
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+      return res.status(503).json({ error: "Google OAuth not configured" });
+    }
+    const redirectUri = buildRedirectUri(req);
+    const state = Buffer.from(JSON.stringify({ tenantId: req.tenant?.id, userId: (req.user as any)?.id, redirectUri })).toString("base64url");
+    const url = getAuthUrl(state, redirectUri);
+    res.json({ redirectUri, clientId: process.env.GOOGLE_CLIENT_ID, url });
+  });
+
   // Start OAuth flow — redirect user to Google consent
   app.get("/api/auth/gmail/connect", requireAdmin, (req, res) => {
     if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {

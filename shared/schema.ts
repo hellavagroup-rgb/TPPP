@@ -333,6 +333,23 @@ export const insertIntakeMessageSchema = createInsertSchema(intakeMessages).omit
 export type InsertIntakeMessage = z.infer<typeof insertIntakeMessageSchema>;
 export type IntakeMessage = typeof intakeMessages.$inferSelect;
 
+// ============ GMAIL CONNECTIONS ============
+export const gmailConnections = pgTable("gmail_connections", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").references(() => tenants.id).notNull(),
+  gmailAddress: text("gmail_address").notNull(),
+  accessToken: text("access_token").notNull(),
+  refreshToken: text("refresh_token").notNull(),
+  tokenExpiry: timestamp("token_expiry"),
+  historyId: text("history_id"),
+  lastSyncAt: timestamp("last_sync_at"),
+  isActive: boolean("is_active").default(true).notNull(),
+  label: text("label"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export type GmailConnection = typeof gmailConnections.$inferSelect;
+
 // ============ PASSWORD RESET TOKENS ============
 export const passwordResetTokens = pgTable("password_reset_tokens", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

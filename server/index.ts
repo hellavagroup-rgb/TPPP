@@ -5,6 +5,7 @@ import { createServer } from "http";
 import { seedDatabaseIfEmpty } from "./seed";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
+import { syncAllActiveConnections } from "./gmailSync";
 
 const app = express();
 
@@ -124,4 +125,14 @@ app.use((req, res, next) => {
       log(`serving on port ${port}`);
     },
   );
+
+  // Background Gmail polling — every 5 minutes for all active connections
+  const GMAIL_POLL_INTERVAL_MS = 5 * 60 * 1000;
+  setInterval(async () => {
+    try {
+      await syncAllActiveConnections();
+    } catch (err) {
+      log(`[gmail] background sync error: ${err}`);
+    }
+  }, GMAIL_POLL_INTERVAL_MS);
 })();

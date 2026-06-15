@@ -15,7 +15,8 @@ import { forceReseedDatabase } from "./seed";
 import { parseIntakeEmailBody } from "./intakeParser";
 import { requireTenant } from './middleware/tenant';
 import { db } from "./db";
-import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs, intakeMessages } from "@shared/schema";
+import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs, intakeMessages, gmailConnections } from "@shared/schema";
+import { getAuthUrl, exchangeCodeForTokens, syncConnection, buildRedirectUri } from "./gmailSync";
 import { isNull, eq, and } from "drizzle-orm";
 
 export async function registerRoutes(
@@ -1925,6 +1926,153 @@ export async function registerRoutes(
       res.json(req.tenant);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch tenant" });
+    }
+  });
+
+  // ============ GMAIL CONNECTIONS ============
+
+  // Start OAuth flow — redirect user to Google consent
+  app.get("/api/auth/gmail/connect", requireAdmin, (req, res) => {
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+      return res.status(503).json({ error: "Google OAuth is not configured (missing GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)" });
+    }
+    const redirectUri = buildRedirectUri(req);
+    const state = Buffer.from(JSON.stringify({ tenantId: req.tenant?.id, userId: (req.user as any)?.id, redirectUri })).toString("base64url");
+    const url = getAuthUrl(state, redirectUri);
+    res.redirect(url);
+  });
+
+  // OAuth callback — exchange code, store tokens, kick off first sync
+  app.get("/api/auth/gmail/callback", async (req, res) => {
+    const { code, state, error } = req.query as Record<string, string>;
+    if (error || !code || !state) {
+      return res.redirect("/settings?tab=gmail&error=oauth_denied");
+    }
+    try {
+      const { tenantId, redirectUri } = JSON.parse(Buffer.from(state, "base64url").toString());
+      const tokens = await exchangeCodeForTokens(code, redirectUri);
+      if (!tokens.access_token || !tokens.refresh_token) {
+        return res.redirect("/settings?tab=gmail&error=no_tokens");
+      }
+
+      // Fetch the Gmail address for this account
+      const { google: _g } = await import("googleapis");
+      const auth = new (await import("googleapis")).google.auth.OAuth2(
+        process.env.GOOGLE_CLIENT_ID,
+        process.env.GOOGLE_CLIENT_SECRET,
+        redirectUri,
+      );
+      auth.setCredentials(tokens);
+      const gmail = _g.gmail({ version: "v1", auth });
+      const profile = await gmail.users.getProfile({ userId: "me" });
+      const gmailAddress = profile.data.emailAddress!;
+
+      // Upsert connection (same address replaces old tokens)
+      const existing = await db
+        .select()
+        .from(gmailConnections)
+        .where(and(eq(gmailConnections.tenantId, tenantId), eq(gmailConnections.gmailAddress, gmailAddress)));
+
+      let conn: typeof gmailConnections.$inferSelect;
+      if (existing.length > 0) {
+        const [updated] = await db
+          .update(gmailConnections)
+          .set({
+            accessToken: tokens.access_token,
+            refreshToken: tokens.refresh_token,
+            tokenExpiry: tokens.expiry_date ? new Date(tokens.expiry_date) : null,
+            historyId: null,
+            isActive: true,
+          })
+          .where(eq(gmailConnections.id, existing[0].id))
+          .returning();
+        conn = updated;
+      } else {
+        const [inserted] = await db
+          .insert(gmailConnections)
+          .values({
+            tenantId,
+            gmailAddress,
+            accessToken: tokens.access_token,
+            refreshToken: tokens.refresh_token,
+            tokenExpiry: tokens.expiry_date ? new Date(tokens.expiry_date) : null,
+          } as any)
+          .returning();
+        conn = inserted;
+      }
+
+      // Kick off first sync in background
+      syncConnection(conn).catch(() => {});
+
+      res.redirect("/settings?tab=gmail&connected=" + encodeURIComponent(gmailAddress));
+    } catch (err) {
+      console.error("[gmail oauth callback]", err);
+      res.redirect("/settings?tab=gmail&error=oauth_failed");
+    }
+  });
+
+  // List connections for this tenant
+  app.get("/api/gmail-connections", requireAdmin, async (req, res) => {
+    try {
+      const rows = await db
+        .select({
+          id: gmailConnections.id,
+          gmailAddress: gmailConnections.gmailAddress,
+          label: gmailConnections.label,
+          isActive: gmailConnections.isActive,
+          lastSyncAt: gmailConnections.lastSyncAt,
+          createdAt: gmailConnections.createdAt,
+        })
+        .from(gmailConnections)
+        .where(eq(gmailConnections.tenantId, req.tenant!.id));
+      res.json(rows);
+    } catch {
+      res.status(500).json({ error: "Failed to fetch Gmail connections" });
+    }
+  });
+
+  // Update label for a connection
+  app.patch("/api/gmail-connections/:id", requireAdmin, async (req, res) => {
+    try {
+      const { label } = req.body;
+      const [row] = await db
+        .update(gmailConnections)
+        .set({ label })
+        .where(and(eq(gmailConnections.id, req.params.id), eq(gmailConnections.tenantId, req.tenant!.id)))
+        .returning();
+      if (!row) return res.status(404).json({ error: "Connection not found" });
+      res.json(row);
+    } catch {
+      res.status(500).json({ error: "Failed to update connection" });
+    }
+  });
+
+  // Disconnect (delete) a Gmail connection
+  app.delete("/api/gmail-connections/:id", requireAdmin, async (req, res) => {
+    try {
+      const rows = await db
+        .delete(gmailConnections)
+        .where(and(eq(gmailConnections.id, req.params.id), eq(gmailConnections.tenantId, req.tenant!.id)))
+        .returning();
+      if (rows.length === 0) return res.status(404).json({ error: "Connection not found" });
+      res.json({ success: true });
+    } catch {
+      res.status(500).json({ error: "Failed to disconnect" });
+    }
+  });
+
+  // Manual sync trigger for a single connection
+  app.post("/api/gmail-connections/:id/sync", requireAdmin, async (req, res) => {
+    try {
+      const [conn] = await db
+        .select()
+        .from(gmailConnections)
+        .where(and(eq(gmailConnections.id, req.params.id), eq(gmailConnections.tenantId, req.tenant!.id)));
+      if (!conn) return res.status(404).json({ error: "Connection not found" });
+      const count = await syncConnection(conn);
+      res.json({ success: true, newMessages: count });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Sync failed" });
     }
   });
 

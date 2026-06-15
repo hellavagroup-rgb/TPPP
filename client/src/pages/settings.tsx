@@ -976,9 +976,7 @@ function GmailConnectionsTab() {
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [deleteDialogId, setDeleteDialogId] = useState<string | null>(null);
 
-  const { data: debugInfo } = useQuery<{ redirectUri: string }>({
-    queryKey: ["/api/auth/gmail/debug-redirect-uri"],
-  });
+  const redirectUri = `${window.location.origin}/api/auth/gmail/callback`;
 
   // Read status from URL params (set after OAuth redirect)
   useEffect(() => {
@@ -1111,28 +1109,26 @@ function GmailConnectionsTab() {
             </div>
           )}
 
-          {debugInfo?.redirectUri && (
-            <div className="rounded-md bg-amber-50 border border-amber-200 p-3 text-xs space-y-1.5">
-              <p className="font-medium text-amber-900">Required: Authorised Redirect URI</p>
-              <p className="text-amber-800">This exact URL must be added to your OAuth 2.0 client in Google Cloud Console under <strong>Clients → your client → Authorised redirect URIs</strong>:</p>
-              <div className="flex items-center gap-2 mt-1">
-                <code className="flex-1 bg-white border border-amber-200 rounded px-2 py-1.5 text-amber-900 break-all select-all font-mono">
-                  {debugInfo.redirectUri}
-                </code>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="shrink-0"
-                  onClick={() => {
-                    navigator.clipboard.writeText(debugInfo.redirectUri);
-                    toast.success("Copied");
-                  }}
-                >
-                  Copy
-                </Button>
-              </div>
+          <div className="rounded-md bg-amber-50 border border-amber-200 p-3 text-xs space-y-1.5">
+            <p className="font-medium text-amber-900">Required: Authorised Redirect URI</p>
+            <p className="text-amber-800">This exact URL must be added to your OAuth 2.0 client in Google Cloud Console under <strong>Clients → your client → Authorised redirect URIs</strong>:</p>
+            <div className="flex items-center gap-2 mt-1">
+              <code className="flex-1 bg-white border border-amber-200 rounded px-2 py-1.5 text-amber-900 break-all select-all font-mono">
+                {redirectUri}
+              </code>
+              <Button
+                size="sm"
+                variant="outline"
+                className="shrink-0 border-amber-300"
+                onClick={() => {
+                  navigator.clipboard.writeText(redirectUri);
+                  toast.success("Copied");
+                }}
+              >
+                Copy
+              </Button>
             </div>
-          )}
+          </div>
 
           <div className="rounded-md bg-muted/50 border p-3 text-xs text-muted-foreground space-y-1">
             <p className="font-medium text-foreground">How it works</p>

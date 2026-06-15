@@ -162,9 +162,15 @@ export default function IntakeInbox() {
 
   const bulkIgnoreMutation = useMutation({
     mutationFn: async (ids: string[]) => {
-      const res = await apiRequest("POST", "/api/intake-messages/bulk-ignore", { ids });
-      if (!res.ok) throw new Error("Failed to bulk ignore");
-      return res.json();
+      const res = await fetch("/api/intake-messages/bulk-ignore", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ ids }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "Failed to bulk ignore");
+      return data;
     },
     onSuccess: (data) => {
       toast({ title: `${data.count} message${data.count !== 1 ? "s" : ""} ignored` });
@@ -206,14 +212,13 @@ export default function IntakeInbox() {
               {someSelected && (
                 <Button
                   size="sm"
-                  variant="outline"
-                  className="text-destructive border-destructive/40 hover:bg-destructive/5"
+                  variant="secondary"
                   data-testid="button-bulk-ignore"
                   disabled={bulkIgnoreMutation.isPending}
                   onClick={() => bulkIgnoreMutation.mutate([...selected])}
                 >
                   <EyeOff className="h-3.5 w-3.5 mr-1.5" />
-                  Ignore {selected.size} selected
+                  {bulkIgnoreMutation.isPending ? "Ignoring…" : `Ignore ${selected.size} selected`}
                 </Button>
               )}
               <Button

@@ -1063,7 +1063,7 @@ function GmailConnectionsTab() {
           <div className="flex items-center gap-2">
             <Button
               variant="outline"
-              onClick={() => { window.location.href = "/api/auth/gmail/connect"; }}
+              onClick={() => { window.open("/api/auth/gmail/connect", "_blank"); }}
               data-testid="button-connect-gmail"
             >
               <ExternalLink className="h-4 w-4 mr-2" />

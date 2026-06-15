@@ -1931,6 +1931,11 @@ export async function registerRoutes(
 
   // ============ GMAIL CONNECTIONS ============
 
+  // Debug: return what redirect URI would be used (helps confirm Google Cloud setup)
+  app.get("/api/auth/gmail/debug-redirect-uri", requireAdmin, (req, res) => {
+    res.json({ redirectUri: buildRedirectUri(req) });
+  });
+
   // Start OAuth flow — redirect user to Google consent
   app.get("/api/auth/gmail/connect", requireAdmin, (req, res) => {
     if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {

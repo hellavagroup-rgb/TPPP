@@ -42,7 +42,8 @@ function extractedField(data: Record<string, string> | null, ...keys: string[]):
 
 function ViewEmailDialog({ message, open, onClose }: { message: IntakeMessage; open: boolean; onClose: () => void }) {
   const fields = message.extractedData;
-  const hasStructured = fields && Object.keys(fields).length > 0;
+  // Only treat as structured if there are at least 3 fields (otherwise likely a plain email)
+  const hasStructured = fields && Object.keys(fields).length >= 3;
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
@@ -57,24 +58,30 @@ function ViewEmailDialog({ message, open, onClose }: { message: IntakeMessage; o
           </DialogDescription>
         </DialogHeader>
 
-        {hasStructured && (
-          <div className="space-y-1 mt-2">
-            {Object.entries(fields!).map(([label, value]) => (
-              <div key={label} className="grid grid-cols-[180px_1fr] gap-2 py-1.5 border-b border-border/50 last:border-0">
-                <span className="text-sm font-medium text-muted-foreground">{label}</span>
-                <span className="text-sm break-words">{value}</span>
+        {hasStructured ? (
+          <>
+            <div className="space-y-1 mt-2">
+              {Object.entries(fields!).map(([label, value]) => (
+                <div key={label} className="grid grid-cols-[180px_1fr] gap-2 py-1.5 border-b border-border/50 last:border-0">
+                  <span className="text-sm font-medium text-muted-foreground">{label}</span>
+                  <span className="text-sm break-words">{value}</span>
+                </div>
+              ))}
+            </div>
+            <details className="mt-4">
+              <summary className="text-xs text-muted-foreground cursor-pointer select-none hover:text-foreground transition-colors">
+                View raw email body
+              </summary>
+              <div className="mt-2 p-4 bg-muted rounded-md text-sm whitespace-pre-wrap leading-relaxed">
+                {message.body}
               </div>
-            ))}
+            </details>
+          </>
+        ) : (
+          <div className="mt-3 p-4 bg-muted/50 rounded-md text-sm whitespace-pre-wrap leading-relaxed max-h-[50vh] overflow-y-auto">
+            {message.body || <span className="text-muted-foreground italic">No body content</span>}
           </div>
         )}
-        <details className="mt-4">
-          <summary className="text-xs text-muted-foreground cursor-pointer select-none hover:text-foreground transition-colors">
-            {hasStructured ? "View raw email body" : "Raw email body"}
-          </summary>
-          <div className="mt-2 p-4 bg-muted rounded-md text-sm whitespace-pre-wrap font-mono leading-relaxed">
-            {message.body}
-          </div>
-        </details>
       </DialogContent>
     </Dialog>
   );

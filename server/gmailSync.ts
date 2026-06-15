@@ -75,6 +75,36 @@ function extractHeader(headers: Array<{ name: string; value: string }>, name: st
   return headers?.find(h => h.name.toLowerCase() === name.toLowerCase())?.value ?? "";
 }
 
+/** Decode common HTML entities and strip lines that are pure tracking URLs. */
+function cleanBodyText(text: string): string {
+  return text
+    .replace(/&rsquo;/g, "'").replace(/&lsquo;/g, "'")
+    .replace(/&rdquo;/g, '"').replace(/&ldquo;/g, '"')
+    .replace(/&amp;/g, '&').replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&#\d+;/g, '')
+    .split('\n')
+    // Drop lines that are only a URL (tracking/click links)
+    .filter(line => !/^https?:\/\/\S+$/.test(line.trim()))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/** Returns true for emails we should skip (marketing, automated, social). */
+function isMarketingEmail(
+  headers: Array<{ name: string; value: string }>,
+  labelIds: string[],
+): boolean {
+  if (extractHeader(headers, "list-unsubscribe")) return true;
+  if (extractHeader(headers, "x-mailchimp-id")) return true;
+  const promoLabels = ["CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL", "CATEGORY_UPDATES", "CATEGORY_FORUMS"];
+  if (labelIds.some(l => promoLabels.includes(l))) return true;
+  const precedence = extractHeader(headers, "precedence").toLowerCase();
+  if (precedence === "bulk" || precedence === "list") return true;
+  return false;
+}
+
 /**
  * Sync one Gmail connection — fetch new messages since last historyId.
  * Returns the number of new intake messages created.
@@ -123,12 +153,12 @@ export async function syncConnection(connection: {
   }
 
   if (!connection.historyId) {
-    // Full sweep: pull messages from the last 30 days
+    // Full sweep: pull messages from the last 30 days, skip promotions/social
     const since = Math.floor((Date.now() - 30 * 24 * 60 * 60 * 1000) / 1000);
     const listRes = await gmail.users.messages.list({
       userId: "me",
-      q: `after:${since} in:inbox`,
-      maxResults: 50,
+      q: `after:${since} in:inbox -category:promotions -category:social -category:updates`,
+      maxResults: 100,
     });
 
     // Also capture the current historyId so future syncs are incremental
@@ -163,23 +193,29 @@ export async function syncConnection(connection: {
         format: "full",
       });
       const msg = msgRes.data;
-      const headers = msg.payload?.headers ?? [];
       const threadId = msg.threadId ?? msgId;
 
       // Skip if we already have a message from this thread
       if (existingThreadIds.has(threadId)) continue;
       existingThreadIds.add(threadId);
 
+      const headers = msg.payload?.headers ?? [];
+      const labelIds = msg.labelIds ?? [];
+
+      // Skip marketing / automated / promotional emails
+      if (isMarketingEmail(headers, labelIds)) continue;
+
       const subject = extractHeader(headers, "subject") || "(no subject)";
       const fromHeader = extractHeader(headers, "from");
       // Extract email from "Name <email>" format
       const fromMatch = fromHeader.match(/<([^>]+)>/) || fromHeader.match(/([^\s]+@[^\s]+)/);
       const fromAddress = fromMatch ? fromMatch[1] : fromHeader;
-      const body = extractTextBody(msg.payload);
+      const rawBody = extractTextBody(msg.payload);
 
-      if (!body.trim()) continue; // skip empty messages
+      if (!rawBody.trim()) continue; // skip empty messages
 
-      const parsed = parseIntakeEmailBody(body);
+      const body = cleanBodyText(rawBody);
+      const parsed = parseIntakeEmailBody(rawBody); // parse before cleaning to preserve structure
 
       await db.insert(intakeMessages).values({
         tenantId: connection.tenantId,

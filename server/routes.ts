@@ -1944,6 +1944,8 @@ export async function registerRoutes(
     const redirectUri = buildRedirectUri(req);
     const state = Buffer.from(JSON.stringify({ tenantId: req.tenant?.id, userId: (req.user as any)?.id, redirectUri })).toString("base64url");
     const url = getAuthUrl(state, redirectUri);
+    console.log("[gmail oauth] redirect_uri:", redirectUri);
+    console.log("[gmail oauth] full url:", url);
     res.redirect(url);
   });
 

@@ -17,7 +17,7 @@ import { requireTenant } from './middleware/tenant';
 import { db } from "./db";
 import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs, intakeMessages, gmailConnections } from "@shared/schema";
 import { getAuthUrl, exchangeCodeForTokens, syncConnection, buildRedirectUri } from "./gmailSync";
-import { isNull, eq, and } from "drizzle-orm";
+import { isNull, eq, and, inArray } from "drizzle-orm";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -2217,7 +2217,6 @@ export async function registerRoutes(
       if (!Array.isArray(ids) || ids.length === 0) {
         return res.status(400).json({ error: "ids must be a non-empty array" });
       }
-      const { inArray } = await import("drizzle-orm");
       await db
         .update(intakeMessages)
         .set({ status: "ignored" })

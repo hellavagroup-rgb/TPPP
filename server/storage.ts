@@ -116,7 +116,7 @@ export interface IStorage {
   getPaymentChargesByClientId(clientId: string): Promise<PaymentCharge[]>;
   getAllPaymentCharges(tenantId?: string | null): Promise<(PaymentCharge & { clientDisplayId: string; clinicianName: string | null })[]>;
   updatePaymentCharge(id: string, updates: Partial<InsertPaymentCharge>): Promise<PaymentCharge | undefined>;
-  getClientsWithFailedPayments(tenantId?: string | null): Promise<string[]>;
+  getClientsWithFailedPayments(tenantId?: string | null): Promise<{ clientId: string; failureReason: string | null }[]>;
 }
 
 // Database implementation with PostgreSQL
@@ -911,20 +911,20 @@ export class DatabaseStorage implements IStorage {
     return result || undefined;
   }
 
-  async getClientsWithFailedPayments(tenantId?: string | null): Promise<string[]> {
+  async getClientsWithFailedPayments(tenantId?: string | null): Promise<{ clientId: string; failureReason: string | null }[]> {
     const rows = await db.execute(sql`
-      SELECT DISTINCT pc1.client_id
-      FROM payment_charges pc1
-      WHERE pc1.status = 'failed'
-        ${tenantId ? sql`AND pc1.tenant_id = ${tenantId}` : sql``}
-        AND NOT EXISTS (
-          SELECT 1 FROM payment_charges pc2
-          WHERE pc2.client_id = pc1.client_id
-            AND pc2.status = 'succeeded'
-            AND pc2.charged_at > pc1.charged_at
+      SELECT pc.client_id, pc.failure_reason
+      FROM payment_charges pc
+      WHERE pc.status = 'failed'
+        ${tenantId ? sql`AND pc.tenant_id = ${tenantId}` : sql``}
+        AND pc.charged_at = (
+          SELECT MAX(pc2.charged_at)
+          FROM payment_charges pc2
+          WHERE pc2.client_id = pc.client_id
+            ${tenantId ? sql`AND pc2.tenant_id = ${tenantId}` : sql``}
         )
     `);
-    return (rows as any[]).map((r: any) => r.client_id);
+    return (rows as any[]).map((r: any) => ({ clientId: r.client_id, failureReason: r.failure_reason ?? null }));
   }
 }
 

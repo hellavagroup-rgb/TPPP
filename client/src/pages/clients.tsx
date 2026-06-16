@@ -646,11 +646,21 @@ export default function Clients() {
 
   const paymentStatusBadge = (client: ClientType) => {
     if (!stripeEnabled) return null;
-    if ((client as any).hasFailedPayment) return (
-      <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-red-100 text-red-700 px-1.5 py-0.5 rounded" data-testid={`badge-payment-failed-${client.id}`}>
-        <AlertCircle className="h-2.5 w-2.5" /> Payment Failed
-      </span>
-    );
+    if ((client as any).hasFailedPayment) {
+      const reason = (client as any).latestFailureReason;
+      return (
+        <div className="flex flex-col gap-0.5">
+          <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-red-100 text-red-700 px-1.5 py-0.5 rounded" data-testid={`badge-payment-failed-${client.id}`}>
+            <AlertCircle className="h-2.5 w-2.5" /> Payment Failed
+          </span>
+          {reason && (
+            <span className="text-[10px] text-red-600 italic leading-tight" data-testid={`text-payment-failure-reason-${client.id}`}>
+              {reason}
+            </span>
+          )}
+        </div>
+      );
+    }
     const ps = client.paymentStatus;
     if (ps === "active") return (
       <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-green-100 text-green-700 px-1.5 py-0.5 rounded">

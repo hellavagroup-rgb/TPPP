@@ -806,12 +806,16 @@ export async function registerRoutes(
   app.get("/api/clients", requireAdmin, auditLog("view", "client"), async (req, res) => {
     try {
       const includeArchived = req.query.includeArchived === "true";
-      const [clientList, failedClientIds] = await Promise.all([
+      const [clientList, failedPayments] = await Promise.all([
         storage.getAllClients(includeArchived, req.tenant?.id),
         storage.getClientsWithFailedPayments(req.tenant?.id),
       ]);
-      const failedSet = new Set(failedClientIds);
-      const clients = clientList.map(c => ({ ...c, hasFailedPayment: failedSet.has(c.id) }));
+      const failedMap = new Map(failedPayments.map(fp => [fp.clientId, fp.failureReason]));
+      const clients = clientList.map(c => ({
+        ...c,
+        hasFailedPayment: failedMap.has(c.id),
+        latestFailureReason: failedMap.get(c.id) ?? null,
+      }));
       res.json(clients);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch clients" });

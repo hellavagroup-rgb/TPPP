@@ -2321,6 +2321,9 @@ export async function registerRoutes(
 
       const client = await storage.getClientById(clientId);
       if (!client) return res.status(404).json({ error: "Client not found" });
+      if (req.tenant?.id && client.tenantId !== req.tenant.id) {
+        return res.status(403).json({ error: "Access denied" });
+      }
       if (!client.email) return res.status(400).json({ error: "Client has no email address" });
 
       const amountPence = client.agreedRatePence ?? 0;
@@ -2433,6 +2436,16 @@ export async function registerRoutes(
               const paymentMethodId = typeof pi.payment_method === "string" ? pi.payment_method : pi.payment_method?.id;
 
               if (paymentMethodId) {
+                // Validate tenant ownership before mutating
+                const clientForUpdate = await storage.getClientById(clientId);
+                if (!clientForUpdate) {
+                  return res.json({ received: true });
+                }
+                if (metaTenantId && clientForUpdate.tenantId !== metaTenantId) {
+                  console.error(`Webhook: tenant mismatch for client ${clientId}`);
+                  return res.json({ received: true });
+                }
+
                 await db.update(clients).set({
                   stripePaymentMethodId: paymentMethodId,
                   paymentStatus: "active",
@@ -2440,7 +2453,7 @@ export async function registerRoutes(
                 }).where(eq(clients.id, clientId));
 
                 // Record the initial charge (idempotent — checked above)
-                const client = await storage.getClientById(clientId);
+                const client = clientForUpdate;
                 if (client) {
                   await storage.createPaymentCharge({
                     clientId,
@@ -2497,6 +2510,9 @@ export async function registerRoutes(
 
       const client = await storage.getClientById(clientId);
       if (!client) return res.status(404).json({ error: "Client not found" });
+      if (req.tenant?.id && client.tenantId !== req.tenant.id) {
+        return res.status(403).json({ error: "Access denied" });
+      }
 
       // Access check: admin can charge any client; clinician can only charge their assigned client
       const reqUser = req.user as any;
@@ -2553,12 +2569,16 @@ export async function registerRoutes(
   // Get payment history for a client (admin or assigned clinician)
   app.get("/api/stripe/charges/:clientId", requireAuth, async (req, res) => {
     try {
-      // Access check: admin sees all, clinician sees only their assigned client
       const reqUser = req.user as any;
+      const client = await storage.getClientById(req.params.clientId);
+      if (!client) return res.status(404).json({ error: "Client not found" });
+      if (req.tenant?.id && client.tenantId !== req.tenant.id) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      // Access check: admin sees all, clinician sees only their assigned client
       if (reqUser?.role !== "admin") {
-        const client = await storage.getClientById(req.params.clientId);
         const clinician = await storage.getClinicianByUserId(reqUser?.id);
-        if (!client || !clinician || client.assignedClinicianId !== clinician.id) {
+        if (!clinician || client.assignedClinicianId !== clinician.id) {
           return res.status(403).json({ error: "Access denied" });
         }
       }
@@ -2576,9 +2596,13 @@ export async function registerRoutes(
       if (typeof agreedRatePence !== "number") {
         return res.status(400).json({ error: "agreedRatePence must be a number" });
       }
+      const tenantId = req.tenant?.id;
+      const whereClause = tenantId
+        ? and(eq(clients.id, req.params.id), eq(clients.tenantId, tenantId))
+        : eq(clients.id, req.params.id);
       const [updated] = await db.update(clients)
         .set({ agreedRatePence, updatedAt: new Date() })
-        .where(eq(clients.id, req.params.id))
+        .where(whereClause)
         .returning();
       if (!updated) return res.status(404).json({ error: "Client not found" });
       res.json(updated);

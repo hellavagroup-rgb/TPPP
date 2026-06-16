@@ -1,6 +1,6 @@
 import { db } from "./db";
-import { users, clinicians, formTemplates, clients, tasks, formSubmissions, timeSlots, auditLogs } from "../shared/schema";
-import { eq } from "drizzle-orm";
+import { users, clinicians, formTemplates, clients, tasks, formSubmissions, timeSlots, auditLogs, tenants } from "../shared/schema";
+import { eq, isNull } from "drizzle-orm";
 
 const seedData = {
   users: [
@@ -118,6 +118,12 @@ export async function seedDatabaseIfEmpty() {
     const existingFieldCount = existingForm ? (existingForm.fields as any[])?.length || 0 : 0;
     const formNeedsUpdate = existingForm && existingFieldCount < expectedFieldCount;
     
+    // Always ensure Perinatal tenant has its logo set (idempotent migration)
+    await db.update(tenants)
+      .set({ logoUrl: '/perinatal-logo.png' })
+      .where(eq(tenants.name, 'Perinatal Psychology Practice'));
+    console.log("Ensured Perinatal tenant logoUrl is set");
+
     // Always update form templates if they're outdated
     if (formNeedsUpdate) {
       console.log(`Form template needs update: ${existingFieldCount} fields -> ${expectedFieldCount} fields`);

@@ -21,7 +21,6 @@ import {
   Inbox,
   CreditCard
 } from "lucide-react";
-import logo from "@assets/xPerinatalPP-logo-large-digital.png.pagespeed.ic.wAjk_RUOnf_1766008188694.png";
 import { useState } from "react";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
@@ -45,7 +44,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       if (!res.ok) return null;
       return res.json();
     },
-    enabled: !!user && user.role === "admin",
+    enabled: !!user,
     staleTime: 60_000,
   });
   const { toast } = useToast();
@@ -119,7 +118,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     <div className="flex flex-col h-full bg-sidebar text-sidebar-foreground border-r border-sidebar-border">
       <div className="p-6 flex flex-col gap-4">
         <div className="w-full flex flex-col items-center py-2 gap-1">
-             <img src={logo} alt="The Perinatal Psychology Practice" className="w-full max-w-[200px] object-contain" />
+             {tenant?.logoUrl ? (
+               <img src={tenant.logoUrl} alt={tenant.name || "Practice"} className="w-full max-w-[200px] object-contain" />
+             ) : (
+               <span className="text-base font-semibold text-sidebar-foreground text-center leading-tight">
+                 {tenant?.name || "Practice Portal"}
+               </span>
+             )}
              <span className="text-[10px] uppercase tracking-widest text-sidebar-foreground/60 font-medium">
                 {user?.role === "clinician" ? "Clinician Portal" : "Client Management"}
              </span>

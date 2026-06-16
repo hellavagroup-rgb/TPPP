@@ -8,6 +8,9 @@ import { z } from "zod";
 export const tenants = pgTable("tenants", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
+  logoUrl: text("logo_url"),
+  primaryColor: text("primary_color"),
+  accentColor: text("accent_color"),
   pmsType: text("pms_type"),
   clinikoApiKey: text("cliniko_api_key"),
   whatsappEnabled: boolean("whatsapp_enabled").default(false),

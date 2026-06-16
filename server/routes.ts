@@ -1996,6 +1996,22 @@ export async function registerRoutes(
     }
   });
 
+  // Public endpoint — returns only branding fields, no auth required
+  app.get("/api/tenant/branding", async (req, res) => {
+    try {
+      const [tenant] = await db.select({
+        name: tenants.name,
+        logoUrl: tenants.logoUrl,
+        primaryColor: tenants.primaryColor,
+        accentColor: tenants.accentColor,
+      }).from(tenants).limit(1);
+      if (!tenant) return res.status(404).json({ error: "No tenant configured" });
+      res.json(tenant);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch tenant branding" });
+    }
+  });
+
   // ============ GMAIL CONNECTIONS ============
 
   // Debug: return what redirect URI would be used (helps confirm Google Cloud setup)

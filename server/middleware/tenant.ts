@@ -11,6 +11,7 @@ export async function requireTenant(req: any, res: any, next: any) {
     '/admin-users/accept-invite',
     '/auth/me',
     '/admin/seed-tenant',
+    '/tenant/branding',
   ];
 
   if (

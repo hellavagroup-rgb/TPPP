@@ -2618,6 +2618,16 @@ export async function registerRoutes(
     }
   });
 
+  // Get all payment charges across all clients (admin only)
+  app.get("/api/stripe/charges", requireAdmin, async (req, res) => {
+    try {
+      const charges = await storage.getAllPaymentCharges(req.tenant?.id);
+      res.json(charges);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch charges" });
+    }
+  });
+
   // Update agreed rate for a client
   app.patch("/api/clients/:id/agreed-rate", requireAdmin, async (req, res) => {
     try {

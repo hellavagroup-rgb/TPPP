@@ -113,6 +113,7 @@ export interface IStorage {
   // ============ PAYMENT CHARGES ============
   createPaymentCharge(charge: InsertPaymentCharge): Promise<PaymentCharge>;
   getPaymentChargesByClientId(clientId: string): Promise<PaymentCharge[]>;
+  getAllPaymentCharges(tenantId?: string | null): Promise<(PaymentCharge & { clientDisplayId: string; clinicianName: string | null })[]>;
   updatePaymentCharge(id: string, updates: Partial<InsertPaymentCharge>): Promise<PaymentCharge | undefined>;
 }
 
@@ -869,6 +870,32 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(paymentCharges)
       .where(eq(paymentCharges.clientId, clientId))
       .orderBy(desc(paymentCharges.chargedAt));
+  }
+
+  async getAllPaymentCharges(tenantId?: string | null): Promise<(PaymentCharge & { clientDisplayId: string; clinicianName: string | null })[]> {
+    const cliniciansAlias = clinicians;
+    const usersAlias = users;
+    const rows = await db
+      .select({
+        id: paymentCharges.id,
+        clientId: paymentCharges.clientId,
+        amountPence: paymentCharges.amountPence,
+        stripePaymentIntentId: paymentCharges.stripePaymentIntentId,
+        status: paymentCharges.status,
+        notes: paymentCharges.notes,
+        chargedByUserId: paymentCharges.chargedByUserId,
+        chargedAt: paymentCharges.chargedAt,
+        tenantId: paymentCharges.tenantId,
+        clientDisplayId: clients.displayId,
+        clinicianName: usersAlias.name,
+      })
+      .from(paymentCharges)
+      .leftJoin(clients, eq(paymentCharges.clientId, clients.id))
+      .leftJoin(cliniciansAlias, eq(clients.assignedClinicianId, cliniciansAlias.id))
+      .leftJoin(usersAlias, eq(cliniciansAlias.userId, usersAlias.id))
+      .where(tenantId ? eq(paymentCharges.tenantId, tenantId) : undefined)
+      .orderBy(desc(paymentCharges.chargedAt));
+    return rows.map(r => ({ ...r, clientDisplayId: r.clientDisplayId ?? '', clinicianName: r.clinicianName ?? null }));
   }
 
   async updatePaymentCharge(id: string, updates: Partial<InsertPaymentCharge>): Promise<PaymentCharge | undefined> {

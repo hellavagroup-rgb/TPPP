@@ -18,7 +18,8 @@ import {
   Brain,
   UserCircle,
   KeyRound,
-  Inbox
+  Inbox,
+  CreditCard
 } from "lucide-react";
 import logo from "@assets/xPerinatalPP-logo-large-digital.png.pagespeed.ic.wAjk_RUOnf_1766008188694.png";
 import { useState } from "react";
@@ -102,6 +103,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     { name: "Availability", href: "/availability", icon: CalendarClock },
     { name: "Forms", href: "/forms", icon: FileText },
     { name: "Analytics", href: "/analytics", icon: BarChart3 },
+    { name: "Payments", href: "/payments", icon: CreditCard },
     ...(tenant?.gmailIntakeEnabled ? [{ name: "Intake Inbox", href: "/intake-inbox", icon: Inbox }] : []),
     { name: "Settings", href: "/settings", icon: Settings },
   ];

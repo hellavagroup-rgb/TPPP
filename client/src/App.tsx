@@ -22,6 +22,7 @@ import ClinicianProfile from "@/pages/clinician-profile";
 import AcceptInvite from "@/pages/accept-invite";
 import PaymentSuccess from "@/pages/payment-success";
 import PaymentCancel from "@/pages/payment-cancel";
+import Payments from "@/pages/payments";
 import { useEffect } from "react";
 
 function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
@@ -36,6 +37,24 @@ function ProtectedRoute({ component: Component }: { component: React.ComponentTy
 
   if (isLoading) return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
   if (!user) return null;
+
+  return <Component />;
+}
+
+function AdminRoute({ component: Component }: { component: React.ComponentType }) {
+  const { user, isLoading } = useAuth();
+  const [, setLocation] = useLocation();
+
+  useEffect(() => {
+    if (!isLoading && !user) {
+      setLocation("/login");
+    } else if (!isLoading && user && user.role !== "admin") {
+      setLocation("/");
+    }
+  }, [user, isLoading, setLocation]);
+
+  if (isLoading) return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
+  if (!user || user.role !== "admin") return null;
 
   return <Component />;
 }
@@ -81,6 +100,7 @@ function Router() {
         <Route path="/forms" component={() => <ProtectedRoute component={Forms} />} />
         <Route path="/forms/:id" component={() => <ProtectedRoute component={FormBuilder} />} />
         <Route path="/analytics" component={() => <ProtectedRoute component={Analytics} />} />
+        <Route path="/payments" component={() => <AdminRoute component={Payments} />} />
         <Route path="/intake-inbox" component={() => <ProtectedRoute component={IntakeInbox} />} />
         
         {/* Clinician Routes */}

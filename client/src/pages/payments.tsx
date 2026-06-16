@@ -7,6 +7,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { CreditCard, TrendingUp, CheckCircle, Clock, XCircle, Search, X, Hash } from "lucide-react";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts";
 import type { Clinician, Client } from "@shared/schema";
 
 type ChargeWithClient = {
@@ -149,6 +158,28 @@ export default function Payments() {
     return { totalRevenue, thisMonthRevenue, totalCharges, activeSetups, pendingCount };
   }, [charges, allClients]);
 
+  const monthlyRevenue = useMemo(() => {
+    const months: { label: string; year: number; month: number }[] = [];
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      months.push({
+        label: d.toLocaleDateString("en-GB", { month: "short", year: "2-digit" }),
+        year: d.getFullYear(),
+        month: d.getMonth(),
+      });
+    }
+    const succeeded = charges.filter(c => c.status === "succeeded" && c.chargedAt);
+    return months.map(({ label, year, month }) => {
+      const total = succeeded
+        .filter(c => {
+          const d = new Date(c.chargedAt!);
+          return d.getFullYear() === year && d.getMonth() === month;
+        })
+        .reduce((sum, c) => sum + c.amountPence, 0);
+      return { label, revenue: parseFloat((total / 100).toFixed(2)) };
+    });
+  }, [charges]);
+
   const hasFilters = statusFilter !== "all" || clinicianFilter !== "all" || fromDate || toDate || search;
 
   function clearFilters() {
@@ -224,6 +255,46 @@ export default function Payments() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Revenue Trend Chart */}
+      <Card data-testid="card-revenue-trend">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base font-semibold flex items-center gap-2">
+            <TrendingUp className="h-4 w-4 text-green-500" />
+            Monthly Revenue — Last 12 Months
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <div className="h-48 flex items-center justify-center text-gray-400 text-sm">Loading…</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={220} data-testid="chart-revenue-trend">
+              <BarChart data={monthlyRevenue} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                <XAxis
+                  dataKey="label"
+                  tick={{ fontSize: 11, fill: "#6b7280" }}
+                  tickLine={false}
+                  axisLine={false}
+                />
+                <YAxis
+                  tickFormatter={v => `£${v}`}
+                  tick={{ fontSize: 11, fill: "#6b7280" }}
+                  tickLine={false}
+                  axisLine={false}
+                  width={56}
+                />
+                <Tooltip
+                  formatter={(value: number) => [`£${value.toFixed(2)}`, "Revenue"]}
+                  contentStyle={{ fontSize: 12, borderRadius: 6 }}
+                  cursor={{ fill: "#f9fafb" }}
+                />
+                <Bar dataKey="revenue" fill="#6366f1" radius={[3, 3, 0, 0]} maxBarSize={40} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Filters */}
       <Card>

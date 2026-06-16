@@ -1221,7 +1221,7 @@ function StripeSettingsTab() {
   const [showSecret, setShowSecret] = useState(false);
   const [showWebhook, setShowWebhook] = useState(false);
 
-  const { data: status, refetch } = useQuery<{ configured: boolean }>({
+  const { data: status, refetch } = useQuery<{ configured: boolean; encryptionReady: boolean }>({
     queryKey: ["/api/stripe/status"],
   });
 
@@ -1267,6 +1267,20 @@ function StripeSettingsTab() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {/* Encryption prerequisite warning */}
+          {status && !status.encryptionReady && (
+            <div className="flex items-start gap-3 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-900">
+              <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0 text-amber-600" />
+              <div className="text-sm">
+                <p className="font-medium">Encryption key required</p>
+                <p className="text-xs mt-0.5 text-amber-700">
+                  Set a <code className="bg-amber-100 px-1 rounded">STRIPE_ENCRYPTION_KEY</code> environment secret before saving credentials.
+                  Generate one with: <code className="bg-amber-100 px-1 rounded">openssl rand -base64 32</code>
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Status */}
           <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/50">
             {status?.configured ? (

@@ -17,6 +17,7 @@ import { requireTenant } from './middleware/tenant';
 import { db } from "./db";
 import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs, intakeMessages, gmailConnections, paymentCharges } from "@shared/schema";
 import { isStripeConfigured, getStripeInstance, createCheckoutSession, chargeOffSession, constructWebhookEvent } from "./stripe";
+import { encryptSecret, decryptSecret, isEncryptionConfigured } from "./encryption";
 import { getAuthUrl, exchangeCodeForTokens, syncConnection, buildRedirectUri } from "./gmailSync";
 import { isNull, eq, and, inArray } from "drizzle-orm";
 
@@ -2289,10 +2290,13 @@ export async function registerRoutes(
   // Check if Stripe is configured
   app.get("/api/stripe/status", requireAuth, async (req, res) => {
     const tenantKey = req.tenant?.stripeSecretKey;
-    res.json({ configured: isStripeConfigured(tenantKey) });
+    res.json({
+      configured: isStripeConfigured(tenantKey),
+      encryptionReady: isEncryptionConfigured(),
+    });
   });
 
-  // Save Stripe keys for tenant
+  // Save Stripe keys for tenant (keys are encrypted at rest via STRIPE_ENCRYPTION_KEY)
   app.post("/api/settings/stripe", requireAdmin, async (req, res) => {
     try {
       const { stripeSecretKey, stripeWebhookSecret } = req.body as {
@@ -2300,9 +2304,19 @@ export async function registerRoutes(
         stripeWebhookSecret?: string;
       };
       if (!req.tenant) return res.status(400).json({ error: "Tenant not found" });
-      const updates: any = {};
-      if (stripeSecretKey !== undefined) updates.stripeSecretKey = stripeSecretKey || null;
-      if (stripeWebhookSecret !== undefined) updates.stripeWebhookSecret = stripeWebhookSecret || null;
+      if (!isEncryptionConfigured()) {
+        return res.status(503).json({
+          error: "STRIPE_ENCRYPTION_KEY environment variable is not configured. " +
+                 "Set it to a 32-byte base64-encoded value before storing Stripe credentials.",
+        });
+      }
+      const updates: Record<string, string | null> = {};
+      if (stripeSecretKey !== undefined) {
+        updates.stripeSecretKey = stripeSecretKey ? encryptSecret(stripeSecretKey) : null;
+      }
+      if (stripeWebhookSecret !== undefined) {
+        updates.stripeWebhookSecret = stripeWebhookSecret ? encryptSecret(stripeWebhookSecret) : null;
+      }
       await db.update(tenants).set(updates).where(eq(tenants.id, req.tenant.id));
       res.json({ success: true });
     } catch (error) {

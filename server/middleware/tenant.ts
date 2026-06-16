@@ -1,6 +1,7 @@
 import { db } from "../db";
 import { users, tenants } from "@shared/schema";
 import { eq } from "drizzle-orm";
+import { decryptSecret } from "../encryption";
 
 export async function requireTenant(req: any, res: any, next: any) {
   const openPaths = [
@@ -40,7 +41,16 @@ export async function requireTenant(req: any, res: any, next: any) {
       return res.status(403).json({ error: 'No tenant found for this user' });
     }
 
-    req.tenant = result[0].tenant;
+    const tenant = result[0].tenant;
+    // Decrypt Stripe credentials at read time — they are stored encrypted at rest
+    // using a STRIPE_ENCRYPTION_KEY env var so plaintext secrets never sit in the DB.
+    if (tenant.stripeSecretKey) {
+      try { tenant.stripeSecretKey = decryptSecret(tenant.stripeSecretKey); } catch { /* ignore decrypt errors */ }
+    }
+    if (tenant.stripeWebhookSecret) {
+      try { tenant.stripeWebhookSecret = decryptSecret(tenant.stripeWebhookSecret); } catch { /* ignore decrypt errors */ }
+    }
+    req.tenant = tenant;
     next();
   } catch (err) {
     console.error('Tenant middleware error:', err);

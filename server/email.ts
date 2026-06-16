@@ -542,3 +542,38 @@ The Perinatal Psychology Practice Team`;
 
   return { to: '', subject, html, text: bodyText };
 }
+
+export function generatePaymentFailureEmail(clientDisplayId: string, clientName: string, amountPounds: string, failureReason: string): EmailOptions {
+  const subject = `Payment Failed – ${clientDisplayId}`;
+  const bodyText = `A payment has failed for a client.\n\nClient ID: ${clientDisplayId}\nClient Name: ${clientName}\nAmount: £${amountPounds}\nReason: ${failureReason}\n\nPlease log in to the practice management system to review this client's payment status and take action if required.\n\nThe Perinatal Psychology Practice`;
+  const html = `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }
+      .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+      .header { background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+      .content { background: #f8f9fa; padding: 30px; border-radius: 0 0 8px 8px; }
+      .detail-row { margin: 8px 0; }
+      .label { font-weight: bold; }
+      .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header"><h1>Payment Failed</h1></div>
+      <div class="content">
+        <p>A payment has failed for a client and may require your attention.</p>
+        <div class="detail-row"><span class="label">Client ID:</span> ${clientDisplayId}</div>
+        <div class="detail-row"><span class="label">Client Name:</span> ${clientName}</div>
+        <div class="detail-row"><span class="label">Amount:</span> £${amountPounds}</div>
+        <div class="detail-row"><span class="label">Failure Reason:</span> ${failureReason}</div>
+        <p>Please log in to the practice management system to review this client's payment status and take action if required.</p>
+      </div>
+      <div class="footer">The Perinatal Psychology Practice</div>
+    </div>
+  </body>
+</html>`;
+  return { to: '', subject, html, text: bodyText };
+}

@@ -10,7 +10,7 @@ import {
   insertFormTemplateSchema, insertTaskSchema, insertUserSchema 
 } from "@shared/schema";
 import { z } from "zod";
-import { sendEmail, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail } from "./email";
+import { sendEmail, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail } from "./email";
 import { forceReseedDatabase } from "./seed";
 import { parseIntakeEmailBody } from "./intakeParser";
 import { requireTenant } from './middleware/tenant';
@@ -2510,10 +2510,61 @@ export async function registerRoutes(
 
       if (event.type === "payment_intent.payment_failed") {
         const pi = event.data.object as any;
+        const failureReason: string = pi.last_payment_error?.message || "Unknown reason";
         const [charge] = await db.select().from(paymentCharges)
           .where(eq(paymentCharges.stripePaymentIntentId, pi.id));
+
         if (charge) {
-          await storage.updatePaymentCharge(charge.id, { status: "failed" });
+          // Only transition to failed if not already in a terminal state (idempotent on retries)
+          const alreadyFailed = charge.status === "failed";
+          if (!alreadyFailed) {
+            await storage.updatePaymentCharge(charge.id, { status: "failed" });
+          }
+
+          // Notify admins — scoped to the client's tenant to prevent cross-tenant disclosure.
+          // Only send on first transition to avoid duplicate emails on webhook retries.
+          if (!alreadyFailed) {
+            try {
+              const client = await storage.getClientById(charge.clientId);
+              if (client) {
+                const adminUsers = await storage.getAdminUsersByTenantId(client.tenantId);
+                if (adminUsers.length > 0) {
+                  const clientName = `${client.firstName || ''} ${client.lastName || ''}`.trim() || 'Unknown';
+                  const amountPounds = charge.amountPence ? (charge.amountPence / 100).toFixed(2) : '0.00';
+                  const emailOptions = generatePaymentFailureEmail(client.displayId, clientName, amountPounds, failureReason);
+                  for (const admin of adminUsers) {
+                    await sendEmail({ ...emailOptions, to: admin.email });
+                  }
+                }
+              }
+            } catch (notifyErr) {
+              console.error("Webhook: failed to send payment failure notifications:", notifyErr);
+            }
+          }
+        } else {
+          // No charge record exists (e.g. PI was created outside our charge flow or DB missed it).
+          // Try to identify the client from PI metadata and notify admins scoped to that tenant.
+          const clientId: string | undefined = pi.metadata?.clientId;
+          const piTenantId: string | undefined = pi.metadata?.tenantId ?? metaTenantId ?? undefined;
+          if (clientId && piTenantId) {
+            try {
+              const client = await storage.getClientById(clientId);
+              // Verify the client belongs to the tenant in the event metadata
+              if (client && client.tenantId === piTenantId) {
+                const adminUsers = await storage.getAdminUsersByTenantId(piTenantId);
+                if (adminUsers.length > 0) {
+                  const clientName = `${client.firstName || ''} ${client.lastName || ''}`.trim() || 'Unknown';
+                  const amountPounds = pi.amount ? (pi.amount / 100).toFixed(2) : '0.00';
+                  const emailOptions = generatePaymentFailureEmail(client.displayId, clientName, amountPounds, failureReason);
+                  for (const admin of adminUsers) {
+                    await sendEmail({ ...emailOptions, to: admin.email });
+                  }
+                }
+              }
+            } catch (notifyErr) {
+              console.error("Webhook: failed to send payment failure notifications (no charge record):", notifyErr);
+            }
+          }
         }
       }
 

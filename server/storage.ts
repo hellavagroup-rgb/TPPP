@@ -29,6 +29,7 @@ export interface IStorage {
   updateUser(id: string, updates: Partial<InsertUser>): Promise<User | undefined>;
   deleteUser(id: string): Promise<void>;
   getAdminUsers(): Promise<User[]>;
+  getAdminUsersByTenantId(tenantId: string): Promise<User[]>;
   
   // ============ INVITE TOKENS ============
   createInviteToken(userId: string, token: string, expiresAt: Date): Promise<InviteToken>;
@@ -156,6 +157,12 @@ export class DatabaseStorage implements IStorage {
 
   async getAdminUsers(): Promise<User[]> {
     return db.select().from(users).where(eq(users.role, "admin"));
+  }
+
+  async getAdminUsersByTenantId(tenantId: string): Promise<User[]> {
+    return db.select().from(users).where(
+      and(eq(users.role, "admin"), eq(users.tenantId, tenantId))
+    );
   }
 
   // ============ INVITE TOKENS ============

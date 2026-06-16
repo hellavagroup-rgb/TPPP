@@ -26,6 +26,9 @@ const generalLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests, please try again later" },
+  // Stripe webhooks must not be rate-limited — Stripe retries on failure and
+  // could be blocked if the general limiter counts its delivery attempts
+  skip: (req) => req.originalUrl === "/api/stripe/webhook",
 });
 
 const authLimiter = rateLimit({

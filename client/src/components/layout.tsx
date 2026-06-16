@@ -96,13 +96,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const adminNavigation = [
     { name: "Dashboard", href: "/", icon: LayoutDashboard },
     { name: "Clients", href: "/clients", icon: Users },
-    { name: "Waitlist", href: "/waitlist", icon: CalendarClock },
-    { name: "Tasks", href: "/tasks", icon: ClipboardList },
+    ...(tenant?.waitlistEnabled !== false ? [{ name: "Waitlist", href: "/waitlist", icon: CalendarClock }] : []),
+    ...(tenant?.tasksEnabled !== false ? [{ name: "Tasks", href: "/tasks", icon: ClipboardList }] : []),
     { name: "Clinicians", href: "/clinicians", icon: Brain },
     { name: "Availability", href: "/availability", icon: CalendarClock },
-    { name: "Forms", href: "/forms", icon: FileText },
-    { name: "Analytics", href: "/analytics", icon: BarChart3 },
-    { name: "Payments", href: "/payments", icon: CreditCard },
+    ...(tenant?.formsEnabled !== false ? [{ name: "Forms", href: "/forms", icon: FileText }] : []),
+    ...(tenant?.analyticsEnabled !== false ? [{ name: "Analytics", href: "/analytics", icon: BarChart3 }] : []),
+    ...(tenant?.paymentsEnabled !== false ? [{ name: "Payments", href: "/payments", icon: CreditCard }] : []),
     ...(tenant?.gmailIntakeEnabled ? [{ name: "Intake Inbox", href: "/intake-inbox", icon: Inbox }] : []),
     { name: "Settings", href: "/settings", icon: Settings },
   ];

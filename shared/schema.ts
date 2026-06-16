@@ -18,6 +18,14 @@ export const tenants = pgTable("tenants", {
   gmailIntakeEnabled: boolean("gmail_intake_enabled").default(false),
   stripeSecretKey: text("stripe_secret_key"), // Stored per-tenant for in-app configuration
   stripeWebhookSecret: text("stripe_webhook_secret"),
+  // Feature flags — all default true so existing tenants lose no functionality
+  paymentsEnabled: boolean("payments_enabled").default(true),
+  tasksEnabled: boolean("tasks_enabled").default(true),
+  analyticsEnabled: boolean("analytics_enabled").default(true),
+  waitlistEnabled: boolean("waitlist_enabled").default(true),
+  formsEnabled: boolean("forms_enabled").default(true),
+  dataExportEnabled: boolean("data_export_enabled").default(true),
+  nonEngagementEnabled: boolean("non_engagement_enabled").default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

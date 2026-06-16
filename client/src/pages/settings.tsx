@@ -1411,9 +1411,27 @@ function StripeSettingsTab() {
 export default function Settings() {
   const { user } = useAuth();
 
-  // Support ?tab=gmail or ?tab=stripe deep-links
+  const { data: tenant } = useQuery({
+    queryKey: ["/api/tenant"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/tenant");
+      if (!res.ok) return null;
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+
+  const paymentsEnabled = tenant?.paymentsEnabled !== false;
+  const dataExportEnabled = tenant?.dataExportEnabled !== false;
+  const nonEngagementEnabled = tenant?.nonEngagementEnabled !== false;
+  const gmailEnabled = tenant?.gmailIntakeEnabled === true;
+
+  // Support ?tab=gmail or ?tab=stripe deep-links, but fall back if the tab is disabled
   const urlTab = new URLSearchParams(window.location.search).get("tab");
-  const defaultTab = urlTab === "gmail" ? "gmail" : urlTab === "stripe" ? "stripe" : "notifications";
+  const defaultTab =
+    urlTab === "gmail" && gmailEnabled ? "gmail" :
+    urlTab === "stripe" && paymentsEnabled ? "stripe" :
+    "notifications";
 
   return (
     <div className="space-y-6">
@@ -1426,12 +1444,12 @@ export default function Settings() {
         <TabsList className="flex-wrap h-auto">
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
           <TabsTrigger value="email-templates">Email Templates</TabsTrigger>
-          <TabsTrigger value="non-engagement">Non-Engagement</TabsTrigger>
-          <TabsTrigger value="stripe">Stripe / Payments</TabsTrigger>
-          <TabsTrigger value="data-export">Data Export</TabsTrigger>
+          {nonEngagementEnabled && <TabsTrigger value="non-engagement">Non-Engagement</TabsTrigger>}
+          {paymentsEnabled && <TabsTrigger value="stripe">Stripe / Payments</TabsTrigger>}
+          {dataExportEnabled && <TabsTrigger value="data-export">Data Export</TabsTrigger>}
           <TabsTrigger value="account">Account</TabsTrigger>
           <TabsTrigger value="team">Team Members</TabsTrigger>
-          <TabsTrigger value="gmail">Gmail Inboxes</TabsTrigger>
+          {gmailEnabled && <TabsTrigger value="gmail">Gmail Inboxes</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="notifications" className="space-y-4">
@@ -1442,17 +1460,23 @@ export default function Settings() {
           <EmailTemplatesTab />
         </TabsContent>
 
-        <TabsContent value="non-engagement">
-          <NonEngagementCategoriesTab />
-        </TabsContent>
+        {nonEngagementEnabled && (
+          <TabsContent value="non-engagement">
+            <NonEngagementCategoriesTab />
+          </TabsContent>
+        )}
 
-        <TabsContent value="stripe">
-          <StripeSettingsTab />
-        </TabsContent>
+        {paymentsEnabled && (
+          <TabsContent value="stripe">
+            <StripeSettingsTab />
+          </TabsContent>
+        )}
 
-        <TabsContent value="data-export">
-          <DataExportTab />
-        </TabsContent>
+        {dataExportEnabled && (
+          <TabsContent value="data-export">
+            <DataExportTab />
+          </TabsContent>
+        )}
 
         <TabsContent value="account">
           <AccountTab />
@@ -1462,9 +1486,11 @@ export default function Settings() {
           <AdminUsersTab />
         </TabsContent>
 
-        <TabsContent value="gmail">
-          <GmailConnectionsTab />
-        </TabsContent>
+        {gmailEnabled && (
+          <TabsContent value="gmail">
+            <GmailConnectionsTab />
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );

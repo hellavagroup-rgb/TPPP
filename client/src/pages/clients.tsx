@@ -117,6 +117,19 @@ export default function Clients() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
   const [, setLocation] = useLocation();
+
+  const { data: tenant } = useQuery({
+    queryKey: ["/api/tenant"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/tenant");
+      if (!res.ok) return null;
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+  const paymentsEnabled = tenant?.paymentsEnabled !== false;
+  const formsEnabled = tenant?.formsEnabled !== false;
+  const nonEngagementEnabled = tenant?.nonEngagementEnabled !== false;
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedClient, setSelectedClient] = useState<ClientType | null>(null);
 
@@ -645,7 +658,7 @@ export default function Clients() {
   };
 
   const paymentStatusBadge = (client: ClientType) => {
-    if (!stripeEnabled) return null;
+    if (!paymentsEnabled || !stripeEnabled) return null;
     if ((client as any).hasFailedPayment) {
       const reason = (client as any).latestFailureReason;
       return (
@@ -1261,9 +1274,11 @@ export default function Clients() {
                       <div className="mt-1">{paymentStatusBadge(client)}</div>
                     )}
                     <div className="flex flex-col gap-1 mt-2">
-                      <Button size="sm" variant="outline" className="w-full gap-1 text-xs" onClick={() => handleOpenSendForms(client)}>
-                        <Mail className="h-3 w-3" /> Send Forms
-                      </Button>
+                      {formsEnabled && (
+                        <Button size="sm" variant="outline" className="w-full gap-1 text-xs" onClick={() => handleOpenSendForms(client)}>
+                          <Mail className="h-3 w-3" /> Send Forms
+                        </Button>
+                      )}
                       <Button size="sm" variant="outline" className="w-full gap-1 text-xs" onClick={() => handleOpenPhoneFill(client)}>
                         <Phone className="h-3 w-3" /> Fill by Phone
                       </Button>
@@ -1299,12 +1314,16 @@ export default function Clients() {
                           <DropdownMenuItem onClick={() => handleOpenEditClient(client)}>
                             <Edit className="h-4 w-4 mr-2" /> Edit Details
                           </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => handleOpenSendForms(client)}>
-                            <Mail className="h-4 w-4 mr-2" /> Resend Forms
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => handleOpenPhoneFill(client)}>
-                            <Phone className="h-4 w-4 mr-2" /> Fill by Phone
-                          </DropdownMenuItem>
+                          {formsEnabled && (
+                            <DropdownMenuItem onClick={() => handleOpenSendForms(client)}>
+                              <Mail className="h-4 w-4 mr-2" /> Resend Forms
+                            </DropdownMenuItem>
+                          )}
+                          {formsEnabled && (
+                            <DropdownMenuItem onClick={() => handleOpenPhoneFill(client)}>
+                              <Phone className="h-4 w-4 mr-2" /> Fill by Phone
+                            </DropdownMenuItem>
+                          )}
                           <DropdownMenuItem onClick={() => handleOpenManualAllocate(client)}>
                             <CalendarCheck className="h-4 w-4 mr-2" /> Allocate to Clinician
                           </DropdownMenuItem>
@@ -1511,7 +1530,7 @@ export default function Clients() {
                           <DropdownMenuItem onClick={() => handleOpenViewResponses(client)}>
                             <Eye className="h-4 w-4 mr-2" /> View Responses
                           </DropdownMenuItem>
-                          {stripeEnabled && (
+                          {paymentsEnabled && stripeEnabled && (
                             <>
                               <DropdownMenuSeparator />
                               <DropdownMenuItem onClick={() => handleOpenPaymentLink(client)}>
@@ -1617,7 +1636,7 @@ export default function Clients() {
                         <DropdownMenuItem onClick={() => handleOpenViewResponses(client)}>
                           <Eye className="h-4 w-4 mr-2" /> View Responses
                         </DropdownMenuItem>
-                        {stripeEnabled && !client.isArchived && (
+                        {paymentsEnabled && stripeEnabled && !client.isArchived && (
                           <>
                             <DropdownMenuSeparator />
                             {client.paymentStatus === "active" ? (
@@ -2386,47 +2405,49 @@ export default function Clients() {
               </p>
             </div>
 
-            <div className="grid gap-2">
-              <Label>Category</Label>
-              {!isAddingCategory ? (
-                <>
-                  <Select value={archiveCategory} onValueChange={(val) => { if (val === "__add_new__") { setIsAddingCategory(true); } else { setArchiveCategory(val); } }}>
-                    <SelectTrigger data-testid="select-archive-category">
-                      <SelectValue placeholder="Select a category (optional)" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none__">No category</SelectItem>
-                      {nonEngagementCategories.map(cat => (
-                        <SelectItem key={cat.id} value={cat.name}>{cat.name}</SelectItem>
-                      ))}
-                      <SelectItem value="__add_new__" className="text-primary font-medium">+ Add new category</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </>
-              ) : (
-                <div className="flex gap-2">
-                  <Input
-                    placeholder="New category name"
-                    value={newCategoryName}
-                    onChange={(e) => setNewCategoryName(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter" && newCategoryName.trim()) addCategoryMutation.mutate(newCategoryName.trim()); if (e.key === "Escape") { setIsAddingCategory(false); setNewCategoryName(""); } }}
-                    autoFocus
-                    data-testid="input-new-archive-category"
-                  />
-                  <Button
-                    size="sm"
-                    onClick={() => newCategoryName.trim() && addCategoryMutation.mutate(newCategoryName.trim())}
-                    disabled={!newCategoryName.trim() || addCategoryMutation.isPending}
-                    data-testid="btn-save-new-category"
-                  >
-                    Add
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => { setIsAddingCategory(false); setNewCategoryName(""); }}>
-                    Cancel
-                  </Button>
-                </div>
-              )}
-            </div>
+            {nonEngagementEnabled && (
+              <div className="grid gap-2">
+                <Label>Category</Label>
+                {!isAddingCategory ? (
+                  <>
+                    <Select value={archiveCategory} onValueChange={(val) => { if (val === "__add_new__") { setIsAddingCategory(true); } else { setArchiveCategory(val); } }}>
+                      <SelectTrigger data-testid="select-archive-category">
+                        <SelectValue placeholder="Select a category (optional)" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">No category</SelectItem>
+                        {nonEngagementCategories.map(cat => (
+                          <SelectItem key={cat.id} value={cat.name}>{cat.name}</SelectItem>
+                        ))}
+                        <SelectItem value="__add_new__" className="text-primary font-medium">+ Add new category</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </>
+                ) : (
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="New category name"
+                      value={newCategoryName}
+                      onChange={(e) => setNewCategoryName(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter" && newCategoryName.trim()) addCategoryMutation.mutate(newCategoryName.trim()); if (e.key === "Escape") { setIsAddingCategory(false); setNewCategoryName(""); } }}
+                      autoFocus
+                      data-testid="input-new-archive-category"
+                    />
+                    <Button
+                      size="sm"
+                      onClick={() => newCategoryName.trim() && addCategoryMutation.mutate(newCategoryName.trim())}
+                      disabled={!newCategoryName.trim() || addCategoryMutation.isPending}
+                      data-testid="btn-save-new-category"
+                    >
+                      Add
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => { setIsAddingCategory(false); setNewCategoryName(""); }}>
+                      Cancel
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="grid gap-2">
               <Label htmlFor="archive-reason">Reason / Notes</Label>

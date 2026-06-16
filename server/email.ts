@@ -489,19 +489,31 @@ export async function generateWaitlistUpdateEmail(clientDisplayId: string, clien
   };
 }
 
-export function generatePaymentLinkEmail(paymentUrl: string, amountPounds: string): EmailOptions {
-  const bodyText = `Thank you for completing your intake process. To confirm your first therapy session, please complete your initial session payment using the secure link below.
+export async function generatePaymentLinkEmail(paymentUrl: string, amountPounds: string): Promise<EmailOptions> {
+  const storedTemplate = await getStoredTemplate('payment_link');
 
-Payment amount: £${amountPounds}
+  const subject = storedTemplate
+    ? storedTemplate.subject
+    : 'Your Session Payment Link - The Perinatal Psychology Practice';
 
-Pay securely here: ${paymentUrl}
+  const rawBody = storedTemplate
+    ? storedTemplate.bodyText
+    : `Thank you for completing your intake process. To confirm your first therapy session, please complete your initial session payment using the secure link below.
 
-This link allows you to pay by card. Your card details will be saved securely so that future session payments can be processed automatically.
+Payment amount: £{{amount}}
+
+Pay securely here: {{payment_url}}
+
+Your card details will be saved securely so that future session payments can be processed automatically.
 
 If you have any questions, please don't hesitate to contact us.
 
 Warm regards,
 The Perinatal Psychology Practice Team`;
+
+  const bodyText = rawBody
+    .replace(/\{\{amount\}\}/g, amountPounds)
+    .replace(/\{\{payment_url\}\}/g, paymentUrl);
 
   const html = `<!DOCTYPE html>
 <html>
@@ -520,17 +532,13 @@ The Perinatal Psychology Practice Team`;
     <div class="container">
       <div class="header"><h1>Complete Your Session Payment</h1></div>
       <div class="content">
-        <p>Thank you for completing your intake process. To confirm your first therapy session, please complete your initial session payment.</p>
-        <p><strong>Payment amount: £${amountPounds}</strong></p>
+        <p>${bodyText.replace(/\n/g, '<br>')}</p>
         <p style="text-align:center;"><a href="${paymentUrl}" class="pay-button">Pay Securely Now</a></p>
-        <p style="font-size:13px;color:#666;">Your card details will be saved securely so that future session payments can be processed automatically.</p>
-        <p>If you have any questions, please don't hesitate to contact us.</p>
-        <p>Warm regards,<br>The Perinatal Psychology Practice Team</p>
       </div>
       <div class="footer">The Perinatal Psychology Practice</div>
     </div>
   </body>
 </html>`;
 
-  return { to: '', subject: 'Your Session Payment Link - The Perinatal Psychology Practice', html, text: bodyText };
+  return { to: '', subject, html, text: bodyText };
 }

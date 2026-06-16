@@ -145,6 +145,23 @@ Please log in to the practice management system to review this update.
 
 The Perinatal Psychology Practice`,
   },
+  {
+    templateKey: "payment_link",
+    name: "Payment Link",
+    subject: "Your Session Payment Link - The Perinatal Psychology Practice",
+    bodyText: `Thank you for completing your intake process. To confirm your first therapy session, please complete your initial session payment using the secure link below.
+
+Payment amount: £{{amount}}
+
+Pay securely here: {{payment_url}}
+
+Your card details will be saved securely so that future session payments can be processed automatically.
+
+If you have any questions, please don't hesitate to contact us.
+
+Warm regards,
+The Perinatal Psychology Practice Team`,
+  },
 ];
 
 function NotificationsTab() {

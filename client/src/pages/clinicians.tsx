@@ -214,7 +214,7 @@ export default function Clinicians() {
     if (editedClinician.contactMethods !== undefined) updates.contactMethods = editedClinician.contactMethods;
     if (editedClinician.isActive !== undefined) updates.isActive = editedClinician.isActive;
     if (editedClinician.email !== undefined) updates.email = editedClinician.email;
-    if ((editedClinician as any).sessionRatePence !== undefined) updates.sessionRatePence = (editedClinician as any).sessionRatePence;
+    if (editedClinician.sessionRatePence !== undefined) updates.sessionRatePence = editedClinician.sessionRatePence;
     
     updateClinicianMutation.mutate({
       id: selectedClinician.id,
@@ -557,15 +557,15 @@ export default function Clinicians() {
                       step="0.01"
                       placeholder="e.g. 150"
                       className="pl-7"
-                      value={(editedClinician as any).sessionRatePence != null
-                        ? ((editedClinician as any).sessionRatePence / 100).toFixed(2)
+                      value={editedClinician.sessionRatePence != null
+                        ? (editedClinician.sessionRatePence / 100).toFixed(2)
                         : selectedClinician.sessionRatePence != null
                         ? (selectedClinician.sessionRatePence / 100).toFixed(2)
                         : ""}
                       onChange={(e) => setEditedClinician({
                         ...editedClinician,
                         sessionRatePence: e.target.value ? Math.round(parseFloat(e.target.value) * 100) : null
-                      } as any)}
+                      })}
                     />
                   </div>
                   <p className="text-[10px] text-muted-foreground pt-1">

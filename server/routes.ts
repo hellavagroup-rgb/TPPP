@@ -994,7 +994,7 @@ export async function registerRoutes(
 
               // Email the payment link to the client
               const amountPounds = (amountPence / 100).toFixed(2);
-              const emailOptions = generatePaymentLinkEmail(checkoutResult.url, amountPounds);
+              const emailOptions = await generatePaymentLinkEmail(checkoutResult.url, amountPounds);
               await sendEmail({ ...emailOptions, to: updated.email });
               console.log(`Auto-generated payment link and emailed to client ${updated.id}`);
             }

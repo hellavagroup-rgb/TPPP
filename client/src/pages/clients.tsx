@@ -555,13 +555,13 @@ export default function Clients() {
     setPaymentLinkClient(client);
     const assignedClinician = clinicians.find(c => c.id === client.assignedClinicianId);
     setAgreedRatePounds(
-      (client as any).agreedRatePence
-        ? String(((client as any).agreedRatePence / 100).toFixed(2))
-        : (assignedClinician as any)?.sessionRatePence
-        ? String(((assignedClinician as any).sessionRatePence / 100).toFixed(2))
+      client.agreedRatePence
+        ? String((client.agreedRatePence / 100).toFixed(2))
+        : assignedClinician?.sessionRatePence
+        ? String((assignedClinician.sessionRatePence / 100).toFixed(2))
         : ""
     );
-    setGeneratedPaymentUrl((client as any).stripeCheckoutUrl || "");
+    setGeneratedPaymentUrl(client.stripeCheckoutUrl || "");
     setIsPaymentLinkOpen(true);
   };
 
@@ -602,10 +602,10 @@ export default function Clients() {
     setChargeClient(client);
     const assignedClinician = clinicians.find(c => c.id === client.assignedClinicianId);
     setChargeAmountPounds(
-      (client as any).agreedRatePence
-        ? String(((client as any).agreedRatePence / 100).toFixed(2))
-        : (assignedClinician as any)?.sessionRatePence
-        ? String(((assignedClinician as any).sessionRatePence / 100).toFixed(2))
+      client.agreedRatePence
+        ? String((client.agreedRatePence / 100).toFixed(2))
+        : assignedClinician?.sessionRatePence
+        ? String((assignedClinician.sessionRatePence / 100).toFixed(2))
         : ""
     );
     setChargeNotes("");
@@ -645,7 +645,7 @@ export default function Clients() {
   };
 
   const paymentStatusBadge = (client: ClientType) => {
-    const ps = (client as any).paymentStatus;
+    const ps = client.paymentStatus;
     if (!stripeEnabled) return null;
     if (ps === "active") return (
       <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-green-100 text-green-700 px-1.5 py-0.5 rounded">
@@ -1490,7 +1490,7 @@ export default function Clients() {
                               <DropdownMenuItem onClick={() => handleOpenPaymentLink(client)}>
                                 <CreditCard className="h-4 w-4 mr-2" /> Generate Payment Link
                               </DropdownMenuItem>
-                              {(client as any).paymentStatus === "active" && (
+                              {client.paymentStatus === "active" && (
                                 <DropdownMenuItem onClick={() => handleOpenHistory(client)}>
                                   <History className="h-4 w-4 mr-2" /> Payment History
                                 </DropdownMenuItem>
@@ -1593,7 +1593,7 @@ export default function Clients() {
                         {stripeEnabled && !client.isArchived && (
                           <>
                             <DropdownMenuSeparator />
-                            {(client as any).paymentStatus === "active" ? (
+                            {client.paymentStatus === "active" ? (
                               <>
                                 <DropdownMenuItem onClick={() => handleOpenCharge(client)}>
                                   <CreditCard className="h-4 w-4 mr-2" /> Charge Session
@@ -2754,7 +2754,7 @@ export default function Clients() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsHistoryOpen(false)}>Close</Button>
-            {historyClient && (historyClient as any)?.paymentStatus === "active" && (
+            {historyClient && historyClient.paymentStatus === "active" && (
               <Button onClick={() => { setIsHistoryOpen(false); handleOpenCharge(historyClient); }}>
                 <CreditCard className="h-4 w-4 mr-2" /> Charge New Session
               </Button>

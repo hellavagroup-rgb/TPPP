@@ -488,3 +488,49 @@ export async function generateWaitlistUpdateEmail(clientDisplayId: string, clien
     text: bodyText,
   };
 }
+
+export function generatePaymentLinkEmail(paymentUrl: string, amountPounds: string): EmailOptions {
+  const bodyText = `Thank you for completing your intake process. To confirm your first therapy session, please complete your initial session payment using the secure link below.
+
+Payment amount: £${amountPounds}
+
+Pay securely here: ${paymentUrl}
+
+This link allows you to pay by card. Your card details will be saved securely so that future session payments can be processed automatically.
+
+If you have any questions, please don't hesitate to contact us.
+
+Warm regards,
+The Perinatal Psychology Practice Team`;
+
+  const html = `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }
+      .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+      .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+      .content { background: #f8f9fa; padding: 30px; border-radius: 0 0 8px 8px; }
+      .pay-button { display: inline-block; background: #667eea; color: white; padding: 14px 28px; border-radius: 6px; text-decoration: none; font-weight: bold; margin: 20px 0; }
+      .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header"><h1>Complete Your Session Payment</h1></div>
+      <div class="content">
+        <p>Thank you for completing your intake process. To confirm your first therapy session, please complete your initial session payment.</p>
+        <p><strong>Payment amount: £${amountPounds}</strong></p>
+        <p style="text-align:center;"><a href="${paymentUrl}" class="pay-button">Pay Securely Now</a></p>
+        <p style="font-size:13px;color:#666;">Your card details will be saved securely so that future session payments can be processed automatically.</p>
+        <p>If you have any questions, please don't hesitate to contact us.</p>
+        <p>Warm regards,<br>The Perinatal Psychology Practice Team</p>
+      </div>
+      <div class="footer">The Perinatal Psychology Practice</div>
+    </div>
+  </body>
+</html>`;
+
+  return { to: '', subject: 'Your Session Payment Link - The Perinatal Psychology Practice', html, text: bodyText };
+}

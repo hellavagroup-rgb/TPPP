@@ -23,6 +23,7 @@ export async function createCheckoutSession(opts: {
   amountPence: number;
   successUrl: string;
   cancelUrl: string;
+  tenantId?: string | null;
   tenantStripeKey?: string | null;
 }): Promise<{ url: string; customerId: string; sessionId: string } | null> {
   const stripe = getStripeInstance(opts.tenantStripeKey);
@@ -55,7 +56,11 @@ export async function createCheckoutSession(opts: {
     },
     success_url: opts.successUrl,
     cancel_url: opts.cancelUrl,
-    metadata: { clientId: opts.clientId, displayId: opts.clientDisplayId },
+    metadata: {
+      clientId: opts.clientId,
+      displayId: opts.clientDisplayId,
+      ...(opts.tenantId ? { tenantId: opts.tenantId } : {}),
+    },
   });
 
   return { url: session.url!, customerId: customer.id, sessionId: session.id };
@@ -85,7 +90,10 @@ export async function chargeOffSession(opts: {
   return { paymentIntentId: paymentIntent.id, status: paymentIntent.status };
 }
 
-export function constructWebhookEvent(payload: Buffer, sig: string, secret: string): Stripe.Event {
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: "2025-05-28.basil" });
+export function constructWebhookEvent(payload: Buffer, sig: string, secret: string, tenantKey?: string | null): Stripe.Event {
+  // The Stripe key here only instantiates the client for webhooks.constructEvent — the key itself
+  // doesn't affect signature verification; only the webhook secret does.
+  const key = tenantKey || process.env.STRIPE_SECRET_KEY || "placeholder";
+  const stripe = new Stripe(key, { apiVersion: "2025-05-28.basil" });
   return stripe.webhooks.constructEvent(payload, sig, secret);
 }

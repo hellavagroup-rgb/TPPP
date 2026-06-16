@@ -10,13 +10,13 @@ import {
   insertFormTemplateSchema, insertTaskSchema, insertUserSchema 
 } from "@shared/schema";
 import { z } from "zod";
-import { sendEmail, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateNewReferralEmail, generateWaitlistUpdateEmail } from "./email";
+import { sendEmail, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail } from "./email";
 import { forceReseedDatabase } from "./seed";
 import { parseIntakeEmailBody } from "./intakeParser";
 import { requireTenant } from './middleware/tenant';
 import { db } from "./db";
 import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs, intakeMessages, gmailConnections, paymentCharges } from "@shared/schema";
-import { isStripeConfigured, createCheckoutSession, chargeOffSession, constructWebhookEvent } from "./stripe";
+import { isStripeConfigured, getStripeInstance, createCheckoutSession, chargeOffSession, constructWebhookEvent } from "./stripe";
 import { getAuthUrl, exchangeCodeForTokens, syncConnection, buildRedirectUri } from "./gmailSync";
 import { isNull, eq, and, inArray } from "drizzle-orm";
 
@@ -946,6 +946,47 @@ export async function registerRoutes(
       }
       if (!updated) {
         return res.status(404).json({ error: "Client not found" });
+      }
+
+      // Auto-create Stripe checkout and email payment link when moving to AwaitingConfirmation
+      if (
+        req.body.status === "AwaitingConfirmation" &&
+        oldStatus !== "AwaitingConfirmation" &&
+        updated.email &&
+        updated.agreedRatePence &&
+        updated.agreedRatePence > 0 &&
+        isStripeConfigured(req.tenant?.stripeSecretKey) &&
+        !updated.stripeCheckoutUrl // Only if not already created
+      ) {
+        try {
+          const appBase = process.env.APP_BASE_URL || `${req.protocol}://${req.get("host")}`;
+          const checkoutResult = await createCheckoutSession({
+            clientId: updated.id,
+            clientEmail: updated.email,
+            clientDisplayId: updated.displayId,
+            amountPence: updated.agreedRatePence,
+            successUrl: `${appBase}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+            cancelUrl: `${appBase}/payment-cancel`,
+            tenantId: req.tenant?.id,
+            tenantStripeKey: req.tenant?.stripeSecretKey,
+          });
+          if (checkoutResult) {
+            await db.update(clients).set({
+              stripeCustomerId: checkoutResult.customerId,
+              stripeCheckoutUrl: checkoutResult.url,
+              paymentStatus: "setup_pending",
+              updatedAt: new Date(),
+            }).where(eq(clients.id, updated.id));
+
+            // Email the payment link to the client
+            const amountPounds = (updated.agreedRatePence / 100).toFixed(2);
+            const emailOptions = generatePaymentLinkEmail(checkoutResult.url, amountPounds);
+            await sendEmail({ ...emailOptions, to: updated.email });
+            console.log(`Auto-generated payment link and emailed to client ${updated.id}`);
+          }
+        } catch (paymentError) {
+          console.error("Failed to auto-create checkout session on AwaitingConfirmation:", paymentError);
+        }
       }
 
       // Send waitlist update notification if status changed
@@ -2257,7 +2298,7 @@ export async function registerRoutes(
   // Create a Checkout session for a client (sends payment link to their email)
   app.post("/api/stripe/checkout", requireAdmin, async (req, res) => {
     try {
-      if (!isStripeConfigured()) {
+      if (!isStripeConfigured(req.tenant?.stripeSecretKey)) {
         return res.status(400).json({ error: "Stripe is not configured" });
       }
       const { clientId } = req.body as { clientId: string };
@@ -2280,6 +2321,7 @@ export async function registerRoutes(
         amountPence,
         successUrl: `${appBase}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
         cancelUrl: `${appBase}/payment-cancel`,
+        tenantId: req.tenant?.id,
         tenantStripeKey: req.tenant?.stripeSecretKey,
       });
 
@@ -2301,63 +2343,106 @@ export async function registerRoutes(
   });
 
   // Stripe webhook — called by Stripe to confirm payment & card save
+  // Note: /api/stripe/webhook is exempted from requireTenant middleware (unauthenticated, called by Stripe)
   app.post("/api/stripe/webhook", async (req, res) => {
     const sig = req.headers["stripe-signature"] as string;
-    const secret = process.env.STRIPE_WEBHOOK_SECRET;
+    const rawBody = (req as any).rawBody as Buffer;
 
-    if (!secret) {
-      // Without a webhook secret, accept in dev/test mode by parsing body directly
-      // This shouldn't happen in production
-      return res.status(400).json({ error: "Webhook secret not configured" });
+    if (!sig || !rawBody) {
+      return res.status(400).json({ error: "Missing stripe-signature header or raw body" });
     }
 
+    // Step 1: Parse raw body to extract tenantId from metadata (before verifying)
+    // This lets us look up the tenant's webhook secret for multi-tenant verification
+    let parsedBody: any;
+    try {
+      parsedBody = JSON.parse(rawBody.toString("utf8"));
+    } catch {
+      return res.status(400).json({ error: "Invalid JSON body" });
+    }
+
+    // Extract tenantId from metadata (we store it there at checkout session creation)
+    const metaTenantId: string | null =
+      parsedBody?.data?.object?.metadata?.tenantId ?? null;
+
+    // Step 2: Look up tenant to get their stored webhook secret and Stripe key
+    let webhookSecret: string | null = process.env.STRIPE_WEBHOOK_SECRET || null;
+    let tenantStripeKey: string | null = process.env.STRIPE_SECRET_KEY || null;
+
+    if (metaTenantId) {
+      try {
+        const [tenant] = await db.select().from(tenants).where(eq(tenants.id, metaTenantId));
+        if (tenant) {
+          if (tenant.stripeWebhookSecret) webhookSecret = tenant.stripeWebhookSecret;
+          if (tenant.stripeSecretKey) tenantStripeKey = tenant.stripeSecretKey;
+        }
+      } catch (e) {
+        console.error("Webhook: failed to look up tenant:", e);
+      }
+    }
+
+    if (!webhookSecret) {
+      return res.status(400).json({ error: "Webhook secret not configured for this tenant" });
+    }
+
+    // Step 3: Verify signature with the tenant's webhook secret
     let event: any;
     try {
-      event = constructWebhookEvent((req as any).rawBody as Buffer, sig, secret);
+      event = constructWebhookEvent(rawBody, sig, webhookSecret, tenantStripeKey);
     } catch (err: any) {
       console.error("Webhook signature verification failed:", err?.message);
       return res.status(400).json({ error: "Invalid webhook signature" });
     }
 
+    // Step 4: Process the event
     try {
       if (event.type === "checkout.session.completed") {
         const session = event.data.object as any;
         const clientId = session.metadata?.clientId;
         if (!clientId) return res.json({ received: true });
 
-        // Get the payment intent to find the payment method
-        const paymentIntentId = session.payment_intent;
-        if (paymentIntentId) {
-          const Stripe = (await import("stripe")).default;
-          const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: "2025-05-28.basil" });
-          const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
-          const paymentMethodId = typeof pi.payment_method === "string" ? pi.payment_method : pi.payment_method?.id;
+        // Idempotency: skip if we've already processed a succeeded charge for this session
+        const existingCharge = session.payment_intent
+          ? await db.select().from(paymentCharges)
+              .where(eq(paymentCharges.stripePaymentIntentId, session.payment_intent))
+              .then(rows => rows[0])
+          : null;
 
-          if (paymentMethodId) {
-            await db.update(clients).set({
-              stripePaymentMethodId: paymentMethodId,
-              paymentStatus: "active",
-              updatedAt: new Date(),
-            }).where(eq(clients.id, clientId));
+        if (!existingCharge) {
+          // Get the payment intent to find the payment method
+          const paymentIntentId = session.payment_intent;
+          if (paymentIntentId) {
+            const stripeInstance = getStripeInstance(tenantStripeKey);
+            if (stripeInstance) {
+              const pi = await stripeInstance.paymentIntents.retrieve(paymentIntentId);
+              const paymentMethodId = typeof pi.payment_method === "string" ? pi.payment_method : pi.payment_method?.id;
 
-            // Record the initial charge
-            const client = await storage.getClientById(clientId);
-            if (client) {
-              await storage.createPaymentCharge({
-                clientId,
-                amountPence: session.amount_total,
-                stripePaymentIntentId: paymentIntentId,
-                status: "succeeded",
-                notes: "Initial session payment via Checkout",
-                tenantId: client.tenantId,
-              });
+              if (paymentMethodId) {
+                await db.update(clients).set({
+                  stripePaymentMethodId: paymentMethodId,
+                  paymentStatus: "active",
+                  updatedAt: new Date(),
+                }).where(eq(clients.id, clientId));
+
+                // Record the initial charge (idempotent — checked above)
+                const client = await storage.getClientById(clientId);
+                if (client) {
+                  await storage.createPaymentCharge({
+                    clientId,
+                    amountPence: session.amount_total,
+                    stripePaymentIntentId: paymentIntentId,
+                    status: "succeeded",
+                    notes: "Initial session payment via Checkout",
+                    tenantId: client.tenantId,
+                  });
+                }
+              }
             }
           }
         }
       }
 
       if (event.type === "payment_intent.succeeded") {
-        // Update charge record if it exists and is pending
         const pi = event.data.object as any;
         const [charge] = await db.select().from(paymentCharges)
           .where(eq(paymentCharges.stripePaymentIntentId, pi.id));
@@ -2382,10 +2467,10 @@ export async function registerRoutes(
     }
   });
 
-  // Charge a subsequent session off-session (clinician-triggered)
-  app.post("/api/stripe/charge", requireAdmin, async (req, res) => {
+  // Charge a subsequent session off-session (admin or assigned clinician)
+  app.post("/api/stripe/charge", requireAuth, async (req, res) => {
     try {
-      if (!isStripeConfigured()) {
+      if (!isStripeConfigured(req.tenant?.stripeSecretKey)) {
         return res.status(400).json({ error: "Stripe is not configured" });
       }
       const { clientId, amountPence, notes } = req.body as {
@@ -2397,6 +2482,15 @@ export async function registerRoutes(
 
       const client = await storage.getClientById(clientId);
       if (!client) return res.status(404).json({ error: "Client not found" });
+
+      // Access check: admin can charge any client; clinician can only charge their assigned client
+      const reqUser = req.user as any;
+      if (reqUser?.role !== "admin") {
+        const clinician = await storage.getClinicianByUserId(reqUser?.id);
+        if (!clinician || client.assignedClinicianId !== clinician.id) {
+          return res.status(403).json({ error: "You can only charge sessions for your own clients" });
+        }
+      }
       if (!client.stripeCustomerId || !client.stripePaymentMethodId) {
         return res.status(400).json({ error: "Client does not have a saved payment method. They must complete the initial checkout first." });
       }
@@ -2439,9 +2533,18 @@ export async function registerRoutes(
     }
   });
 
-  // Get payment history for a client
-  app.get("/api/stripe/charges/:clientId", requireAdmin, async (req, res) => {
+  // Get payment history for a client (admin or assigned clinician)
+  app.get("/api/stripe/charges/:clientId", requireAuth, async (req, res) => {
     try {
+      // Access check: admin sees all, clinician sees only their assigned client
+      const reqUser = req.user as any;
+      if (reqUser?.role !== "admin") {
+        const client = await storage.getClientById(req.params.clientId);
+        const clinician = await storage.getClinicianByUserId(reqUser?.id);
+        if (!client || !clinician || client.assignedClinicianId !== clinician.id) {
+          return res.status(403).json({ error: "Access denied" });
+        }
+      }
       const charges = await storage.getPaymentChargesByClientId(req.params.clientId);
       res.json(charges);
     } catch (error) {

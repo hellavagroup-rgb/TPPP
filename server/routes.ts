@@ -2405,8 +2405,23 @@ export async function registerRoutes(
       try {
         const [tenant] = await db.select().from(tenants).where(eq(tenants.id, metaTenantId));
         if (tenant) {
-          if (tenant.stripeWebhookSecret) webhookSecret = tenant.stripeWebhookSecret;
-          if (tenant.stripeSecretKey) tenantStripeKey = tenant.stripeSecretKey;
+          // Decrypt at-rest encrypted credentials before use
+          if (tenant.stripeWebhookSecret) {
+            try {
+              webhookSecret = decryptSecret(tenant.stripeWebhookSecret);
+            } catch (e) {
+              console.error("Webhook: failed to decrypt webhook secret for tenant", metaTenantId, e);
+              return res.status(400).json({ error: "Unable to decrypt webhook secret for this tenant" });
+            }
+          }
+          if (tenant.stripeSecretKey) {
+            try {
+              tenantStripeKey = decryptSecret(tenant.stripeSecretKey);
+            } catch (e) {
+              console.error("Webhook: failed to decrypt Stripe key for tenant", metaTenantId, e);
+              return res.status(400).json({ error: "Unable to decrypt Stripe key for this tenant" });
+            }
+          }
         }
       } catch (e) {
         console.error("Webhook: failed to look up tenant:", e);

@@ -6,7 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { CreditCard, TrendingUp, CheckCircle, Clock, XCircle, Search, X, Hash } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { CreditCard, TrendingUp, CheckCircle, Clock, XCircle, Search, X, Hash, AlertTriangle } from "lucide-react";
 import {
   BarChart,
   Bar,
@@ -25,6 +26,7 @@ type ChargeWithClient = {
   stripePaymentIntentId: string | null;
   status: string;
   notes: string | null;
+  failureReason: string | null;
   chargedByUserId: string | null;
   chargedAt: string | null;
   tenantId: string | null;
@@ -154,8 +156,9 @@ export default function Payments() {
     const activeSetups = allClients.filter(c => c.paymentStatus === "active").length;
 
     const pendingCount = charges.filter(c => c.status === "pending").length;
+    const failedCount = charges.filter(c => c.status === "failed").length;
 
-    return { totalRevenue, thisMonthRevenue, totalCharges, activeSetups, pendingCount };
+    return { totalRevenue, thisMonthRevenue, totalCharges, activeSetups, pendingCount, failedCount };
   }, [charges, allClients]);
 
   const monthlyRevenue = useMemo(() => {
@@ -196,6 +199,27 @@ export default function Payments() {
         <h1 className="text-2xl font-bold text-gray-900">Payments</h1>
         <p className="text-sm text-gray-500 mt-1">Revenue and charge history across all clients</p>
       </div>
+
+      {/* Failed charges alert banner */}
+      {!isLoading && summaryCards.failedCount > 0 && (
+        <Alert className="border-red-200 bg-red-50" data-testid="alert-failed-charges">
+          <AlertTriangle className="h-4 w-4 text-red-600" />
+          <AlertDescription className="flex items-center justify-between gap-4 text-red-800">
+            <span data-testid="text-failed-charges-count">
+              <strong>{summaryCards.failedCount}</strong> failed charge{summaryCards.failedCount !== 1 ? "s" : ""} require{summaryCards.failedCount === 1 ? "s" : ""} attention.
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-red-300 text-red-700 hover:bg-red-100 shrink-0"
+              onClick={() => setStatusFilter("failed")}
+              data-testid="button-show-failed-only"
+            >
+              Show failed only
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Summary Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -393,6 +417,7 @@ export default function Payments() {
                     <th className="text-left px-4 py-3 font-medium text-gray-500">Clinician</th>
                     <th className="text-left px-4 py-3 font-medium text-gray-500">Amount</th>
                     <th className="text-left px-4 py-3 font-medium text-gray-500">Status</th>
+                    <th className="text-left px-4 py-3 font-medium text-gray-500">Failure reason</th>
                     <th className="text-left px-4 py-3 font-medium text-gray-500">Notes</th>
                   </tr>
                 </thead>
@@ -415,6 +440,13 @@ export default function Payments() {
                       </td>
                       <td className="px-4 py-3">
                         <StatusBadge status={charge.status} />
+                      </td>
+                      <td className="px-4 py-3 max-w-xs" data-testid={`text-charge-failure-reason-${charge.id}`}>
+                        {charge.status === "failed" && charge.failureReason ? (
+                          <span className="text-red-600 text-xs font-medium">{charge.failureReason}</span>
+                        ) : (
+                          <span className="text-gray-300">—</span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-gray-500 max-w-xs truncate" data-testid={`text-charge-notes-${charge.id}`}>
                         {charge.notes ?? "—"}

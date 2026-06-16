@@ -2002,6 +2002,18 @@ export default function Clients() {
               Update client information. Changes will be saved immediately.
             </DialogDescription>
           </DialogHeader>
+          {editingClient && (editingClient as any).hasFailedPayment && (
+            <div className="flex flex-col gap-0.5 px-1 -mt-1" data-testid={`detail-payment-failed-${editingClient.id}`}>
+              <span className="inline-flex items-center gap-1 text-[11px] font-medium bg-red-100 text-red-700 px-2 py-1 rounded w-fit">
+                <AlertCircle className="h-3 w-3" /> Payment Failed
+              </span>
+              {(editingClient as any).latestFailureReason && (
+                <span className="text-[11px] text-red-600 italic leading-tight" data-testid={`detail-payment-failure-reason-${editingClient.id}`}>
+                  {(editingClient as any).latestFailureReason}
+                </span>
+              )}
+            </div>
+          )}
           <div className="grid gap-4 py-4">
             <div className="grid grid-cols-2 gap-4">
               <div className="grid gap-2">

@@ -2297,6 +2297,7 @@ export async function registerRoutes(
     const tenantKey = req.tenant?.stripeSecretKey;
     res.json({
       configured: isStripeConfigured(tenantKey),
+      webhookConfigured: !!req.tenant?.stripeWebhookSecret,
       encryptionReady: isEncryptionConfigured(),
     });
   });
@@ -2322,6 +2323,22 @@ export async function registerRoutes(
       if (stripeWebhookSecret !== undefined) {
         updates.stripeWebhookSecret = stripeWebhookSecret ? encryptSecret(stripeWebhookSecret) : null;
       }
+
+      // Enforce: a webhook secret must be stored before (or alongside) a secret key
+      const willHaveSecretKey = "stripeSecretKey" in updates
+        ? !!updates.stripeSecretKey
+        : !!req.tenant.stripeSecretKey;
+      const willHaveWebhookSecret = "stripeWebhookSecret" in updates
+        ? !!updates.stripeWebhookSecret
+        : !!req.tenant.stripeWebhookSecret;
+
+      if (willHaveSecretKey && !willHaveWebhookSecret) {
+        return res.status(400).json({
+          error: "A webhook signing secret is required alongside the Stripe secret key. " +
+                 "Create a webhook endpoint in your Stripe Dashboard and paste the signing secret here.",
+        });
+      }
+
       await db.update(tenants).set(updates).where(eq(tenants.id, req.tenant.id));
       res.json({ success: true });
     } catch (error) {
@@ -2403,8 +2420,10 @@ export async function registerRoutes(
       parsedBody?.data?.object?.metadata?.tenantId ?? null;
 
     // Step 2: Look up tenant to get their stored webhook secret and Stripe key
-    let webhookSecret: string | null = process.env.STRIPE_WEBHOOK_SECRET || null;
-    let tenantStripeKey: string | null = process.env.STRIPE_SECRET_KEY || null;
+    // STRIPE_WEBHOOK_SECRET env var is a dev-only escape hatch; it must NOT be used in production.
+    const isDev = process.env.NODE_ENV !== "production";
+    let webhookSecret: string | null = null;
+    let tenantStripeKey: string | null = null;
 
     if (metaTenantId) {
       try {
@@ -2433,8 +2452,20 @@ export async function registerRoutes(
       }
     }
 
+    // Fall back to env vars only in development to ease local testing
     if (!webhookSecret) {
-      return res.status(400).json({ error: "Webhook secret not configured for this tenant" });
+      if (isDev && process.env.STRIPE_WEBHOOK_SECRET) {
+        console.warn(
+          "[DEV ONLY] Using global STRIPE_WEBHOOK_SECRET env var as webhook secret fallback. " +
+          "In production every tenant must have their own webhook secret stored in the database."
+        );
+        webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+      } else {
+        return res.status(400).json({ error: "Webhook secret not configured for this tenant" });
+      }
+    }
+    if (!tenantStripeKey && isDev && process.env.STRIPE_SECRET_KEY) {
+      tenantStripeKey = process.env.STRIPE_SECRET_KEY;
     }
 
     // Step 3: Verify signature with the tenant's webhook secret

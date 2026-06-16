@@ -1221,7 +1221,7 @@ function StripeSettingsTab() {
   const [showSecret, setShowSecret] = useState(false);
   const [showWebhook, setShowWebhook] = useState(false);
 
-  const { data: status, refetch } = useQuery<{ configured: boolean; encryptionReady: boolean }>({
+  const { data: status, refetch } = useQuery<{ configured: boolean; webhookConfigured: boolean; encryptionReady: boolean }>({
     queryKey: ["/api/stripe/status"],
   });
 
@@ -1231,7 +1231,10 @@ function StripeSettingsTab() {
       if (secretKey) body.stripeSecretKey = secretKey;
       if (webhookSecret) body.stripeWebhookSecret = webhookSecret;
       const res = await apiRequest("POST", "/api/settings/stripe", body);
-      if (!res.ok) throw new Error("Failed to save");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to save");
+      }
     },
     onSuccess: () => {
       toast.success("Stripe settings saved");
@@ -1239,7 +1242,7 @@ function StripeSettingsTab() {
       setSecretKey("");
       setWebhookSecret("");
     },
-    onError: () => toast.error("Failed to save Stripe settings"),
+    onError: (err: any) => toast.error(err?.message || "Failed to save Stripe settings"),
   });
 
   const removeMutation = useMutation({
@@ -1288,7 +1291,12 @@ function StripeSettingsTab() {
                 <CheckCircle2 className="h-5 w-5 text-green-600 flex-shrink-0" />
                 <div className="flex-1">
                   <p className="font-medium text-sm">Stripe connected</p>
-                  <p className="text-xs text-muted-foreground">Payments are active. Clients will receive checkout links when you generate them.</p>
+                  <p className="text-xs text-muted-foreground">
+                    Secret key saved.{" "}
+                    {status.webhookConfigured
+                      ? "Webhook secret saved — automatic payment confirmation is active."
+                      : <span className="text-amber-600 font-medium">Webhook secret missing — add it below so payment confirmations work.</span>}
+                  </p>
                 </div>
                 <Button variant="outline" size="sm" onClick={() => removeMutation.mutate()} disabled={removeMutation.isPending}>
                   {removeMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Disconnect"}
@@ -1299,7 +1307,7 @@ function StripeSettingsTab() {
                 <AlertCircle className="h-5 w-5 text-amber-500 flex-shrink-0" />
                 <div>
                   <p className="font-medium text-sm">Not connected</p>
-                  <p className="text-xs text-muted-foreground">Enter your Stripe secret key below to enable payments.</p>
+                  <p className="text-xs text-muted-foreground">Enter your Stripe secret key and webhook signing secret below to enable payments.</p>
                 </div>
               </>
             )}
@@ -1332,12 +1340,15 @@ function StripeSettingsTab() {
 
           {/* Webhook secret field */}
           <div className="space-y-1.5">
-            <Label>Webhook Signing Secret <span className="text-muted-foreground font-normal">(optional)</span></Label>
+            <Label>
+              Webhook Signing Secret{" "}
+              <span className="text-destructive font-normal text-xs">(required)</span>
+            </Label>
             <div className="relative">
               <Input
                 data-testid="input-stripe-webhook-secret"
                 type={showWebhook ? "text" : "password"}
-                placeholder="whsec_..."
+                placeholder={status?.webhookConfigured ? "whsec_••••••••• (enter new secret to update)" : "whsec_..."}
                 value={webhookSecret}
                 onChange={e => setWebhookSecret(e.target.value)}
                 className="pr-10"
@@ -1351,14 +1362,22 @@ function StripeSettingsTab() {
               </button>
             </div>
             <p className="text-xs text-muted-foreground">
-              Required for automatic payment confirmation via webhooks. Set your webhook URL to <code className="bg-muted px-1 rounded text-xs">{window.location.origin}/api/stripe/webhook</code> in Stripe.
+              Required for automatic payment confirmation. In your{" "}
+              <a href="https://dashboard.stripe.com/webhooks" target="_blank" rel="noopener noreferrer" className="underline">Stripe Dashboard → Webhooks</a>,
+              add an endpoint pointing to{" "}
+              <code className="bg-muted px-1 rounded text-xs">{window.location.origin}/api/stripe/webhook</code>{" "}
+              and paste the signing secret here. Each practice must have its own Stripe account and webhook endpoint.
             </p>
           </div>
 
           <Button
             data-testid="button-save-stripe"
             onClick={() => saveMutation.mutate()}
-            disabled={saveMutation.isPending || (!secretKey && !webhookSecret)}
+            disabled={
+              saveMutation.isPending ||
+              (!secretKey && !webhookSecret) ||
+              (!!secretKey && !webhookSecret && !status?.webhookConfigured)
+            }
           >
             {saveMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
             Save

@@ -11,7 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { MapPin, Building, Users, Shield, Edit, Briefcase, Lock, Mail, MessageSquare, Phone, Trash2, UserX, Plus } from "lucide-react";
+import { MapPin, Building, Users, Shield, Edit, Briefcase, Lock, Mail, MessageSquare, Phone, Trash2, UserX, Plus, PoundSterling } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { Clinician, TimeSlot } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
@@ -347,6 +347,16 @@ export default function Clinicians() {
                     </div>
                   </div>
                 </div>
+
+                {clinician.sessionRatePence != null && (
+                  <div className="flex items-start gap-3 text-sm" data-testid={`text-session-rate-${clinician.id}`}>
+                    <PoundSterling className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />
+                    <div>
+                      <span className="font-medium block text-slate-700">Session Rate</span>
+                      <span className="text-slate-500">£{(clinician.sessionRatePence / 100).toFixed(2)} / session</span>
+                    </div>
+                  </div>
+                )}
               </div>
             </CardContent>
 

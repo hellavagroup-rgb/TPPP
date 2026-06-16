@@ -20,6 +20,8 @@ import { AuthProvider, useAuth } from "@/lib/auth";
 import Login from "@/pages/login";
 import ClinicianProfile from "@/pages/clinician-profile";
 import AcceptInvite from "@/pages/accept-invite";
+import PaymentSuccess from "@/pages/payment-success";
+import PaymentCancel from "@/pages/payment-cancel";
 import { useEffect } from "react";
 
 function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
@@ -41,7 +43,7 @@ function ProtectedRoute({ component: Component }: { component: React.ComponentTy
 function Router() {
   const [location] = useLocation();
   
-  // Public Routes (Login, Form Fill)
+  // Public Routes (Login, Form Fill, Payment pages)
   if (location.startsWith("/fill")) {
       return (
         <Switch>
@@ -56,6 +58,14 @@ function Router() {
 
   if (location.startsWith("/accept-invite")) {
       return <AcceptInvite />;
+  }
+
+  if (location.startsWith("/payment-success")) {
+      return <PaymentSuccess />;
+  }
+
+  if (location.startsWith("/payment-cancel")) {
+      return <PaymentCancel />;
   }
 
   return (

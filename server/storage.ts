@@ -1,5 +1,5 @@
 import { 
-  users, clients, clinicians, timeSlots, formTemplates, formSubmissions, tasks, auditLogs, emailTemplates, inviteTokens, passwordResetTokens, nonEngagementCategories, customInsurers,
+  users, clients, clinicians, timeSlots, formTemplates, formSubmissions, tasks, auditLogs, emailTemplates, inviteTokens, passwordResetTokens, nonEngagementCategories, customInsurers, paymentCharges,
   type User, type InsertUser, type SafeUser,
   type Client, type InsertClient,
   type Clinician, type InsertClinician,
@@ -12,7 +12,8 @@ import {
   type InviteToken,
   type PasswordResetToken,
   type NonEngagementCategory, type InsertNonEngagementCategory,
-  type CustomInsurer, type InsertCustomInsurer
+  type CustomInsurer, type InsertCustomInsurer,
+  type PaymentCharge, type InsertPaymentCharge,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, or, desc, sql, isNull, inArray } from "drizzle-orm";
@@ -108,6 +109,11 @@ export interface IStorage {
   // ============ CUSTOM INSURERS ============
   getCustomInsurers(tenantId?: string | null): Promise<CustomInsurer[]>;
   addCustomInsurer(name: string, tenantId?: string | null): Promise<CustomInsurer>;
+
+  // ============ PAYMENT CHARGES ============
+  createPaymentCharge(charge: InsertPaymentCharge): Promise<PaymentCharge>;
+  getPaymentChargesByClientId(clientId: string): Promise<PaymentCharge[]>;
+  updatePaymentCharge(id: string, updates: Partial<InsertPaymentCharge>): Promise<PaymentCharge | undefined>;
 }
 
 // Database implementation with PostgreSQL
@@ -209,6 +215,7 @@ export class DatabaseStorage implements IStorage {
         allocateForBupa: clinicians.allocateForBupa,
         tier: clinicians.tier,
         isActive: clinicians.isActive,
+        sessionRatePence: clinicians.sessionRatePence,
         lastUpdatedAvailability: clinicians.lastUpdatedAvailability,
         createdAt: clinicians.createdAt,
         name: users.name,
@@ -850,6 +857,23 @@ export class DatabaseStorage implements IStorage {
   async addCustomInsurer(name: string, tenantId?: string | null): Promise<CustomInsurer> {
     const [result] = await db.insert(customInsurers).values({ name, ...(tenantId ? { tenantId } : {}) }).returning();
     return result;
+  }
+
+  // ============ PAYMENT CHARGES ============
+  async createPaymentCharge(charge: InsertPaymentCharge): Promise<PaymentCharge> {
+    const [result] = await db.insert(paymentCharges).values(charge).returning();
+    return result;
+  }
+
+  async getPaymentChargesByClientId(clientId: string): Promise<PaymentCharge[]> {
+    return await db.select().from(paymentCharges)
+      .where(eq(paymentCharges.clientId, clientId))
+      .orderBy(desc(paymentCharges.chargedAt));
+  }
+
+  async updatePaymentCharge(id: string, updates: Partial<InsertPaymentCharge>): Promise<PaymentCharge | undefined> {
+    const [result] = await db.update(paymentCharges).set(updates).where(eq(paymentCharges.id, id)).returning();
+    return result || undefined;
   }
 }
 

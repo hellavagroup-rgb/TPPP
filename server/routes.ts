@@ -15,7 +15,8 @@ import { forceReseedDatabase } from "./seed";
 import { parseIntakeEmailBody } from "./intakeParser";
 import { requireTenant } from './middleware/tenant';
 import { db } from "./db";
-import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs, intakeMessages, gmailConnections } from "@shared/schema";
+import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs, intakeMessages, gmailConnections, paymentCharges } from "@shared/schema";
+import { isStripeConfigured, createCheckoutSession, chargeOffSession, constructWebhookEvent } from "./stripe";
 import { getAuthUrl, exchangeCodeForTokens, syncConnection, buildRedirectUri } from "./gmailSync";
 import { isNull, eq, and, inArray } from "drizzle-orm";
 
@@ -2224,6 +2225,245 @@ export async function registerRoutes(
       res.json({ success: true, count: ids.length });
     } catch (error) {
       res.status(500).json({ error: "Failed to bulk ignore intake messages" });
+    }
+  });
+
+  // ============ STRIPE / PAYMENTS ============
+
+  // Check if Stripe is configured
+  app.get("/api/stripe/status", requireAuth, async (req, res) => {
+    const tenantKey = req.tenant?.stripeSecretKey;
+    res.json({ configured: isStripeConfigured(tenantKey) });
+  });
+
+  // Save Stripe keys for tenant
+  app.post("/api/settings/stripe", requireAdmin, async (req, res) => {
+    try {
+      const { stripeSecretKey, stripeWebhookSecret } = req.body as {
+        stripeSecretKey?: string;
+        stripeWebhookSecret?: string;
+      };
+      if (!req.tenant) return res.status(400).json({ error: "Tenant not found" });
+      const updates: any = {};
+      if (stripeSecretKey !== undefined) updates.stripeSecretKey = stripeSecretKey || null;
+      if (stripeWebhookSecret !== undefined) updates.stripeWebhookSecret = stripeWebhookSecret || null;
+      await db.update(tenants).set(updates).where(eq(tenants.id, req.tenant.id));
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to save Stripe settings" });
+    }
+  });
+
+  // Create a Checkout session for a client (sends payment link to their email)
+  app.post("/api/stripe/checkout", requireAdmin, async (req, res) => {
+    try {
+      if (!isStripeConfigured()) {
+        return res.status(400).json({ error: "Stripe is not configured" });
+      }
+      const { clientId } = req.body as { clientId: string };
+      if (!clientId) return res.status(400).json({ error: "clientId required" });
+
+      const client = await storage.getClientById(clientId);
+      if (!client) return res.status(404).json({ error: "Client not found" });
+      if (!client.email) return res.status(400).json({ error: "Client has no email address" });
+
+      const amountPence = client.agreedRatePence ?? 0;
+      if (amountPence <= 0) {
+        return res.status(400).json({ error: "Client has no agreed rate set. Please set the agreed rate before creating a payment link." });
+      }
+
+      const appBase = process.env.APP_BASE_URL || `${req.protocol}://${req.get("host")}`;
+      const result = await createCheckoutSession({
+        clientId: client.id,
+        clientEmail: client.email,
+        clientDisplayId: client.displayId,
+        amountPence,
+        successUrl: `${appBase}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+        cancelUrl: `${appBase}/payment-cancel`,
+        tenantStripeKey: req.tenant?.stripeSecretKey,
+      });
+
+      if (!result) return res.status(500).json({ error: "Failed to create checkout session" });
+
+      // Store customer ID and checkout URL on client; mark as setup_pending
+      await db.update(clients).set({
+        stripeCustomerId: result.customerId,
+        stripeCheckoutUrl: result.url,
+        paymentStatus: "setup_pending",
+        updatedAt: new Date(),
+      }).where(eq(clients.id, clientId));
+
+      res.json({ url: result.url, customerId: result.customerId });
+    } catch (error: any) {
+      console.error("Stripe checkout error:", error?.message);
+      res.status(500).json({ error: error?.message || "Failed to create checkout session" });
+    }
+  });
+
+  // Stripe webhook — called by Stripe to confirm payment & card save
+  app.post("/api/stripe/webhook", async (req, res) => {
+    const sig = req.headers["stripe-signature"] as string;
+    const secret = process.env.STRIPE_WEBHOOK_SECRET;
+
+    if (!secret) {
+      // Without a webhook secret, accept in dev/test mode by parsing body directly
+      // This shouldn't happen in production
+      return res.status(400).json({ error: "Webhook secret not configured" });
+    }
+
+    let event: any;
+    try {
+      event = constructWebhookEvent((req as any).rawBody as Buffer, sig, secret);
+    } catch (err: any) {
+      console.error("Webhook signature verification failed:", err?.message);
+      return res.status(400).json({ error: "Invalid webhook signature" });
+    }
+
+    try {
+      if (event.type === "checkout.session.completed") {
+        const session = event.data.object as any;
+        const clientId = session.metadata?.clientId;
+        if (!clientId) return res.json({ received: true });
+
+        // Get the payment intent to find the payment method
+        const paymentIntentId = session.payment_intent;
+        if (paymentIntentId) {
+          const Stripe = (await import("stripe")).default;
+          const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: "2025-05-28.basil" });
+          const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
+          const paymentMethodId = typeof pi.payment_method === "string" ? pi.payment_method : pi.payment_method?.id;
+
+          if (paymentMethodId) {
+            await db.update(clients).set({
+              stripePaymentMethodId: paymentMethodId,
+              paymentStatus: "active",
+              updatedAt: new Date(),
+            }).where(eq(clients.id, clientId));
+
+            // Record the initial charge
+            const client = await storage.getClientById(clientId);
+            if (client) {
+              await storage.createPaymentCharge({
+                clientId,
+                amountPence: session.amount_total,
+                stripePaymentIntentId: paymentIntentId,
+                status: "succeeded",
+                notes: "Initial session payment via Checkout",
+                tenantId: client.tenantId,
+              });
+            }
+          }
+        }
+      }
+
+      if (event.type === "payment_intent.succeeded") {
+        // Update charge record if it exists and is pending
+        const pi = event.data.object as any;
+        const [charge] = await db.select().from(paymentCharges)
+          .where(eq(paymentCharges.stripePaymentIntentId, pi.id));
+        if (charge && charge.status === "pending") {
+          await storage.updatePaymentCharge(charge.id, { status: "succeeded" });
+        }
+      }
+
+      if (event.type === "payment_intent.payment_failed") {
+        const pi = event.data.object as any;
+        const [charge] = await db.select().from(paymentCharges)
+          .where(eq(paymentCharges.stripePaymentIntentId, pi.id));
+        if (charge) {
+          await storage.updatePaymentCharge(charge.id, { status: "failed" });
+        }
+      }
+
+      res.json({ received: true });
+    } catch (error: any) {
+      console.error("Webhook processing error:", error?.message);
+      res.status(500).json({ error: "Webhook processing failed" });
+    }
+  });
+
+  // Charge a subsequent session off-session (clinician-triggered)
+  app.post("/api/stripe/charge", requireAdmin, async (req, res) => {
+    try {
+      if (!isStripeConfigured()) {
+        return res.status(400).json({ error: "Stripe is not configured" });
+      }
+      const { clientId, amountPence, notes } = req.body as {
+        clientId: string;
+        amountPence?: number;
+        notes?: string;
+      };
+      if (!clientId) return res.status(400).json({ error: "clientId required" });
+
+      const client = await storage.getClientById(clientId);
+      if (!client) return res.status(404).json({ error: "Client not found" });
+      if (!client.stripeCustomerId || !client.stripePaymentMethodId) {
+        return res.status(400).json({ error: "Client does not have a saved payment method. They must complete the initial checkout first." });
+      }
+
+      const amount = amountPence ?? client.agreedRatePence ?? 0;
+      if (amount <= 0) return res.status(400).json({ error: "Invalid amount" });
+
+      // Create a pending charge record first
+      const charge = await storage.createPaymentCharge({
+        clientId,
+        amountPence: amount,
+        status: "pending",
+        notes: notes || null,
+        chargedByUserId: (req.user as any)?.id,
+        tenantId: client.tenantId,
+      });
+
+      try {
+        const result = await chargeOffSession({
+          customerId: client.stripeCustomerId,
+          paymentMethodId: client.stripePaymentMethodId,
+          amountPence: amount,
+          clientDisplayId: client.displayId,
+          tenantStripeKey: req.tenant?.stripeSecretKey,
+        });
+
+        await storage.updatePaymentCharge(charge.id, {
+          stripePaymentIntentId: result.paymentIntentId,
+          status: result.status === "succeeded" ? "succeeded" : "pending",
+        });
+
+        res.json({ success: true, chargeId: charge.id, status: result.status });
+      } catch (stripeError: any) {
+        await storage.updatePaymentCharge(charge.id, { status: "failed" });
+        res.status(402).json({ error: stripeError?.message || "Payment failed" });
+      }
+    } catch (error: any) {
+      console.error("Charge error:", error?.message);
+      res.status(500).json({ error: error?.message || "Failed to charge session" });
+    }
+  });
+
+  // Get payment history for a client
+  app.get("/api/stripe/charges/:clientId", requireAdmin, async (req, res) => {
+    try {
+      const charges = await storage.getPaymentChargesByClientId(req.params.clientId);
+      res.json(charges);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch charges" });
+    }
+  });
+
+  // Update agreed rate for a client
+  app.patch("/api/clients/:id/agreed-rate", requireAdmin, async (req, res) => {
+    try {
+      const { agreedRatePence } = req.body as { agreedRatePence: number };
+      if (typeof agreedRatePence !== "number") {
+        return res.status(400).json({ error: "agreedRatePence must be a number" });
+      }
+      const [updated] = await db.update(clients)
+        .set({ agreedRatePence, updatedAt: new Date() })
+        .where(eq(clients.id, req.params.id))
+        .returning();
+      if (!updated) return res.status(404).json({ error: "Client not found" });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update rate" });
     }
   });
 

@@ -214,6 +214,7 @@ export default function Clinicians() {
     if (editedClinician.contactMethods !== undefined) updates.contactMethods = editedClinician.contactMethods;
     if (editedClinician.isActive !== undefined) updates.isActive = editedClinician.isActive;
     if (editedClinician.email !== undefined) updates.email = editedClinician.email;
+    if ((editedClinician as any).sessionRatePence !== undefined) updates.sessionRatePence = (editedClinician as any).sessionRatePence;
     
     updateClinicianMutation.mutate({
       id: selectedClinician.id,
@@ -543,23 +544,51 @@ export default function Clinicians() {
                     Stop allocating after this many new clients.
                   </p>
                 </div>
-                <div className="space-y-3 border p-3 rounded-md flex flex-col justify-center">
-                  <div className="flex items-center space-x-2">
-                    <Checkbox 
-                      id="couples" 
-                      checked={editedClinician.worksWithCouples || false}
-                      onCheckedChange={(checked) => setEditedClinician({...editedClinician, worksWithCouples: !!checked})}
-                    />
-                    <Label htmlFor="couples" className="font-medium cursor-pointer">Works with Couples</Label>
+                <div className="space-y-2 border p-3 rounded-md">
+                  <div className="flex items-center justify-between mb-2">
+                    <Label>Session Rate</Label>
+                    <span className="text-xs text-muted-foreground">£ / session</span>
                   </div>
-                  <div className="flex items-center space-x-2">
-                    <Checkbox 
-                      id="bupa" 
-                      checked={editedClinician.allocateForBupa || false}
-                      onCheckedChange={(checked) => setEditedClinician({...editedClinician, allocateForBupa: !!checked})}
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">£</span>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="e.g. 150"
+                      className="pl-7"
+                      value={(editedClinician as any).sessionRatePence != null
+                        ? ((editedClinician as any).sessionRatePence / 100).toFixed(2)
+                        : selectedClinician.sessionRatePence != null
+                        ? (selectedClinician.sessionRatePence / 100).toFixed(2)
+                        : ""}
+                      onChange={(e) => setEditedClinician({
+                        ...editedClinician,
+                        sessionRatePence: e.target.value ? Math.round(parseFloat(e.target.value) * 100) : null
+                      } as any)}
                     />
-                    <Label htmlFor="bupa" className="font-medium cursor-pointer">Allocate for Bupa</Label>
                   </div>
+                  <p className="text-[10px] text-muted-foreground pt-1">
+                    Default rate copied to clients when allocated.
+                  </p>
+                </div>
+              </div>
+              <div className="space-y-3 border p-3 rounded-md">
+                <div className="flex items-center space-x-2">
+                  <Checkbox 
+                    id="couples" 
+                    checked={editedClinician.worksWithCouples || false}
+                    onCheckedChange={(checked) => setEditedClinician({...editedClinician, worksWithCouples: !!checked})}
+                  />
+                  <Label htmlFor="couples" className="font-medium cursor-pointer">Works with Couples</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Checkbox 
+                    id="bupa" 
+                    checked={editedClinician.allocateForBupa || false}
+                    onCheckedChange={(checked) => setEditedClinician({...editedClinician, allocateForBupa: !!checked})}
+                  />
+                  <Label htmlFor="bupa" className="font-medium cursor-pointer">Allocate for Bupa</Label>
                 </div>
               </div>
 

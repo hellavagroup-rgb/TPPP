@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { toast } from "sonner";
-import { Loader2, Save, Mail, Trash2, UserPlus, Link2, Unlink, ShieldCheck, Download, Database, RefreshCw, CheckCircle2, AlertCircle, ExternalLink } from "lucide-react";
+import { Loader2, Save, Mail, Trash2, UserPlus, Link2, Unlink, ShieldCheck, Download, Database, RefreshCw, CheckCircle2, AlertCircle, ExternalLink, CreditCard, Eye, EyeOff } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useAuth } from "@/lib/auth";
@@ -1197,12 +1197,173 @@ function GmailConnectionsTab() {
   );
 }
 
+// ============ STRIPE SETTINGS TAB ============
+function StripeSettingsTab() {
+  const [secretKey, setSecretKey] = useState("");
+  const [webhookSecret, setWebhookSecret] = useState("");
+  const [showSecret, setShowSecret] = useState(false);
+  const [showWebhook, setShowWebhook] = useState(false);
+
+  const { data: status, refetch } = useQuery<{ configured: boolean }>({
+    queryKey: ["/api/stripe/status"],
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const body: any = {};
+      if (secretKey) body.stripeSecretKey = secretKey;
+      if (webhookSecret) body.stripeWebhookSecret = webhookSecret;
+      const res = await apiRequest("POST", "/api/settings/stripe", body);
+      if (!res.ok) throw new Error("Failed to save");
+    },
+    onSuccess: () => {
+      toast.success("Stripe settings saved");
+      refetch();
+      setSecretKey("");
+      setWebhookSecret("");
+    },
+    onError: () => toast.error("Failed to save Stripe settings"),
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/settings/stripe", { stripeSecretKey: "", stripeWebhookSecret: "" });
+      if (!res.ok) throw new Error("Failed to remove");
+    },
+    onSuccess: () => {
+      toast.success("Stripe disconnected");
+      refetch();
+    },
+    onError: () => toast.error("Failed to disconnect Stripe"),
+  });
+
+  return (
+    <div className="space-y-6 max-w-2xl">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <CreditCard className="h-5 w-5" />
+            Stripe Integration
+          </CardTitle>
+          <CardDescription>
+            Connect Stripe to collect session payments and save cards for future charges.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Status */}
+          <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/50">
+            {status?.configured ? (
+              <>
+                <CheckCircle2 className="h-5 w-5 text-green-600 flex-shrink-0" />
+                <div className="flex-1">
+                  <p className="font-medium text-sm">Stripe connected</p>
+                  <p className="text-xs text-muted-foreground">Payments are active. Clients will receive checkout links when you generate them.</p>
+                </div>
+                <Button variant="outline" size="sm" onClick={() => removeMutation.mutate()} disabled={removeMutation.isPending}>
+                  {removeMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Disconnect"}
+                </Button>
+              </>
+            ) : (
+              <>
+                <AlertCircle className="h-5 w-5 text-amber-500 flex-shrink-0" />
+                <div>
+                  <p className="font-medium text-sm">Not connected</p>
+                  <p className="text-xs text-muted-foreground">Enter your Stripe secret key below to enable payments.</p>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Secret key field */}
+          <div className="space-y-1.5">
+            <Label>Stripe Secret Key</Label>
+            <div className="relative">
+              <Input
+                data-testid="input-stripe-secret-key"
+                type={showSecret ? "text" : "password"}
+                placeholder={status?.configured ? "sk_••••••••• (enter new key to update)" : "sk_live_... or sk_test_..."}
+                value={secretKey}
+                onChange={e => setSecretKey(e.target.value)}
+                className="pr-10"
+              />
+              <button
+                type="button"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                onClick={() => setShowSecret(v => !v)}
+              >
+                {showSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Find this in your <a href="https://dashboard.stripe.com/apikeys" target="_blank" rel="noopener noreferrer" className="underline">Stripe Dashboard → API keys</a>. Use a live key for production, test key for testing.
+            </p>
+          </div>
+
+          {/* Webhook secret field */}
+          <div className="space-y-1.5">
+            <Label>Webhook Signing Secret <span className="text-muted-foreground font-normal">(optional)</span></Label>
+            <div className="relative">
+              <Input
+                data-testid="input-stripe-webhook-secret"
+                type={showWebhook ? "text" : "password"}
+                placeholder="whsec_..."
+                value={webhookSecret}
+                onChange={e => setWebhookSecret(e.target.value)}
+                className="pr-10"
+              />
+              <button
+                type="button"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                onClick={() => setShowWebhook(v => !v)}
+              >
+                {showWebhook ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Required for automatic payment confirmation via webhooks. Set your webhook URL to <code className="bg-muted px-1 rounded text-xs">{window.location.origin}/api/stripe/webhook</code> in Stripe.
+            </p>
+          </div>
+
+          <Button
+            data-testid="button-save-stripe"
+            onClick={() => saveMutation.mutate()}
+            disabled={saveMutation.isPending || (!secretKey && !webhookSecret)}
+          >
+            {saveMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
+            Save
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">How it works</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm text-muted-foreground">
+          <div className="flex gap-3">
+            <span className="h-6 w-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-bold flex-shrink-0">1</span>
+            <p>Set an agreed session rate on each clinician profile (£ per session).</p>
+          </div>
+          <div className="flex gap-3">
+            <span className="h-6 w-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-bold flex-shrink-0">2</span>
+            <p>When a client reaches the <strong>Awaiting Confirmation</strong> stage, generate a payment link — they pay the first session and their card is saved.</p>
+          </div>
+          <div className="flex gap-3">
+            <span className="h-6 w-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-bold flex-shrink-0">3</span>
+            <p>For subsequent sessions, use <strong>Charge Session</strong> on the confirmed client card to bill their saved card instantly.</p>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 export default function Settings() {
   const { user } = useAuth();
 
-  // Support ?tab=gmail deep-link from OAuth redirect
+  // Support ?tab=gmail or ?tab=stripe deep-links
   const urlTab = new URLSearchParams(window.location.search).get("tab");
-  const defaultTab = urlTab === "gmail" ? "gmail" : "notifications";
+  const defaultTab = urlTab === "gmail" ? "gmail" : urlTab === "stripe" ? "stripe" : "notifications";
 
   return (
     <div className="space-y-6">
@@ -1216,6 +1377,7 @@ export default function Settings() {
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
           <TabsTrigger value="email-templates">Email Templates</TabsTrigger>
           <TabsTrigger value="non-engagement">Non-Engagement</TabsTrigger>
+          <TabsTrigger value="stripe">Stripe / Payments</TabsTrigger>
           <TabsTrigger value="data-export">Data Export</TabsTrigger>
           <TabsTrigger value="account">Account</TabsTrigger>
           <TabsTrigger value="team">Team Members</TabsTrigger>
@@ -1232,6 +1394,10 @@ export default function Settings() {
 
         <TabsContent value="non-engagement">
           <NonEngagementCategoriesTab />
+        </TabsContent>
+
+        <TabsContent value="stripe">
+          <StripeSettingsTab />
         </TabsContent>
 
         <TabsContent value="data-export">

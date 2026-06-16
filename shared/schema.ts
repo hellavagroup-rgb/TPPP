@@ -13,6 +13,8 @@ export const tenants = pgTable("tenants", {
   whatsappEnabled: boolean("whatsapp_enabled").default(false),
   gmailAddress: text("gmail_address"),
   gmailIntakeEnabled: boolean("gmail_intake_enabled").default(false),
+  stripeSecretKey: text("stripe_secret_key"), // Stored per-tenant for in-app configuration
+  stripeWebhookSecret: text("stripe_webhook_secret"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -61,6 +63,7 @@ export const clinicians = pgTable("clinicians", {
   tier: text("tier", { enum: ["High", "Mid", "Low"] }),
   isActive: boolean("is_active").default(true).notNull(),
   lastUpdatedAvailability: timestamp("last_updated_availability"),
+  sessionRatePence: integer("session_rate_pence"), // Session rate in pence (e.g. 15000 = £150)
   createdAt: timestamp("created_at").defaultNow().notNull(),
   tenantId: varchar("tenant_id").references(() => tenants.id),
 });
@@ -141,6 +144,12 @@ export const clients = pgTable("clients", {
   allocatedAt: timestamp("allocated_at"), // When client was allocated to clinician
   awaitingConfirmationAt: timestamp("awaiting_confirmation_at"), // When email sent to client for confirmation
   confirmedAt: timestamp("confirmed_at"), // When appointment was confirmed
+  // Stripe / Payment
+  agreedRatePence: integer("agreed_rate_pence"), // Agreed session rate in pence
+  stripeCustomerId: text("stripe_customer_id"), // Stripe Customer ID (cus_...)
+  stripePaymentMethodId: text("stripe_payment_method_id"), // Stripe PaymentMethod ID (pm_...)
+  stripeCheckoutUrl: text("stripe_checkout_url"), // Checkout URL sent to client
+  paymentStatus: text("payment_status", { enum: ["none", "setup_pending", "active"] }).default("none"),
   // Timestamps
   intakeDate: timestamp("intake_date").defaultNow().notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -311,6 +320,23 @@ export const nonEngagementCategories = pgTable("non_engagement_categories", {
 export const insertNonEngagementCategorySchema = createInsertSchema(nonEngagementCategories).omit({ id: true, createdAt: true });
 export type InsertNonEngagementCategory = z.infer<typeof insertNonEngagementCategorySchema>;
 export type NonEngagementCategory = typeof nonEngagementCategories.$inferSelect;
+
+// ============ PAYMENT CHARGES ============
+export const paymentCharges = pgTable("payment_charges", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  clientId: varchar("client_id").references(() => clients.id).notNull(),
+  amountPence: integer("amount_pence").notNull(),
+  stripePaymentIntentId: text("stripe_payment_intent_id"),
+  status: text("status", { enum: ["pending", "succeeded", "failed"] }).notNull().default("pending"),
+  notes: text("notes"),
+  chargedByUserId: varchar("charged_by_user_id").references(() => users.id),
+  chargedAt: timestamp("charged_at").defaultNow().notNull(),
+  tenantId: varchar("tenant_id").references(() => tenants.id),
+});
+
+export const insertPaymentChargeSchema = createInsertSchema(paymentCharges).omit({ id: true, chargedAt: true });
+export type InsertPaymentCharge = z.infer<typeof insertPaymentChargeSchema>;
+export type PaymentCharge = typeof paymentCharges.$inferSelect;
 
 // ============ INTAKE MESSAGES ============
 export const intakeMessages = pgTable("intake_messages", {

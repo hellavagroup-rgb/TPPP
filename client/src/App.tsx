@@ -23,6 +23,7 @@ import AcceptInvite from "@/pages/accept-invite";
 import PaymentSuccess from "@/pages/payment-success";
 import PaymentCancel from "@/pages/payment-cancel";
 import Payments from "@/pages/payments";
+import SuperAdmin from "@/pages/super-admin";
 import { useEffect } from "react";
 
 function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
@@ -85,6 +86,10 @@ function Router() {
 
   if (location.startsWith("/payment-cancel")) {
       return <PaymentCancel />;
+  }
+
+  if (location.startsWith("/super-admin")) {
+      return <SuperAdmin />;
   }
 
   return (

@@ -8,6 +8,7 @@ import { z } from "zod";
 export const tenants = pgTable("tenants", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
+  slug: text("slug"),
   logoUrl: text("logo_url"),
   primaryColor: text("primary_color"),
   accentColor: text("accent_color"),

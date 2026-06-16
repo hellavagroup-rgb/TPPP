@@ -14,6 +14,7 @@ import { sendEmail, generateFormInviteEmail, generatePasswordResetEmail, generat
 import { forceReseedDatabase } from "./seed";
 import { parseIntakeEmailBody } from "./intakeParser";
 import { requireTenant } from './middleware/tenant';
+import { requireSuperAdmin } from './middleware/superAdmin';
 import { db } from "./db";
 import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs, intakeMessages, gmailConnections, paymentCharges } from "@shared/schema";
 import { isStripeConfigured, getStripeInstance, createCheckoutSession, chargeOffSession, constructWebhookEvent } from "./stripe";
@@ -2754,6 +2755,233 @@ export async function registerRoutes(
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "Failed to update rate" });
+    }
+  });
+
+  // ============ SUPER-ADMIN ROUTES ============
+  // All routes below are gated by requireSuperAdmin (x-super-admin-key header).
+  // They bypass tenant middleware via the open-path check in middleware/tenant.ts.
+
+  // Verify the key is valid (used by the frontend on first load)
+  app.get("/api/super-admin/verify", requireSuperAdmin, (_req, res) => {
+    res.json({ ok: true });
+  });
+
+  // List all tenants with status summary
+  app.get("/api/super-admin/tenants", requireSuperAdmin, async (_req, res) => {
+    try {
+      const allTenants = await db.select().from(tenants).orderBy(tenants.createdAt);
+
+      // For each tenant, check gmail connection status
+      const tenantIds = allTenants.map(t => t.id);
+      const gmailRows = tenantIds.length
+        ? await db.select({ tenantId: gmailConnections.tenantId, gmailAddress: gmailConnections.gmailAddress, isActive: gmailConnections.isActive })
+            .from(gmailConnections)
+            .where(inArray(gmailConnections.tenantId, tenantIds))
+        : [];
+
+      const gmailByTenant = new Map<string, typeof gmailRows>();
+      for (const row of gmailRows) {
+        if (!gmailByTenant.has(row.tenantId)) gmailByTenant.set(row.tenantId, []);
+        gmailByTenant.get(row.tenantId)!.push(row);
+      }
+
+      const result = allTenants.map(t => ({
+        ...t,
+        // Never expose decrypted secrets in the list view
+        stripeSecretKey: t.stripeSecretKey ? "***" : null,
+        stripeWebhookSecret: t.stripeWebhookSecret ? "***" : null,
+        stripeConnected: !!t.stripeSecretKey,
+        gmailConnections: gmailByTenant.get(t.id) || [],
+      }));
+
+      res.json(result);
+    } catch (error) {
+      console.error("Super-admin list tenants error:", error);
+      res.status(500).json({ error: "Failed to fetch tenants" });
+    }
+  });
+
+  // Get a single tenant (never return decrypted secrets)
+  app.get("/api/super-admin/tenants/:id", requireSuperAdmin, async (req, res) => {
+    try {
+      const [tenant] = await db.select().from(tenants).where(eq(tenants.id, req.params.id));
+      if (!tenant) return res.status(404).json({ error: "Tenant not found" });
+
+      // Select only safe status columns — never return OAuth tokens to the browser
+      const gmailRows = await db.select({
+        id: gmailConnections.id,
+        tenantId: gmailConnections.tenantId,
+        gmailAddress: gmailConnections.gmailAddress,
+        label: gmailConnections.label,
+        isActive: gmailConnections.isActive,
+        lastSyncAt: gmailConnections.lastSyncAt,
+        createdAt: gmailConnections.createdAt,
+      }).from(gmailConnections).where(eq(gmailConnections.tenantId, tenant.id));
+
+      res.json({
+        ...tenant,
+        stripeSecretKey: tenant.stripeSecretKey ? "***" : null,
+        stripeWebhookSecret: tenant.stripeWebhookSecret ? "***" : null,
+        stripeConnected: !!tenant.stripeSecretKey,
+        stripeWebhookConnected: !!tenant.stripeWebhookSecret,
+        gmailConnections: gmailRows,
+      });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch tenant" });
+    }
+  });
+
+  // Update tenant branding
+  app.patch("/api/super-admin/tenants/:id/branding", requireSuperAdmin, async (req, res) => {
+    try {
+      const schema = z.object({
+        name: z.string().min(1).optional(),
+        logoUrl: z.string().url().optional().or(z.literal("")),
+        primaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().or(z.literal("")),
+        accentColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().or(z.literal("")),
+      });
+      const body = schema.parse(req.body);
+      const [updated] = await db.update(tenants).set(body).where(eq(tenants.id, req.params.id)).returning();
+      if (!updated) return res.status(404).json({ error: "Tenant not found" });
+      res.json({ ...updated, stripeSecretKey: updated.stripeSecretKey ? "***" : null, stripeWebhookSecret: updated.stripeWebhookSecret ? "***" : null });
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors });
+      res.status(500).json({ error: "Failed to update branding" });
+    }
+  });
+
+  // Update tenant feature flags
+  app.patch("/api/super-admin/tenants/:id/features", requireSuperAdmin, async (req, res) => {
+    try {
+      const schema = z.object({
+        paymentsEnabled: z.boolean().optional(),
+        tasksEnabled: z.boolean().optional(),
+        analyticsEnabled: z.boolean().optional(),
+        waitlistEnabled: z.boolean().optional(),
+        formsEnabled: z.boolean().optional(),
+        dataExportEnabled: z.boolean().optional(),
+        nonEngagementEnabled: z.boolean().optional(),
+        gmailIntakeEnabled: z.boolean().optional(),
+      });
+      const body = schema.parse(req.body);
+      const [updated] = await db.update(tenants).set(body).where(eq(tenants.id, req.params.id)).returning();
+      if (!updated) return res.status(404).json({ error: "Tenant not found" });
+      res.json({ ...updated, stripeSecretKey: updated.stripeSecretKey ? "***" : null, stripeWebhookSecret: updated.stripeWebhookSecret ? "***" : null });
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors });
+      res.status(500).json({ error: "Failed to update features" });
+    }
+  });
+
+  // Update tenant Stripe credentials (encrypted at rest)
+  app.patch("/api/super-admin/tenants/:id/stripe", requireSuperAdmin, async (req, res) => {
+    try {
+      const schema = z.object({
+        stripeSecretKey: z.string().optional(),
+        stripeWebhookSecret: z.string().optional(),
+      });
+      const body = schema.parse(req.body);
+
+      const updates: { stripeSecretKey?: string | null; stripeWebhookSecret?: string | null } = {};
+
+      // Enforce encryption-at-rest: refuse to store plaintext secrets if key is missing
+      const hasSecret = (body.stripeSecretKey && body.stripeSecretKey !== "") ||
+                        (body.stripeWebhookSecret && body.stripeWebhookSecret !== "");
+      if (hasSecret && !isEncryptionConfigured()) {
+        return res.status(422).json({
+          error: "STRIPE_ENCRYPTION_KEY is not configured. Set a 32-byte base64 key before saving credentials.",
+        });
+      }
+
+      if (body.stripeSecretKey !== undefined) {
+        if (body.stripeSecretKey === "") {
+          updates.stripeSecretKey = null;
+        } else {
+          updates.stripeSecretKey = encryptSecret(body.stripeSecretKey);
+        }
+      }
+
+      if (body.stripeWebhookSecret !== undefined) {
+        if (body.stripeWebhookSecret === "") {
+          updates.stripeWebhookSecret = null;
+        } else {
+          updates.stripeWebhookSecret = encryptSecret(body.stripeWebhookSecret);
+        }
+      }
+
+      const [updated] = await db.update(tenants).set(updates).where(eq(tenants.id, req.params.id)).returning();
+      if (!updated) return res.status(404).json({ error: "Tenant not found" });
+      res.json({
+        stripeConnected: !!updated.stripeSecretKey,
+        stripeWebhookConnected: !!updated.stripeWebhookSecret,
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors });
+      res.status(500).json({ error: "Failed to update Stripe credentials" });
+    }
+  });
+
+  // Disconnect Gmail for a tenant (clear a specific connection)
+  app.delete("/api/super-admin/tenants/:id/gmail/:connectionId", requireSuperAdmin, async (req, res) => {
+    try {
+      await db.delete(gmailConnections).where(
+        and(eq(gmailConnections.id, req.params.connectionId), eq(gmailConnections.tenantId, req.params.id))
+      );
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to disconnect Gmail" });
+    }
+  });
+
+  // Create a new tenant + first admin user
+  app.post("/api/super-admin/tenants", requireSuperAdmin, async (req, res) => {
+    try {
+      const schema = z.object({
+        name: z.string().min(1, "Practice name is required"),
+        slug: z.string().regex(/^[a-z0-9-]*$/).optional().or(z.literal("")),
+        adminEmail: z.string().email("Valid admin email is required"),
+        adminName: z.string().min(1, "Admin name is required"),
+        adminPassword: z.string().min(8, "Password must be at least 8 characters"),
+        logoUrl: z.string().optional(),
+        primaryColor: z.string().optional(),
+        accentColor: z.string().optional(),
+      });
+      const body = schema.parse(req.body);
+
+      // Check email uniqueness
+      const existing = await storage.getUserByEmail(body.adminEmail.toLowerCase());
+      if (existing) {
+        return res.status(400).json({ error: "Email already in use" });
+      }
+
+      // Create tenant
+      const [tenant] = await db.insert(tenants).values({
+        name: body.name,
+        slug: body.slug || null,
+        logoUrl: body.logoUrl || null,
+        primaryColor: body.primaryColor || null,
+        accentColor: body.accentColor || null,
+      }).returning();
+
+      // Create first admin user
+      const hashedPassword = await hashPassword(body.adminPassword);
+      const user = await storage.createUser({
+        email: body.adminEmail.toLowerCase(),
+        name: body.adminName,
+        password: hashedPassword,
+        role: "admin",
+        tenantId: tenant.id,
+      });
+
+      res.status(201).json({
+        tenant: { ...tenant, stripeSecretKey: null, stripeWebhookSecret: null },
+        adminUser: { id: user.id, email: user.email, name: user.name },
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors });
+      console.error("Super-admin create tenant error:", error);
+      res.status(500).json({ error: "Failed to create tenant" });
     }
   });
 

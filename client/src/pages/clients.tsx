@@ -645,8 +645,13 @@ export default function Clients() {
   };
 
   const paymentStatusBadge = (client: ClientType) => {
-    const ps = client.paymentStatus;
     if (!stripeEnabled) return null;
+    if ((client as any).hasFailedPayment) return (
+      <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-red-100 text-red-700 px-1.5 py-0.5 rounded" data-testid={`badge-payment-failed-${client.id}`}>
+        <AlertCircle className="h-2.5 w-2.5" /> Payment Failed
+      </span>
+    );
+    const ps = client.paymentStatus;
     if (ps === "active") return (
       <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-green-100 text-green-700 px-1.5 py-0.5 rounded">
         <CreditCard className="h-2.5 w-2.5" /> Card saved
@@ -1242,6 +1247,9 @@ export default function Clients() {
                     {client.notes && (
                       <p className="text-[10px] text-muted-foreground mt-1 italic line-clamp-2" data-testid={`notes-${client.id}`}>"{client.notes}"</p>
                     )}
+                    {paymentStatusBadge(client) && (
+                      <div className="mt-1">{paymentStatusBadge(client)}</div>
+                    )}
                     <div className="flex flex-col gap-1 mt-2">
                       <Button size="sm" variant="outline" className="w-full gap-1 text-xs" onClick={() => handleOpenSendForms(client)}>
                         <Mail className="h-3 w-3" /> Send Forms
@@ -1307,6 +1315,9 @@ export default function Clients() {
                     {client.notes && (
                       <p className="text-[10px] text-muted-foreground mt-1 italic line-clamp-2" data-testid={`notes-${client.id}`}>"{client.notes}"</p>
                     )}
+                    {paymentStatusBadge(client) && (
+                      <div className="mt-1">{paymentStatusBadge(client)}</div>
+                    )}
                     <p className="text-[10px] text-amber-600 mt-2 flex items-center gap-1">
                       <Mail className="h-3 w-3" /> Awaiting response
                     </p>
@@ -1363,6 +1374,9 @@ export default function Clients() {
                     )}
                     {client.notes && (
                       <p className="text-[10px] text-muted-foreground mt-1 italic line-clamp-2" data-testid={`notes-${client.id}`}>"{client.notes}"</p>
+                    )}
+                    {paymentStatusBadge(client) && (
+                      <div className="mt-1">{paymentStatusBadge(client)}</div>
                     )}
                     <Button size="sm" className="w-full gap-1 text-xs mt-2 bg-primary hover:bg-primary/90" onClick={() => { setSelectedClient(client); setIsManualAllocation(false); fetchClientAvailability(client.id); setIsAllocateDialogOpen(true); }}>
                       <UserCheck className="h-3 w-3" /> Allocate
@@ -1431,6 +1445,9 @@ export default function Clients() {
                       <p className="text-[10px] text-muted-foreground mt-2 italic border-t pt-2">
                         "{(client as any).allocationReason}"
                       </p>
+                    )}
+                    {paymentStatusBadge(client) && (
+                      <div className="mt-1">{paymentStatusBadge(client)}</div>
                     )}
                     <Button 
                       size="sm" 
@@ -1628,6 +1645,9 @@ export default function Clients() {
                     </DropdownMenu>
                   </div>
                 </div>
+                {paymentStatusBadge(client) && (
+                  <div className="mt-2">{paymentStatusBadge(client)}</div>
+                )}
                 {showArchivedState && ((client as any).archiveCategory || (client as any).archiveReason) && (
                   <div className="mt-2 p-2 bg-slate-50 rounded border border-slate-200">
                     {(client as any).archiveCategory && (
@@ -2732,21 +2752,29 @@ export default function Clients() {
             ) : (
               <div className="space-y-2 max-h-80 overflow-y-auto">
                 {charges.map((charge: any) => (
-                  <div key={charge.id} className="flex items-start justify-between p-3 bg-muted/40 rounded-lg">
-                    <div>
-                      <p className="text-sm font-medium">£{(charge.amountPence / 100).toFixed(2)}</p>
-                      {charge.notes && <p className="text-xs text-muted-foreground mt-0.5">{charge.notes}</p>}
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        {new Date(charge.chargedAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
-                      </p>
+                  <div key={charge.id} className="p-3 bg-muted/40 rounded-lg">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <p className="text-sm font-medium">£{(charge.amountPence / 100).toFixed(2)}</p>
+                        {charge.notes && <p className="text-xs text-muted-foreground mt-0.5">{charge.notes}</p>}
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {new Date(charge.chargedAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                        </p>
+                      </div>
+                      <span className={`text-xs font-medium px-2 py-0.5 rounded ${
+                        charge.status === "succeeded" ? "bg-green-100 text-green-700" :
+                        charge.status === "failed" ? "bg-red-100 text-red-700" :
+                        "bg-amber-100 text-amber-700"
+                      }`}>
+                        {charge.status}
+                      </span>
                     </div>
-                    <span className={`text-xs font-medium px-2 py-0.5 rounded ${
-                      charge.status === "succeeded" ? "bg-green-100 text-green-700" :
-                      charge.status === "failed" ? "bg-red-100 text-red-700" :
-                      "bg-amber-100 text-amber-700"
-                    }`}>
-                      {charge.status}
-                    </span>
+                    {charge.status === "failed" && charge.failureReason && (
+                      <div className="mt-2 flex items-start gap-1.5 text-xs text-red-700 bg-red-50 border border-red-100 rounded px-2 py-1.5">
+                        <AlertCircle className="h-3 w-3 mt-0.5 flex-shrink-0" />
+                        <span>{charge.failureReason}</span>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

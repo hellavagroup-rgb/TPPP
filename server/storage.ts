@@ -116,6 +116,7 @@ export interface IStorage {
   getPaymentChargesByClientId(clientId: string): Promise<PaymentCharge[]>;
   getAllPaymentCharges(tenantId?: string | null): Promise<(PaymentCharge & { clientDisplayId: string; clinicianName: string | null })[]>;
   updatePaymentCharge(id: string, updates: Partial<InsertPaymentCharge>): Promise<PaymentCharge | undefined>;
+  getClientsWithFailedPayments(tenantId?: string | null): Promise<string[]>;
 }
 
 // Database implementation with PostgreSQL
@@ -908,6 +909,22 @@ export class DatabaseStorage implements IStorage {
   async updatePaymentCharge(id: string, updates: Partial<InsertPaymentCharge>): Promise<PaymentCharge | undefined> {
     const [result] = await db.update(paymentCharges).set(updates).where(eq(paymentCharges.id, id)).returning();
     return result || undefined;
+  }
+
+  async getClientsWithFailedPayments(tenantId?: string | null): Promise<string[]> {
+    const rows = await db.execute(sql`
+      SELECT DISTINCT pc1.client_id
+      FROM payment_charges pc1
+      WHERE pc1.status = 'failed'
+        ${tenantId ? sql`AND pc1.tenant_id = ${tenantId}` : sql``}
+        AND NOT EXISTS (
+          SELECT 1 FROM payment_charges pc2
+          WHERE pc2.client_id = pc1.client_id
+            AND pc2.status = 'succeeded'
+            AND pc2.charged_at > pc1.charged_at
+        )
+    `);
+    return (rows as any[]).map((r: any) => r.client_id);
   }
 }
 

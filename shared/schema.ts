@@ -329,6 +329,7 @@ export const paymentCharges = pgTable("payment_charges", {
   stripePaymentIntentId: text("stripe_payment_intent_id"),
   status: text("status", { enum: ["pending", "succeeded", "failed"] }).notNull().default("pending"),
   notes: text("notes"),
+  failureReason: text("failure_reason"),
   chargedByUserId: varchar("charged_by_user_id").references(() => users.id),
   chargedAt: timestamp("charged_at").defaultNow().notNull(),
   tenantId: varchar("tenant_id").references(() => tenants.id),

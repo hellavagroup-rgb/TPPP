@@ -806,7 +806,12 @@ export async function registerRoutes(
   app.get("/api/clients", requireAdmin, auditLog("view", "client"), async (req, res) => {
     try {
       const includeArchived = req.query.includeArchived === "true";
-      const clients = await storage.getAllClients(includeArchived, req.tenant?.id);
+      const [clientList, failedClientIds] = await Promise.all([
+        storage.getAllClients(includeArchived, req.tenant?.id),
+        storage.getClientsWithFailedPayments(req.tenant?.id),
+      ]);
+      const failedSet = new Set(failedClientIds);
+      const clients = clientList.map(c => ({ ...c, hasFailedPayment: failedSet.has(c.id) }));
       res.json(clients);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch clients" });
@@ -2518,7 +2523,7 @@ export async function registerRoutes(
           // Only transition to failed if not already in a terminal state (idempotent on retries)
           const alreadyFailed = charge.status === "failed";
           if (!alreadyFailed) {
-            await storage.updatePaymentCharge(charge.id, { status: "failed" });
+            await storage.updatePaymentCharge(charge.id, { status: "failed", failureReason });
           }
 
           // Notify admins — scoped to the client's tenant to prevent cross-tenant disclosure.
@@ -2637,7 +2642,7 @@ export async function registerRoutes(
 
         res.json({ success: true, chargeId: charge.id, status: result.status });
       } catch (stripeError: any) {
-        await storage.updatePaymentCharge(charge.id, { status: "failed" });
+        await storage.updatePaymentCharge(charge.id, { status: "failed", failureReason: stripeError?.message || "Unknown reason" });
         res.status(402).json({ error: stripeError?.message || "Payment failed" });
       }
     } catch (error: any) {

@@ -71,6 +71,8 @@ export async function chargeOffSession(opts: {
   paymentMethodId: string;
   amountPence: number;
   clientDisplayId: string;
+  clientId?: string | null;
+  tenantId?: string | null;
   tenantStripeKey?: string | null;
 }): Promise<{ paymentIntentId: string; status: string }> {
   const stripe = getStripeInstance(opts.tenantStripeKey);
@@ -84,7 +86,11 @@ export async function chargeOffSession(opts: {
     off_session: true,
     confirm: true,
     description: `Session charge for ${opts.clientDisplayId}`,
-    metadata: { displayId: opts.clientDisplayId },
+    metadata: {
+      displayId: opts.clientDisplayId,
+      ...(opts.clientId ? { clientId: opts.clientId } : {}),
+      ...(opts.tenantId ? { tenantId: opts.tenantId } : {}),
+    },
   });
 
   return { paymentIntentId: paymentIntent.id, status: paymentIntent.status };

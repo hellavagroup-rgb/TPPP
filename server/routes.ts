@@ -952,37 +952,52 @@ export async function registerRoutes(
       if (
         req.body.status === "AwaitingConfirmation" &&
         oldStatus !== "AwaitingConfirmation" &&
-        updated.email &&
-        updated.agreedRatePence &&
-        updated.agreedRatePence > 0 &&
         isStripeConfigured(req.tenant?.stripeSecretKey) &&
-        !updated.stripeCheckoutUrl // Only if not already created
+        !updated.stripeCheckoutUrl // Only if checkout not already created
       ) {
         try {
-          const appBase = process.env.APP_BASE_URL || `${req.protocol}://${req.get("host")}`;
-          const checkoutResult = await createCheckoutSession({
-            clientId: updated.id,
-            clientEmail: updated.email,
-            clientDisplayId: updated.displayId,
-            amountPence: updated.agreedRatePence,
-            successUrl: `${appBase}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-            cancelUrl: `${appBase}/payment-cancel`,
-            tenantId: req.tenant?.id,
-            tenantStripeKey: req.tenant?.stripeSecretKey,
-          });
-          if (checkoutResult) {
-            await db.update(clients).set({
-              stripeCustomerId: checkoutResult.customerId,
-              stripeCheckoutUrl: checkoutResult.url,
-              paymentStatus: "setup_pending",
-              updatedAt: new Date(),
-            }).where(eq(clients.id, updated.id));
+          // Resolve agreed rate: use client's rate if set, otherwise default from clinician
+          let amountPence = updated.agreedRatePence ?? 0;
+          if (amountPence <= 0 && updated.assignedClinicianId) {
+            const assignedClinician = await storage.getClinicianById(updated.assignedClinicianId);
+            if (assignedClinician?.sessionRatePence && assignedClinician.sessionRatePence > 0) {
+              amountPence = assignedClinician.sessionRatePence;
+              // Persist the defaulted rate on the client record
+              await db.update(clients).set({ agreedRatePence: amountPence, updatedAt: new Date() })
+                .where(eq(clients.id, updated.id));
+            }
+          }
 
-            // Email the payment link to the client
-            const amountPounds = (updated.agreedRatePence / 100).toFixed(2);
-            const emailOptions = generatePaymentLinkEmail(checkoutResult.url, amountPounds);
-            await sendEmail({ ...emailOptions, to: updated.email });
-            console.log(`Auto-generated payment link and emailed to client ${updated.id}`);
+          if (!updated.email) {
+            console.warn(`AwaitingConfirmation: client ${updated.id} has no email — cannot send payment link`);
+          } else if (amountPence <= 0) {
+            console.warn(`AwaitingConfirmation: client ${updated.id} has no agreed rate and no clinician default — checkout skipped`);
+          } else {
+            const appBase = process.env.APP_BASE_URL || `${req.protocol}://${req.get("host")}`;
+            const checkoutResult = await createCheckoutSession({
+              clientId: updated.id,
+              clientEmail: updated.email,
+              clientDisplayId: updated.displayId,
+              amountPence,
+              successUrl: `${appBase}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+              cancelUrl: `${appBase}/payment-cancel`,
+              tenantId: req.tenant?.id,
+              tenantStripeKey: req.tenant?.stripeSecretKey,
+            });
+            if (checkoutResult) {
+              await db.update(clients).set({
+                stripeCustomerId: checkoutResult.customerId,
+                stripeCheckoutUrl: checkoutResult.url,
+                paymentStatus: "setup_pending",
+                updatedAt: new Date(),
+              }).where(eq(clients.id, updated.id));
+
+              // Email the payment link to the client
+              const amountPounds = (amountPence / 100).toFixed(2);
+              const emailOptions = generatePaymentLinkEmail(checkoutResult.url, amountPounds);
+              await sendEmail({ ...emailOptions, to: updated.email });
+              console.log(`Auto-generated payment link and emailed to client ${updated.id}`);
+            }
           }
         } catch (paymentError) {
           console.error("Failed to auto-create checkout session on AwaitingConfirmation:", paymentError);
@@ -2514,6 +2529,8 @@ export async function registerRoutes(
           paymentMethodId: client.stripePaymentMethodId,
           amountPence: amount,
           clientDisplayId: client.displayId,
+          clientId: client.id,
+          tenantId: req.tenant?.id,
           tenantStripeKey: req.tenant?.stripeSecretKey,
         });
 

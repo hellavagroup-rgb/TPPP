@@ -12,6 +12,7 @@ import {
 import { z } from "zod";
 import { sendEmail, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail } from "./email";
 import { forceReseedDatabase } from "./seed";
+import { seedDemoData } from "./seedDemo";
 import { parseIntakeEmailBody } from "./intakeParser";
 import { requireTenant } from './middleware/tenant';
 import { requireSuperAdmin } from './middleware/superAdmin';
@@ -44,6 +45,18 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Force reseed failed:", error);
       res.status(500).json({ error: "Failed to reseed database" });
+    }
+  });
+
+  // Admin endpoint to seed rich demo data (clients, tasks, slots, submissions)
+  app.post("/api/admin/seed-demo", requireAdmin, async (req, res) => {
+    try {
+      console.log("=== ADMIN TRIGGERED DEMO SEED ===");
+      await seedDemoData();
+      res.json({ success: true, message: "Demo data seeded successfully" });
+    } catch (error) {
+      console.error("Demo seed failed:", error);
+      res.status(500).json({ error: "Failed to seed demo data" });
     }
   });
 

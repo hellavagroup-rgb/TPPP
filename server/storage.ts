@@ -912,19 +912,24 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getClientsWithFailedPayments(tenantId?: string | null): Promise<{ clientId: string; failureReason: string | null }[]> {
-    const rows = await db.execute(sql`
-      SELECT pc.client_id, pc.failure_reason
-      FROM payment_charges pc
-      WHERE pc.status = 'failed'
-        ${tenantId ? sql`AND pc.tenant_id = ${tenantId}` : sql``}
-        AND pc.charged_at = (
-          SELECT MAX(pc2.charged_at)
-          FROM payment_charges pc2
-          WHERE pc2.client_id = pc.client_id
-            ${tenantId ? sql`AND pc2.tenant_id = ${tenantId}` : sql``}
-        )
-    `);
-    return (rows as any[]).map((r: any) => ({ clientId: r.client_id, failureReason: r.failure_reason ?? null }));
+    try {
+      const rows = await db.execute(sql`
+        SELECT pc.client_id, pc.failure_reason
+        FROM payment_charges pc
+        WHERE pc.status = 'failed'
+          ${tenantId ? sql`AND pc.tenant_id = ${tenantId}` : sql``}
+          AND pc.charged_at = (
+            SELECT MAX(pc2.charged_at)
+            FROM payment_charges pc2
+            WHERE pc2.client_id = pc.client_id
+              ${tenantId ? sql`AND pc2.tenant_id = ${tenantId}` : sql``}
+          )
+      `);
+      return (rows as any[]).map((r: any) => ({ clientId: r.client_id, failureReason: r.failure_reason ?? null }));
+    } catch {
+      // payment_charges table not yet migrated — return empty until Stripe is set up
+      return [];
+    }
   }
 }
 

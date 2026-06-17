@@ -2,6 +2,19 @@ import { db } from "./db";
 import { users, clinicians, formTemplates, clients, tasks, formSubmissions, timeSlots, auditLogs, tenants } from "../shared/schema";
 import { eq, isNull } from "drizzle-orm";
 
+const PERINATAL_TENANT_ID = "11111111-0000-0000-0000-000000000001";
+
+/** Assign any null-tenantId rows to the Perinatal tenant (idempotent). */
+async function fixNullTenantIds() {
+  await db.update(users).set({ tenantId: PERINATAL_TENANT_ID }).where(isNull(users.tenantId));
+  await db.update(clinicians).set({ tenantId: PERINATAL_TENANT_ID }).where(isNull(clinicians.tenantId));
+  await db.update(clients).set({ tenantId: PERINATAL_TENANT_ID }).where(isNull(clients.tenantId));
+  await db.update(tasks).set({ tenantId: PERINATAL_TENANT_ID }).where(isNull(tasks.tenantId));
+  await db.update(timeSlots).set({ tenantId: PERINATAL_TENANT_ID }).where(isNull(timeSlots.tenantId));
+  await db.update(formTemplates).set({ tenantId: PERINATAL_TENANT_ID }).where(isNull(formTemplates.tenantId));
+  await db.update(formSubmissions).set({ tenantId: PERINATAL_TENANT_ID }).where(isNull(formSubmissions.tenantId));
+}
+
 const seedData = {
   users: [
     { id: "97412512-047a-47d7-a202-8c8aa1d2f815", email: "admin@perinatalpsych.com", password: "71645d48cf84955b491e95f33c9ddf24886186d81995752d25d6c9971255f34b448444fb8d080328709e5ad3bdd3045062a613d463856074fe4b7d4f281056dd.3a224bc00de3889bed4277e4385502ac", role: "admin" as const, name: "Admin User" },
@@ -123,6 +136,10 @@ export async function seedDatabaseIfEmpty() {
       .set({ logoUrl: '/perinatal-logo.png' })
       .where(eq(tenants.name, 'Perinatal Psychology Practice'));
     console.log("Ensured Perinatal tenant logoUrl is set");
+
+    // Always fix any null tenantId rows so legacy data is always visible
+    await fixNullTenantIds();
+    console.log("Ensured all null-tenantId records assigned to Perinatal tenant");
 
     // Always update form templates if they're outdated
     if (formNeedsUpdate) {

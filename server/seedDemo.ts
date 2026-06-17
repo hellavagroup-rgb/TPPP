@@ -8,9 +8,9 @@
 
 import { db } from "./db";
 import {
-  users, clinicians, clients, tasks, timeSlots, formSubmissions, formTemplates, tenants,
+  clients, tasks, timeSlots, formSubmissions, formTemplates,
 } from "../shared/schema";
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 // ─── Clinician IDs from seed.ts ────────────────────────────────────────────
 const CLIN = {
@@ -36,8 +36,9 @@ const CLIN = {
   danelle:  "2b5915af-6d82-499e-82b0-e43c276fbd4c",
 };
 
+// The Perinatal Psychology Practice tenant (created by seedTenants.ts)
+const PERINATAL_TENANT_ID = "11111111-0000-0000-0000-000000000001";
 const ADMIN_EMAIL = "admin@perinatalpsych.com";
-const ADMIN_ID    = "97412512-047a-47d7-a202-8c8aa1d2f815";
 
 const now = new Date();
 const ago = (days: number) => new Date(now.getTime() - days * 86_400_000);
@@ -100,10 +101,8 @@ const CLIENT = {
 export async function seedDemoData() {
   console.log("=== DEMO SEED STARTING ===");
 
-  // Look up tenant from admin user
-  const adminUsers = await db.select().from(users).where(eq(users.email, ADMIN_EMAIL));
-  const tenantId = adminUsers[0]?.tenantId ?? null;
-  console.log(`Tenant ID: ${tenantId ?? "(none — legacy data)"}`);
+  const tenantId = PERINATAL_TENANT_ID;
+  console.log(`Tenant ID: ${tenantId}`);;
 
   // ── Availability slots ─────────────────────────────────────────────────
   console.log("Seeding availability slots...");

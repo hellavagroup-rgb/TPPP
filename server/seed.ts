@@ -133,7 +133,7 @@ export async function seedDatabaseIfEmpty() {
     
     // Always ensure Perinatal tenant has its logo set (idempotent migration)
     await db.update(tenants)
-      .set({ logoUrl: '/perinatal-logo.png' })
+      .set({ logoUrl: '/perinatal-logo.svg' })
       .where(eq(tenants.name, 'Perinatal Psychology Practice'));
     console.log("Ensured Perinatal tenant logoUrl is set");
 

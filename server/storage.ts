@@ -517,17 +517,30 @@ export class DatabaseStorage implements IStorage {
 
       // Case 1: Status-only change to allocated status (keep current slot)
       if (isAllocatedStatus && !isReassigning && hasAllocation) {
+        // When confirming (→ Scheduled), delete the slot and clear ALL assignment fields
+        if (newStatus === "Scheduled") {
+          const slotToRelease = await findOldSlotId();
+          if (slotToRelease) {
+            await tx.delete(timeSlots).where(eq(timeSlots.id, slotToRelease));
+          }
+          await tx.update(clients).set({
+            status: "Scheduled" as any,
+            assignedSlotId: null,
+            assignedSlot: null,
+            assignedClinicianId: null,
+            confirmedAt: new Date(),
+            updatedAt: new Date()
+          }).where(eq(clients.id, clientId));
+          return;
+        }
         const statusUpdates: any = {
           status: newStatus as any,
           updatedAt: new Date()
         };
-        // Set appropriate timestamp based on new status
         if (newStatus === "Assigned") {
           statusUpdates.allocatedAt = new Date();
         } else if (newStatus === "AwaitingConfirmation") {
           statusUpdates.awaitingConfirmationAt = new Date();
-        } else if (newStatus === "Scheduled") {
-          statusUpdates.confirmedAt = new Date();
         }
         await tx.update(clients).set(statusUpdates).where(eq(clients.id, clientId));
         return;

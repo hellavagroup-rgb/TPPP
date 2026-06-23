@@ -74,13 +74,14 @@ export async function registerRoutes(
         const updated = await (db.update(table) as any).set({ tenantId: tenant.id }).where(isNull((table as any).tenantId)).returning();
         counts[name] = updated.length;
       }
-      // Fix stuck legacy assignments: clients with assignedSlot/assignedClinicianId set
-      // but assignedSlotId=null and in a non-allocated status (orphaned after status rollback)
-      const ALLOCATED = ["Assigned", "AwaitingConfirmation", "Scheduled"];
+      // Fix stuck legacy assignments: clear assignedSlot/assignedClinicianId for any client
+      // where assignedSlotId is null but text fields remain. This covers:
+      //   - Confirmed (Scheduled) clients: slot was deleted on confirm but text fields not cleared
+      //   - De-allocated clients: status rolled back but text fields not cleared
       const stuckClients = await db.select().from(clients).where(isNull(clients.assignedSlotId));
       let stuckFixed = 0;
       for (const c of stuckClients) {
-        if ((c.assignedSlot || c.assignedClinicianId) && !ALLOCATED.includes(c.status || "")) {
+        if (c.assignedSlot || c.assignedClinicianId) {
           await db.update(clients).set({ assignedSlot: null, assignedClinicianId: null }).where(eq(clients.id, c.id));
           stuckFixed++;
         }
@@ -941,8 +942,12 @@ export async function registerRoutes(
         ? currentClient.assignedSlotId
         : null;
       
-      if (slotToDelete) {
+      // When confirming, always clear ALL three assignment fields — the slot is being deleted
+      // and the text fields must also be cleared to prevent legacy enrichment hiding future slots
+      if (req.body.status === "Scheduled" && req.body.status !== oldStatus) {
         updateData.assignedSlotId = null;
+        updateData.assignedSlot = null;
+        updateData.assignedClinicianId = null;
       }
 
       // When moving backward from an allocated state, release the slot and clear assignment fields

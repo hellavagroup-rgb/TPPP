@@ -88,6 +88,30 @@ export async function registerRoutes(
       }
       counts["stuckLegacyAssignmentsFixed"] = stuckFixed;
 
+      // Deduplicate recurring slots: for each clinician+day+startTime with multiple
+      // unbooked copies, keep the oldest and delete the rest
+      const allRecurring = await db.select().from(timeSlots)
+        .where(eq(timeSlots.type, "Recurring"));
+      const slotGroups = new Map<string, typeof allRecurring>();
+      for (const slot of allRecurring) {
+        const key = `${slot.clinicianId}|${slot.day}|${slot.startTime}`;
+        if (!slotGroups.has(key)) slotGroups.set(key, []);
+        slotGroups.get(key)!.push(slot);
+      }
+      let dupsDeleted = 0;
+      for (const [, group] of slotGroups) {
+        const unbookedCopies = group.filter(s => !s.isBooked);
+        if (unbookedCopies.length <= 1) continue;
+        // Keep the oldest (lowest timestamp in ID), delete the rest
+        unbookedCopies.sort((a, b) => a.id.localeCompare(b.id));
+        const toDelete = unbookedCopies.slice(1);
+        for (const slot of toDelete) {
+          await db.delete(timeSlots).where(eq(timeSlots.id, slot.id));
+          dupsDeleted++;
+        }
+      }
+      counts["duplicateSlotsRemoved"] = dupsDeleted;
+
       res.json({ success: true, tenantId: tenant.id, updated: counts });
     } catch (error) {
       console.error("Seed tenant error:", error);

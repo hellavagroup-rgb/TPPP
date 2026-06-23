@@ -301,7 +301,7 @@ export class DatabaseStorage implements IStorage {
     if (slot.isBooked) {
       const clientsWithSlot = await db.select().from(clients).where(eq(clients.assignedSlotId, id));
       for (const client of clientsWithSlot) {
-        await db.update(clients).set({ assignedSlotId: null }).where(eq(clients.id, client.id));
+        await db.update(clients).set({ assignedSlotId: null, assignedSlot: null, assignedClinicianId: null }).where(eq(clients.id, client.id));
       }
     }
     

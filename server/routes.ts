@@ -15,7 +15,7 @@ import { forceReseedDatabase } from "./seed";
 import { requireTenant } from './middleware/tenant';
 import { db } from "./db";
 import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs } from "@shared/schema";
-import { isNull } from "drizzle-orm";
+import { isNull, eq } from "drizzle-orm";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -74,6 +74,19 @@ export async function registerRoutes(
         const updated = await (db.update(table) as any).set({ tenantId: tenant.id }).where(isNull((table as any).tenantId)).returning();
         counts[name] = updated.length;
       }
+      // Fix stuck legacy assignments: clients with assignedSlot/assignedClinicianId set
+      // but assignedSlotId=null and in a non-allocated status (orphaned after status rollback)
+      const ALLOCATED = ["Assigned", "AwaitingConfirmation", "Scheduled"];
+      const stuckClients = await db.select().from(clients).where(isNull(clients.assignedSlotId));
+      let stuckFixed = 0;
+      for (const c of stuckClients) {
+        if ((c.assignedSlot || c.assignedClinicianId) && !ALLOCATED.includes(c.status || "")) {
+          await db.update(clients).set({ assignedSlot: null, assignedClinicianId: null }).where(eq(clients.id, c.id));
+          stuckFixed++;
+        }
+      }
+      counts["stuckLegacyAssignmentsFixed"] = stuckFixed;
+
       res.json({ success: true, tenantId: tenant.id, updated: counts });
     } catch (error) {
       console.error("Seed tenant error:", error);
@@ -930,6 +943,25 @@ export async function registerRoutes(
       
       if (slotToDelete) {
         updateData.assignedSlotId = null;
+      }
+
+      // When moving backward from an allocated state, release the slot and clear assignment fields
+      const ALLOCATED_STATUSES = ["Assigned", "AwaitingConfirmation", "Scheduled"];
+      const isDeallocation = req.body.status && oldStatus &&
+        ALLOCATED_STATUSES.includes(oldStatus) &&
+        !ALLOCATED_STATUSES.includes(req.body.status);
+
+      if (isDeallocation) {
+        if (currentClient?.assignedSlotId) {
+          try {
+            await db.update(timeSlots).set({ isBooked: false }).where(eq(timeSlots.id, currentClient.assignedSlotId));
+          } catch (err) {
+            console.error("Failed to unbook slot on de-allocation:", err);
+          }
+        }
+        updateData.assignedSlotId = null;
+        updateData.assignedSlot = null;
+        updateData.assignedClinicianId = null;
       }
       
       const updated = await storage.updateClient(req.params.id, updateData);

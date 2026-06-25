@@ -2909,6 +2909,23 @@ export async function registerRoutes(
     }
   });
 
+  // Reset a user's password (super-admin only)
+  app.post("/api/super-admin/users/reset-password", requireSuperAdmin, async (req, res) => {
+    try {
+      const { email, newPassword } = z.object({
+        email: z.string().email(),
+        newPassword: z.string().min(8),
+      }).parse(req.body);
+      const user = await storage.getUserByEmail(email.toLowerCase());
+      if (!user) return res.status(404).json({ error: "User not found" });
+      const hashed = await hashPassword(newPassword);
+      await storage.updateUser(user.id, { password: hashed });
+      res.json({ success: true });
+    } catch (error) {
+      res.status(400).json({ error: "Failed to reset password" });
+    }
+  });
+
   // Update tenant branding
   app.patch("/api/super-admin/tenants/:id/branding", requireSuperAdmin, async (req, res) => {
     try {

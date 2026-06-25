@@ -131,11 +131,7 @@ export async function seedDatabaseIfEmpty() {
     const existingFieldCount = existingForm ? (existingForm.fields as any[])?.length || 0 : 0;
     const formNeedsUpdate = existingForm && existingFieldCount < expectedFieldCount;
     
-    // Always ensure Perinatal tenant has its logo set (idempotent migration)
-    await db.update(tenants)
-      .set({ logoUrl: '/perinatal-logo.svg' })
-      .where(eq(tenants.name, 'Perinatal Psychology Practice'));
-    console.log("Ensured Perinatal tenant logoUrl is set");
+    // Tenant logo is configured via the super-admin panel — do not hardcode here
 
     // Always fix any null tenantId rows so legacy data is always visible
     await fixNullTenantIds();

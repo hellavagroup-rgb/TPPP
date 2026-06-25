@@ -149,6 +149,7 @@ export function auditLog(action: string, resourceType: string) {
       try {
         await storage.createAuditLog({
           userId: req.user.id,
+          tenantId: req.tenant?.id || null,
           action,
           resourceType,
           resourceId: req.params.id || null,

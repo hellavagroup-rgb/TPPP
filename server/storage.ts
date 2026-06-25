@@ -803,14 +803,12 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(auditLogs).where(eq(auditLogs.userId, userId)).orderBy(desc(auditLogs.timestamp));
   }
 
-  async getRecentAuditLogs(limit: number = 10, action?: string): Promise<AuditLog[]> {
-    if (action) {
-      return await db.select().from(auditLogs)
-        .where(eq(auditLogs.action, action))
-        .orderBy(desc(auditLogs.timestamp))
-        .limit(limit);
-    }
+  async getRecentAuditLogs(limit: number = 10, action?: string, tenantId?: string | null): Promise<AuditLog[]> {
+    const conditions = [];
+    if (action) conditions.push(eq(auditLogs.action, action));
+    if (tenantId) conditions.push(eq(auditLogs.tenantId, tenantId));
     return await db.select().from(auditLogs)
+      .where(conditions.length > 0 ? and(...conditions) : undefined)
       .orderBy(desc(auditLogs.timestamp))
       .limit(limit);
   }

@@ -1462,7 +1462,7 @@ export async function registerRoutes(
   // ============ TASKS ============
   app.get("/api/activity/recent", requireAdmin, async (req, res) => {
     try {
-      const logs = await storage.getRecentAuditLogs(20, "add_slots");
+      const logs = await storage.getRecentAuditLogs(20, "add_slots", req.tenant?.id);
       res.json(logs);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch recent activity" });

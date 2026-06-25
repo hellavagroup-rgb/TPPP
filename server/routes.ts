@@ -1,6 +1,9 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import crypto from "crypto";
+import path from "path";
+import fs from "fs";
+import multer from "multer";
 import ExcelJS from "exceljs";
 import { storage } from "./storage";
 import { setupAuth, requireAuth, requireAdmin, requireClinician, hashPassword, auditLog } from "./auth";
@@ -2861,6 +2864,40 @@ export async function registerRoutes(
     } catch (error) {
       if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors });
       res.status(500).json({ error: "Failed to update branding" });
+    }
+  });
+
+  // Logo upload for a tenant
+  const logoUpload = multer({
+    storage: multer.diskStorage({
+      destination: (_req, _file, cb) => {
+        const dir = path.join(process.cwd(), "client", "public", "logos");
+        fs.mkdirSync(dir, { recursive: true });
+        cb(null, dir);
+      },
+      filename: (req, file, cb) => {
+        const ext = path.extname(file.originalname).toLowerCase() || ".png";
+        cb(null, `${req.params.id}${ext}`);
+      },
+    }),
+    limits: { fileSize: 2 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+      const allowed = ["image/png", "image/jpeg", "image/svg+xml", "image/gif", "image/webp"];
+      cb(null, allowed.includes(file.mimetype));
+    },
+  });
+
+  app.post("/api/super-admin/tenants/:id/logo-upload", requireSuperAdmin, logoUpload.single("logo"), async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: "No file uploaded or unsupported type" });
+      const ext = path.extname(req.file.originalname).toLowerCase() || ".png";
+      const logoUrl = `/logos/${req.params.id}${ext}`;
+      const [updated] = await db.update(tenants).set({ logoUrl }).where(eq(tenants.id, req.params.id)).returning();
+      if (!updated) return res.status(404).json({ error: "Tenant not found" });
+      res.json({ logoUrl });
+    } catch (error) {
+      console.error("Logo upload error:", error);
+      res.status(500).json({ error: "Failed to upload logo" });
     }
   });
 

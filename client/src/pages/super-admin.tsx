@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, ArrowLeft, CheckCircle2, AlertCircle, Save, Trash2, Plus, Eye, EyeOff, ShieldAlert } from "lucide-react";
+import { Loader2, ArrowLeft, CheckCircle2, AlertCircle, Save, Trash2, Plus, Eye, EyeOff, ShieldAlert, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 const SESSION_KEY = "super_admin_key";
@@ -261,6 +261,7 @@ function BrandingTab({ tenant, adminKey, onSaved }: { tenant: TenantDetail; admi
     accentColor: tenant.accentColor || "",
   });
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
   const handleSave = async () => {
     setSaving(true);
@@ -282,6 +283,33 @@ function BrandingTab({ tenant, adminKey, onSaved }: { tenant: TenantDetail; admi
     }
   };
 
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const data = new FormData();
+      data.append("logo", file);
+      const res = await fetch(`/api/super-admin/tenants/${tenant.id}/logo-upload`, {
+        method: "POST",
+        headers: { "x-super-admin-key": adminKey },
+        body: data,
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || "Upload failed");
+      }
+      const { logoUrl } = await res.json();
+      setForm(f => ({ ...f, logoUrl }));
+      toast.success("Logo uploaded — click Save Branding to apply");
+    } catch (e: any) {
+      toast.error(e.message || "Failed to upload logo");
+    } finally {
+      setUploading(false);
+      e.target.value = "";
+    }
+  };
+
   return (
     <div className="space-y-5 max-w-lg">
       <div className="space-y-1.5">
@@ -294,25 +322,69 @@ function BrandingTab({ tenant, adminKey, onSaved }: { tenant: TenantDetail; admi
       </div>
 
       <div className="space-y-1.5">
-        <Label>Logo URL</Label>
-        <Input
-          data-testid="input-branding-logo"
-          placeholder="https://…"
-          value={form.logoUrl}
-          onChange={e => setForm(f => ({ ...f, logoUrl: e.target.value }))}
-        />
+        <Label>Logo</Label>
+
+        {/* Preview */}
         {form.logoUrl && (
-          <div className="mt-2 p-3 border rounded-lg bg-slate-50 flex items-center gap-3">
+          <div className="p-3 border rounded-lg bg-slate-50 flex items-center gap-3">
             <img
               src={form.logoUrl}
               alt="Logo preview"
-              className="h-12 w-12 object-contain rounded"
-              onError={e => { (e.target as HTMLImageElement).src = ""; }}
+              className="h-14 max-w-[160px] object-contain rounded"
+              onError={e => { (e.target as HTMLImageElement).style.display = "none"; }}
             />
-            <p className="text-xs text-muted-foreground">Logo preview</p>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-medium text-slate-700 truncate">{form.logoUrl}</p>
+              <button
+                onClick={() => setForm(f => ({ ...f, logoUrl: "" }))}
+                className="text-xs text-red-500 hover:underline mt-0.5"
+                data-testid="button-remove-logo"
+              >
+                Remove
+              </button>
+            </div>
           </div>
         )}
-        <p className="text-xs text-muted-foreground">Host the image externally and paste its URL here.</p>
+
+        {/* Upload button */}
+        <label className="flex items-center gap-2 cursor-pointer w-fit">
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/svg+xml,image/gif,image/webp"
+            className="sr-only"
+            onChange={handleLogoUpload}
+            data-testid="input-logo-upload"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={uploading}
+            asChild
+            data-testid="button-upload-logo"
+          >
+            <span>
+              {uploading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Upload className="h-4 w-4 mr-2" />}
+              {uploading ? "Uploading…" : form.logoUrl ? "Replace Logo" : "Upload Logo"}
+            </span>
+          </Button>
+        </label>
+
+        {/* Manual URL fallback */}
+        <details className="text-xs">
+          <summary className="cursor-pointer text-muted-foreground hover:text-foreground select-none">
+            Or paste a URL instead
+          </summary>
+          <div className="mt-1.5">
+            <Input
+              data-testid="input-branding-logo"
+              placeholder="https://…"
+              value={form.logoUrl}
+              onChange={e => setForm(f => ({ ...f, logoUrl: e.target.value }))}
+            />
+          </div>
+        </details>
+        <p className="text-xs text-muted-foreground">PNG, JPG, SVG or GIF — max 2 MB</p>
       </div>
 
       <div className="grid grid-cols-2 gap-4">

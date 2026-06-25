@@ -765,6 +765,7 @@ function TenantDetail({ tenantId, adminKey, onBack }: { tenantId: string; adminK
           <TabsTrigger value="features" data-testid="tab-features">Features</TabsTrigger>
           <TabsTrigger value="stripe" data-testid="tab-stripe">Stripe</TabsTrigger>
           <TabsTrigger value="gmail" data-testid="tab-gmail">Gmail</TabsTrigger>
+          <TabsTrigger value="users" data-testid="tab-users">Users</TabsTrigger>
         </TabsList>
 
         <TabsContent value="branding">
@@ -782,8 +783,98 @@ function TenantDetail({ tenantId, adminKey, onBack }: { tenantId: string; adminK
         <TabsContent value="gmail">
           <GmailTab tenant={tenant} adminKey={adminKey} onSaved={onSaved} />
         </TabsContent>
+
+        <TabsContent value="users">
+          <UsersTab adminKey={adminKey} />
+        </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+// ─── Users Tab ───────────────────────────────────────────────────────────────
+
+function UsersTab({ adminKey }: { adminKey: string }) {
+  const [email, setEmail] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [showPw, setShowPw] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const handleReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email || !newPassword) return;
+    setLoading(true);
+    try {
+      const res = await superAdminFetch("/api/super-admin/users/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, newPassword }),
+      }, adminKey);
+      if (res.ok) {
+        toast.success("Password reset successfully");
+        setEmail("");
+        setNewPassword("");
+      } else {
+        const data = await res.json();
+        toast.error(data.error || "Failed to reset password");
+      }
+    } catch {
+      toast.error("Network error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Reset User Password</CardTitle>
+        <CardDescription>Override a user's password directly. Use when the user cannot receive a password-reset email.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={handleReset} className="space-y-4 max-w-sm">
+          <div className="space-y-1.5">
+            <Label htmlFor="reset-email">User email</Label>
+            <Input
+              id="reset-email"
+              data-testid="input-reset-email"
+              type="email"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              placeholder="admin@example.com"
+              required
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="reset-pw">New password</Label>
+            <div className="relative">
+              <Input
+                id="reset-pw"
+                data-testid="input-reset-password"
+                type={showPw ? "text" : "password"}
+                value={newPassword}
+                onChange={e => setNewPassword(e.target.value)}
+                placeholder="Min 8 characters"
+                required
+                minLength={8}
+                className="pr-10"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPw(v => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+          </div>
+          <Button type="submit" disabled={loading} data-testid="button-reset-password">
+            {loading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+            Reset Password
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
   );
 }
 

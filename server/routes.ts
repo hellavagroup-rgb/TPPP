@@ -95,14 +95,14 @@ export async function registerRoutes(
         counts[name] = updated.length;
       }
 
-      // Audit log backfill: stamp null-tenantId logs whose userId belongs to THIS tenant's users.
+      // Audit log backfill: stamp null-tenantId logs whose userId belongs to this tenant's users.
       // Scoped by userId to avoid incorrectly stamping another tenant's orphaned logs.
-      const tenantUserIds = await db.select({ id: users.id }).from(users).where(eq(users.tenantId, req.tenant!.id));
+      const tenantUserIds = await db.select({ id: users.id }).from(users).where(eq(users.tenantId, tenant.id));
       const userIdList = tenantUserIds.map(u => u.id);
       let auditLogsFixed = 0;
       if (userIdList.length > 0) {
         const updatedLogs = await db.update(auditLogs)
-          .set({ tenantId: req.tenant!.id })
+          .set({ tenantId: tenant.id })
           .where(and(isNull(auditLogs.tenantId), inArray(auditLogs.userId, userIdList)))
           .returning();
         auditLogsFixed = updatedLogs.length;

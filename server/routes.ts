@@ -95,6 +95,44 @@ export async function registerRoutes(
         const updated = await (db.update(table) as any).set({ tenantId: tenant.id }).where(isNull((table as any).tenantId)).returning();
         counts[name] = updated.length;
       }
+      // Fix stuck legacy assignments: clear assignedSlot/assignedClinicianId for any client
+      // where assignedSlotId is null but text fields remain. This covers:
+      //   - Confirmed (Scheduled) clients: slot was deleted on confirm but text fields not cleared
+      //   - De-allocated clients: status rolled back but text fields not cleared
+      const stuckClients = await db.select().from(clients).where(isNull(clients.assignedSlotId));
+      let stuckFixed = 0;
+      for (const c of stuckClients) {
+        if (c.assignedSlot || c.assignedClinicianId) {
+          await db.update(clients).set({ assignedSlot: null, assignedClinicianId: null }).where(eq(clients.id, c.id));
+          stuckFixed++;
+        }
+      }
+      counts["stuckLegacyAssignmentsFixed"] = stuckFixed;
+
+      // Deduplicate recurring slots: for each clinician+day+startTime with multiple
+      // unbooked copies, keep the oldest and delete the rest
+      const allRecurring = await db.select().from(timeSlots)
+        .where(eq(timeSlots.type, "Recurring"));
+      const slotGroups = new Map<string, typeof allRecurring>();
+      for (const slot of allRecurring) {
+        const key = `${slot.clinicianId}|${slot.day}|${slot.startTime}`;
+        if (!slotGroups.has(key)) slotGroups.set(key, []);
+        slotGroups.get(key)!.push(slot);
+      }
+      let dupsDeleted = 0;
+      for (const [, group] of slotGroups) {
+        const unbookedCopies = group.filter(s => !s.isBooked);
+        if (unbookedCopies.length <= 1) continue;
+        // Keep the oldest (lowest timestamp in ID), delete the rest
+        unbookedCopies.sort((a, b) => a.id.localeCompare(b.id));
+        const toDelete = unbookedCopies.slice(1);
+        for (const slot of toDelete) {
+          await db.delete(timeSlots).where(eq(timeSlots.id, slot.id));
+          dupsDeleted++;
+        }
+      }
+      counts["duplicateSlotsRemoved"] = dupsDeleted;
+
       res.json({ success: true, tenantId: tenant.id, updated: counts });
     } catch (error) {
       console.error("Seed tenant error:", error);
@@ -958,8 +996,31 @@ export async function registerRoutes(
         ? currentClient.assignedSlotId
         : null;
       
-      if (slotToDelete) {
+      // When confirming, always clear ALL three assignment fields — the slot is being deleted
+      // and the text fields must also be cleared to prevent legacy enrichment hiding future slots
+      if (req.body.status === "Scheduled" && req.body.status !== oldStatus) {
         updateData.assignedSlotId = null;
+        updateData.assignedSlot = null;
+        updateData.assignedClinicianId = null;
+      }
+
+      // When moving backward from an allocated state, release the slot and clear assignment fields
+      const ALLOCATED_STATUSES = ["Assigned", "AwaitingConfirmation", "Scheduled"];
+      const isDeallocation = req.body.status && oldStatus &&
+        ALLOCATED_STATUSES.includes(oldStatus) &&
+        !ALLOCATED_STATUSES.includes(req.body.status);
+
+      if (isDeallocation) {
+        if (currentClient?.assignedSlotId) {
+          try {
+            await db.update(timeSlots).set({ isBooked: false }).where(eq(timeSlots.id, currentClient.assignedSlotId));
+          } catch (err) {
+            console.error("Failed to unbook slot on de-allocation:", err);
+          }
+        }
+        updateData.assignedSlotId = null;
+        updateData.assignedSlot = null;
+        updateData.assignedClinicianId = null;
       }
       
       const updated = await storage.updateClient(req.params.id, updateData);

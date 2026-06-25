@@ -6,7 +6,6 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2 } from "lucide-react";
-import logo from "@assets/xPerinatalPP-logo-large-digital.png.pagespeed.ic.wAjk_RUOnf_1766008188694.png";
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -41,9 +40,8 @@ export default function Login() {
     <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 p-4">
       <Card className="w-full max-w-md shadow-lg border-slate-200">
         <CardHeader className="space-y-4 items-center text-center pb-2">
-           <img src={logo} alt="The Perinatal Psychology Practice" className="w-48 object-contain mb-2" />
            <div className="space-y-1">
-             <CardTitle className="text-2xl font-serif">Portal Login</CardTitle>
+             <CardTitle className="text-2xl font-serif">Practice Management Portal</CardTitle>
              <CardDescription>Enter your credentials to access the system</CardDescription>
            </div>
         </CardHeader>
@@ -54,7 +52,7 @@ export default function Login() {
                     <Input 
                         id="email" 
                         type="email" 
-                        placeholder="name@perinatalpsych.com" 
+                        placeholder="name@example.com" 
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
                     />

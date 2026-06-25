@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,10 +9,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { toast } from "sonner";
-import { Loader2, Save, Mail, Trash2, UserPlus, Link2, Unlink, ShieldCheck, Download, Database } from "lucide-react";
+import { Loader2, Save, Mail, Trash2, UserPlus, Link2, ShieldCheck, Download, Database, RefreshCw, CheckCircle2, AlertCircle, ExternalLink } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useAuth } from "@/lib/auth";
+import { useLocation } from "wouter";
 
 interface EmailTemplate {
   id: string;
@@ -143,6 +144,23 @@ New Status: {{newStatus}}
 Please log in to the practice management system to review this update.
 
 The Perinatal Psychology Practice`,
+  },
+  {
+    templateKey: "payment_link",
+    name: "Payment Link",
+    subject: "Your Session Payment Link - The Perinatal Psychology Practice",
+    bodyText: `Thank you for completing your intake process. To confirm your first therapy session, please complete your initial session payment using the secure link below.
+
+Payment amount: £{{amount}}
+
+Pay securely here: {{payment_url}}
+
+Your card details will be saved securely so that future session payments can be processed automatically.
+
+If you have any questions, please don't hesitate to contact us.
+
+Warm regards,
+The Perinatal Psychology Practice Team`,
   },
 ];
 
@@ -961,9 +979,264 @@ function NonEngagementCategoriesTab() {
   );
 }
 
+interface GmailConnection {
+  id: string;
+  gmailAddress: string;
+  label: string | null;
+  isActive: boolean;
+  lastSyncAt: string | null;
+  createdAt: string;
+}
+
+function GmailConnectionsTab() {
+  const queryClient = useQueryClient();
+  const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [deleteDialogId, setDeleteDialogId] = useState<string | null>(null);
+  const [debugInfo, setDebugInfo] = useState<{ redirectUri: string; clientId: string; url: string } | null>(null);
+  const [showDebug, setShowDebug] = useState(false);
+
+  async function loadDebugInfo() {
+    try {
+      const res = await fetch("/api/auth/gmail/debug-oauth-url");
+      const data = await res.json();
+      setDebugInfo(data);
+      setShowDebug(true);
+    } catch {
+      toast.error("Failed to load debug info");
+    }
+  }
+
+  const redirectUri = `${window.location.origin}/api/auth/gmail/callback`;
+
+  // Read status from URL params (set after OAuth redirect)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get("connected");
+    const error = params.get("error");
+    if (connected) {
+      toast.success(`Connected ${decodeURIComponent(connected)} successfully`);
+      queryClient.invalidateQueries({ queryKey: ["/api/gmail-connections"] });
+      window.history.replaceState({}, "", "/settings?tab=gmail");
+    } else if (error) {
+      const msgs: Record<string, string> = {
+        oauth_denied: "Google sign-in was cancelled.",
+        no_tokens: "Google did not return credentials — make sure offline access is enabled.",
+        oauth_failed: "Something went wrong during sign-in. Please try again.",
+      };
+      toast.error(msgs[error] || "Gmail connection failed.");
+      window.history.replaceState({}, "", "/settings?tab=gmail");
+    }
+  }, [queryClient]);
+
+  const { data: connections = [], isLoading } = useQuery<GmailConnection[]>({
+    queryKey: ["/api/gmail-connections"],
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("DELETE", `/api/gmail-connections/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/gmail-connections"] });
+      toast.success("Inbox disconnected");
+      setDeleteDialogId(null);
+    },
+    onError: () => toast.error("Failed to disconnect inbox"),
+  });
+
+  async function handleSync(id: string) {
+    setSyncingId(id);
+    try {
+      const res = await apiRequest("POST", `/api/gmail-connections/${id}/sync`);
+      const data = await res.json();
+      queryClient.invalidateQueries({ queryKey: ["/api/gmail-connections"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/intake-messages"] });
+      if (data.newMessages > 0) {
+        toast.success(`Sync complete — ${data.newMessages} new message${data.newMessages !== 1 ? "s" : ""} found`);
+      } else {
+        toast.success("Sync complete — no new messages");
+      }
+    } catch {
+      toast.error("Sync failed");
+    } finally {
+      setSyncingId(null);
+    }
+  }
+
+  const toDelete = connections.find(c => c.id === deleteDialogId);
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Mail className="h-5 w-5" />
+            Connected Gmail Inboxes
+          </CardTitle>
+          <CardDescription>
+            Connect a Gmail inbox to automatically pull enquiry emails into the Intake Inbox.
+            New messages are checked every 5 minutes. You can connect multiple inboxes.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() => { window.open("/api/auth/gmail/connect", "_blank"); }}
+              data-testid="button-connect-gmail"
+            >
+              <ExternalLink className="h-4 w-4 mr-2" />
+              Connect a Gmail inbox
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground text-xs"
+              onClick={loadDebugInfo}
+            >
+              Show debug info
+            </Button>
+          </div>
+
+          {showDebug && debugInfo && (
+            <div className="rounded-md bg-slate-50 border border-slate-200 p-3 text-xs space-y-2 font-mono break-all">
+              <p><span className="font-semibold text-slate-700">Client ID:</span> {debugInfo.clientId}</p>
+              <p><span className="font-semibold text-slate-700">Redirect URI (server):</span> {debugInfo.redirectUri}</p>
+              <p><span className="font-semibold text-slate-700">Full OAuth URL:</span> {debugInfo.url}</p>
+              <Button size="sm" variant="ghost" className="text-xs h-6 px-2" onClick={() => setShowDebug(false)}>Hide</Button>
+            </div>
+          )}
+
+          {isLoading && (
+            <div className="flex items-center gap-2 text-muted-foreground text-sm py-2">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+            </div>
+          )}
+
+          {!isLoading && connections.length === 0 && (
+            <p className="text-sm text-muted-foreground py-2">No inboxes connected yet.</p>
+          )}
+
+          {connections.length > 0 && (
+            <div className="divide-y divide-border rounded-md border">
+              {connections.map(conn => (
+                <div key={conn.id} className="flex items-center justify-between gap-4 px-4 py-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      {conn.isActive
+                        ? <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
+                        : <AlertCircle className="h-4 w-4 text-yellow-500 shrink-0" />}
+                      <span className="font-medium text-sm truncate">{conn.gmailAddress}</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5 pl-6">
+                      {conn.lastSyncAt
+                        ? `Last synced ${new Date(conn.lastSyncAt).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}`
+                        : "Not yet synced"}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleSync(conn.id)}
+                      disabled={syncingId === conn.id}
+                      data-testid={`button-sync-gmail-${conn.id}`}
+                    >
+                      <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${syncingId === conn.id ? "animate-spin" : ""}`} />
+                      Sync now
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-destructive hover:text-destructive"
+                      onClick={() => setDeleteDialogId(conn.id)}
+                      data-testid={`button-disconnect-gmail-${conn.id}`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="rounded-md bg-amber-50 border border-amber-200 p-3 text-xs space-y-1.5">
+            <p className="font-medium text-amber-900">Required: Authorised Redirect URI</p>
+            <p className="text-amber-800">This exact URL must be added to your OAuth 2.0 client in Google Cloud Console under <strong>Clients → your client → Authorised redirect URIs</strong>:</p>
+            <div className="flex items-center gap-2 mt-1">
+              <code className="flex-1 bg-white border border-amber-200 rounded px-2 py-1.5 text-amber-900 break-all select-all font-mono">
+                {redirectUri}
+              </code>
+              <Button
+                size="sm"
+                variant="outline"
+                className="shrink-0 border-amber-300"
+                onClick={() => {
+                  navigator.clipboard.writeText(redirectUri);
+                  toast.success("Copied");
+                }}
+              >
+                Copy
+              </Button>
+            </div>
+          </div>
+
+          <div className="rounded-md bg-muted/50 border p-3 text-xs text-muted-foreground space-y-1">
+            <p className="font-medium text-foreground">How it works</p>
+            <p>Clicking "Connect a Gmail inbox" opens a Google sign-in window. Sign in with the practice inbox you want to monitor (e.g. <em>referrals@yourpractice.com</em>). We only request read access.</p>
+            <p>After connecting, existing messages from the last 30 days are imported immediately. After that, new messages are checked every 5 minutes automatically.</p>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Disconnect confirm dialog */}
+      <Dialog open={!!deleteDialogId} onOpenChange={open => !open && setDeleteDialogId(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Disconnect inbox?</DialogTitle>
+            <DialogDescription>
+              This will remove the connection to <strong>{toDelete?.gmailAddress}</strong>.
+              Existing intake messages already imported will remain. You can reconnect at any time.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteDialogId(null)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              onClick={() => deleteDialogId && deleteMutation.mutate(deleteDialogId)}
+              disabled={deleteMutation.isPending}
+            >
+              {deleteMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Disconnect
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
 export default function Settings() {
   const { user } = useAuth();
-  
+
+  const { data: tenant } = useQuery({
+    queryKey: ["/api/tenant"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/tenant");
+      if (!res.ok) return null;
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+
+  const dataExportEnabled = tenant?.dataExportEnabled !== false;
+  const nonEngagementEnabled = tenant?.nonEngagementEnabled !== false;
+  const gmailEnabled = tenant?.gmailIntakeEnabled === true;
+
+  // Support ?tab=gmail deep-links, but fall back if the tab is disabled
+  const urlTab = new URLSearchParams(window.location.search).get("tab");
+  const defaultTab =
+    urlTab === "gmail" && gmailEnabled ? "gmail" :
+    "notifications";
+
   return (
     <div className="space-y-6">
       <div>
@@ -971,14 +1244,15 @@ export default function Settings() {
         <p className="text-muted-foreground mt-1">Manage practice configuration and preferences.</p>
       </div>
 
-      <Tabs defaultValue="notifications" className="space-y-4">
-        <TabsList>
+      <Tabs defaultValue={defaultTab} className="space-y-4">
+        <TabsList className="flex-wrap h-auto">
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
           <TabsTrigger value="email-templates">Email Templates</TabsTrigger>
-          <TabsTrigger value="non-engagement">Non-Engagement</TabsTrigger>
-          <TabsTrigger value="data-export">Data Export</TabsTrigger>
+          {nonEngagementEnabled && <TabsTrigger value="non-engagement">Non-Engagement</TabsTrigger>}
+          {dataExportEnabled && <TabsTrigger value="data-export">Data Export</TabsTrigger>}
           <TabsTrigger value="account">Account</TabsTrigger>
           <TabsTrigger value="team">Team Members</TabsTrigger>
+          {gmailEnabled && <TabsTrigger value="gmail">Gmail Inboxes</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="notifications" className="space-y-4">
@@ -989,13 +1263,17 @@ export default function Settings() {
           <EmailTemplatesTab />
         </TabsContent>
 
-        <TabsContent value="non-engagement">
-          <NonEngagementCategoriesTab />
-        </TabsContent>
+        {nonEngagementEnabled && (
+          <TabsContent value="non-engagement">
+            <NonEngagementCategoriesTab />
+          </TabsContent>
+        )}
 
-        <TabsContent value="data-export">
-          <DataExportTab />
-        </TabsContent>
+        {dataExportEnabled && (
+          <TabsContent value="data-export">
+            <DataExportTab />
+          </TabsContent>
+        )}
 
         <TabsContent value="account">
           <AccountTab />
@@ -1004,6 +1282,12 @@ export default function Settings() {
         <TabsContent value="team">
           <AdminUsersTab />
         </TabsContent>
+
+        {gmailEnabled && (
+          <TabsContent value="gmail">
+            <GmailConnectionsTab />
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );

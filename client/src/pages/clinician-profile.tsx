@@ -10,7 +10,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { useEffect, useState } from "react";
-import { MapPin, Building, Shield, User, Loader2 } from "lucide-react";
+import { MapPin, Building, Shield, User, Loader2, PoundSterling } from "lucide-react";
 import type { Clinician } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
 import { useInsurers } from "@/hooks/use-insurers";
@@ -123,6 +123,12 @@ export default function ClinicianProfile() {
                 <Building className="h-4 w-4" />
                 <span>{formData.nhsTrust || "No Trust affiliated"}</span>
               </div>
+              {formData.sessionRatePence != null && (
+                <div className="flex items-center gap-2 text-muted-foreground" data-testid="text-session-rate">
+                  <PoundSterling className="h-4 w-4" />
+                  <span>£{(formData.sessionRatePence / 100).toFixed(2)} / session</span>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -231,6 +237,22 @@ export default function ClinicianProfile() {
                     <Label htmlFor="couples" className="font-medium cursor-pointer">Works with Couples</Label>
                   </div>
                 </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Session Rate</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">£</span>
+                  <Input
+                    readOnly
+                    disabled
+                    className="pl-7 bg-slate-50 cursor-not-allowed"
+                    value={formData.sessionRatePence != null ? (formData.sessionRatePence / 100).toFixed(2) : ""}
+                    placeholder="Not set"
+                    data-testid="input-session-rate-readonly"
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">Session rate is set by administrators.</p>
               </div>
             </CardContent>
             <CardFooter>

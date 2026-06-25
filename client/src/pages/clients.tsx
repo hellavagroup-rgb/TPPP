@@ -47,7 +47,11 @@ import {
   Loader2,
   RotateCcw,
   Users,
-  Trash2
+  Trash2,
+  CreditCard,
+  ExternalLink,
+  History,
+  AlertCircle,
 } from "lucide-react";
 import { useState } from "react";
 import { useLocation } from "wouter";
@@ -113,6 +117,19 @@ export default function Clients() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
   const [, setLocation] = useLocation();
+
+  const { data: tenant } = useQuery({
+    queryKey: ["/api/tenant"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/tenant");
+      if (!res.ok) return null;
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+  const paymentsEnabled = tenant?.paymentsEnabled !== false;
+  const formsEnabled = tenant?.formsEnabled !== false;
+  const nonEngagementEnabled = tenant?.nonEngagementEnabled !== false;
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedClient, setSelectedClient] = useState<ClientType | null>(null);
 
@@ -520,6 +537,155 @@ export default function Clients() {
         printWindow.print();
       }, 250);
     }
+  };
+
+  // ============ PAYMENT STATE ============
+  const { data: stripeStatus } = useQuery<{ configured: boolean }>({
+    queryKey: ["/api/stripe/status"],
+  });
+  const stripeEnabled = stripeStatus?.configured ?? false;
+
+  // Payment Link Dialog
+  const [isPaymentLinkOpen, setIsPaymentLinkOpen] = useState(false);
+  const [paymentLinkClient, setPaymentLinkClient] = useState<ClientType | null>(null);
+  const [agreedRatePounds, setAgreedRatePounds] = useState("");
+  const [generatedPaymentUrl, setGeneratedPaymentUrl] = useState("");
+  const [isGeneratingLink, setIsGeneratingLink] = useState(false);
+
+  // Charge Session Dialog
+  const [isChargeOpen, setIsChargeOpen] = useState(false);
+  const [chargeClient, setChargeClient] = useState<ClientType | null>(null);
+  const [chargeAmountPounds, setChargeAmountPounds] = useState("");
+  const [chargeNotes, setChargeNotes] = useState("");
+
+  // Payment History Dialog
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [historyClient, setHistoryClient] = useState<ClientType | null>(null);
+  const [charges, setCharges] = useState<any[]>([]);
+  const [loadingCharges, setLoadingCharges] = useState(false);
+
+  const handleOpenPaymentLink = (client: ClientType) => {
+    setPaymentLinkClient(client);
+    const assignedClinician = clinicians.find(c => c.id === client.assignedClinicianId);
+    setAgreedRatePounds(
+      client.agreedRatePence
+        ? String((client.agreedRatePence / 100).toFixed(2))
+        : assignedClinician?.sessionRatePence
+        ? String((assignedClinician.sessionRatePence / 100).toFixed(2))
+        : ""
+    );
+    setGeneratedPaymentUrl(client.stripeCheckoutUrl || "");
+    setIsPaymentLinkOpen(true);
+  };
+
+  const handleGeneratePaymentLink = async () => {
+    if (!paymentLinkClient) return;
+    setIsGeneratingLink(true);
+    try {
+      // Save agreed rate first if changed
+      const ratePence = Math.round(parseFloat(agreedRatePounds) * 100);
+      if (ratePence > 0) {
+        await fetch(`/api/clients/${paymentLinkClient.id}/agreed-rate`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ agreedRatePence: ratePence }),
+        });
+      }
+      // Create checkout session
+      const res = await fetch("/api/stripe/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ clientId: paymentLinkClient.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to generate link");
+      setGeneratedPaymentUrl(data.url);
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      toast({ title: "Payment link created", description: "Copy the link and send it to the client." });
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message || "Failed to create payment link", variant: "destructive" });
+    } finally {
+      setIsGeneratingLink(false);
+    }
+  };
+
+  const handleOpenCharge = (client: ClientType) => {
+    setChargeClient(client);
+    const assignedClinician = clinicians.find(c => c.id === client.assignedClinicianId);
+    setChargeAmountPounds(
+      client.agreedRatePence
+        ? String((client.agreedRatePence / 100).toFixed(2))
+        : assignedClinician?.sessionRatePence
+        ? String((assignedClinician.sessionRatePence / 100).toFixed(2))
+        : ""
+    );
+    setChargeNotes("");
+    setIsChargeOpen(true);
+  };
+
+  const chargeMutation = useMutation({
+    mutationFn: async ({ clientId, amountPence, notes }: { clientId: string; amountPence: number; notes: string }) => {
+      const res = await apiRequest("POST", "/api/stripe/charge", { clientId, amountPence, notes });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Charge failed");
+      return data;
+    },
+    onSuccess: () => {
+      toast({ title: "Session charged", description: "The payment has been processed." });
+      setIsChargeOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+    },
+    onError: (err: any) => {
+      toast({ title: "Payment failed", description: err.message || "Failed to charge session", variant: "destructive" });
+    },
+  });
+
+  const handleOpenHistory = async (client: ClientType) => {
+    setHistoryClient(client);
+    setIsHistoryOpen(true);
+    setLoadingCharges(true);
+    try {
+      const res = await apiRequest("GET", `/api/stripe/charges/${client.id}`);
+      const data = await res.json();
+      setCharges(data);
+    } catch {
+      setCharges([]);
+    } finally {
+      setLoadingCharges(false);
+    }
+  };
+
+  const paymentStatusBadge = (client: ClientType) => {
+    if (!paymentsEnabled || !stripeEnabled) return null;
+    if ((client as any).hasFailedPayment) {
+      const reason = (client as any).latestFailureReason;
+      return (
+        <div className="flex flex-col gap-0.5">
+          <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-red-100 text-red-700 px-1.5 py-0.5 rounded" data-testid={`badge-payment-failed-${client.id}`}>
+            <AlertCircle className="h-2.5 w-2.5" /> Payment Failed
+          </span>
+          {reason && (
+            <span className="text-[10px] text-red-600 italic leading-tight" data-testid={`text-payment-failure-reason-${client.id}`}>
+              {reason}
+            </span>
+          )}
+        </div>
+      );
+    }
+    const ps = client.paymentStatus;
+    if (ps === "active") return (
+      <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-green-100 text-green-700 px-1.5 py-0.5 rounded">
+        <CreditCard className="h-2.5 w-2.5" /> Card saved
+      </span>
+    );
+    if (ps === "setup_pending") return (
+      <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">
+        <CreditCard className="h-2.5 w-2.5" /> Awaiting payment
+      </span>
+    );
+    return null;
   };
 
   // Unified filtering based on toggle states and search term
@@ -1104,10 +1270,15 @@ export default function Clients() {
                     {client.notes && (
                       <p className="text-[10px] text-muted-foreground mt-1 italic line-clamp-2" data-testid={`notes-${client.id}`}>"{client.notes}"</p>
                     )}
+                    {paymentStatusBadge(client) && (
+                      <div className="mt-1">{paymentStatusBadge(client)}</div>
+                    )}
                     <div className="flex flex-col gap-1 mt-2">
-                      <Button size="sm" variant="outline" className="w-full gap-1 text-xs" onClick={() => handleOpenSendForms(client)}>
-                        <Mail className="h-3 w-3" /> Send Forms
-                      </Button>
+                      {formsEnabled && (
+                        <Button size="sm" variant="outline" className="w-full gap-1 text-xs" onClick={() => handleOpenSendForms(client)}>
+                          <Mail className="h-3 w-3" /> Send Forms
+                        </Button>
+                      )}
                       <Button size="sm" variant="outline" className="w-full gap-1 text-xs" onClick={() => handleOpenPhoneFill(client)}>
                         <Phone className="h-3 w-3" /> Fill by Phone
                       </Button>
@@ -1143,12 +1314,16 @@ export default function Clients() {
                           <DropdownMenuItem onClick={() => handleOpenEditClient(client)}>
                             <Edit className="h-4 w-4 mr-2" /> Edit Details
                           </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => handleOpenSendForms(client)}>
-                            <Mail className="h-4 w-4 mr-2" /> Resend Forms
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => handleOpenPhoneFill(client)}>
-                            <Phone className="h-4 w-4 mr-2" /> Fill by Phone
-                          </DropdownMenuItem>
+                          {formsEnabled && (
+                            <DropdownMenuItem onClick={() => handleOpenSendForms(client)}>
+                              <Mail className="h-4 w-4 mr-2" /> Resend Forms
+                            </DropdownMenuItem>
+                          )}
+                          {formsEnabled && (
+                            <DropdownMenuItem onClick={() => handleOpenPhoneFill(client)}>
+                              <Phone className="h-4 w-4 mr-2" /> Fill by Phone
+                            </DropdownMenuItem>
+                          )}
                           <DropdownMenuItem onClick={() => handleOpenManualAllocate(client)}>
                             <CalendarCheck className="h-4 w-4 mr-2" /> Allocate to Clinician
                           </DropdownMenuItem>
@@ -1168,6 +1343,9 @@ export default function Clients() {
                     )}
                     {client.notes && (
                       <p className="text-[10px] text-muted-foreground mt-1 italic line-clamp-2" data-testid={`notes-${client.id}`}>"{client.notes}"</p>
+                    )}
+                    {paymentStatusBadge(client) && (
+                      <div className="mt-1">{paymentStatusBadge(client)}</div>
                     )}
                     <p className="text-[10px] text-amber-600 mt-2 flex items-center gap-1">
                       <Mail className="h-3 w-3" /> Awaiting response
@@ -1225,6 +1403,9 @@ export default function Clients() {
                     )}
                     {client.notes && (
                       <p className="text-[10px] text-muted-foreground mt-1 italic line-clamp-2" data-testid={`notes-${client.id}`}>"{client.notes}"</p>
+                    )}
+                    {paymentStatusBadge(client) && (
+                      <div className="mt-1">{paymentStatusBadge(client)}</div>
                     )}
                     <Button size="sm" className="w-full gap-1 text-xs mt-2 bg-primary hover:bg-primary/90" onClick={() => { setSelectedClient(client); setIsManualAllocation(false); fetchClientAvailability(client.id); setIsAllocateDialogOpen(true); }}>
                       <UserCheck className="h-3 w-3" /> Allocate
@@ -1294,6 +1475,9 @@ export default function Clients() {
                         "{(client as any).allocationReason}"
                       </p>
                     )}
+                    {paymentStatusBadge(client) && (
+                      <div className="mt-1">{paymentStatusBadge(client)}</div>
+                    )}
                     <Button 
                       size="sm" 
                       variant="outline" 
@@ -1346,6 +1530,19 @@ export default function Clients() {
                           <DropdownMenuItem onClick={() => handleOpenViewResponses(client)}>
                             <Eye className="h-4 w-4 mr-2" /> View Responses
                           </DropdownMenuItem>
+                          {paymentsEnabled && stripeEnabled && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem onClick={() => handleOpenPaymentLink(client)}>
+                                <CreditCard className="h-4 w-4 mr-2" /> Generate Payment Link
+                              </DropdownMenuItem>
+                              {client.paymentStatus === "active" && (
+                                <DropdownMenuItem onClick={() => handleOpenHistory(client)}>
+                                  <History className="h-4 w-4 mr-2" /> Payment History
+                                </DropdownMenuItem>
+                              )}
+                            </>
+                          )}
                           <DropdownMenuSeparator />
                           <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>
                             Archive/Didn't Engage
@@ -1368,6 +1565,9 @@ export default function Clients() {
                     )}
                     {client.notes && (
                       <p className="text-[10px] text-muted-foreground mt-1 italic line-clamp-2" data-testid={`notes-${client.id}`}>"{client.notes}"</p>
+                    )}
+                    {paymentStatusBadge(client) && (
+                      <div className="mt-1">{paymentStatusBadge(client)}</div>
                     )}
                     <Button 
                       size="sm" 
@@ -1436,6 +1636,25 @@ export default function Clients() {
                         <DropdownMenuItem onClick={() => handleOpenViewResponses(client)}>
                           <Eye className="h-4 w-4 mr-2" /> View Responses
                         </DropdownMenuItem>
+                        {paymentsEnabled && stripeEnabled && !client.isArchived && (
+                          <>
+                            <DropdownMenuSeparator />
+                            {client.paymentStatus === "active" ? (
+                              <>
+                                <DropdownMenuItem onClick={() => handleOpenCharge(client)}>
+                                  <CreditCard className="h-4 w-4 mr-2" /> Charge Session
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => handleOpenHistory(client)}>
+                                  <History className="h-4 w-4 mr-2" /> Payment History
+                                </DropdownMenuItem>
+                              </>
+                            ) : (
+                              <DropdownMenuItem onClick={() => handleOpenPaymentLink(client)}>
+                                <CreditCard className="h-4 w-4 mr-2" /> Generate Payment Link
+                              </DropdownMenuItem>
+                            )}
+                          </>
+                        )}
                         <DropdownMenuSeparator />
                         {client.isArchived ? (
                           <>
@@ -1455,6 +1674,9 @@ export default function Clients() {
                     </DropdownMenu>
                   </div>
                 </div>
+                {paymentStatusBadge(client) && (
+                  <div className="mt-2">{paymentStatusBadge(client)}</div>
+                )}
                 {showArchivedState && ((client as any).archiveCategory || (client as any).archiveReason) && (
                   <div className="mt-2 p-2 bg-slate-50 rounded border border-slate-200">
                     {(client as any).archiveCategory && (
@@ -1799,6 +2021,18 @@ export default function Clients() {
               Update client information. Changes will be saved immediately.
             </DialogDescription>
           </DialogHeader>
+          {editingClient && (editingClient as any).hasFailedPayment && (
+            <div className="flex flex-col gap-0.5 px-1 -mt-1" data-testid={`detail-payment-failed-${editingClient.id}`}>
+              <span className="inline-flex items-center gap-1 text-[11px] font-medium bg-red-100 text-red-700 px-2 py-1 rounded w-fit">
+                <AlertCircle className="h-3 w-3" /> Payment Failed
+              </span>
+              {(editingClient as any).latestFailureReason && (
+                <span className="text-[11px] text-red-600 italic leading-tight" data-testid={`detail-payment-failure-reason-${editingClient.id}`}>
+                  {(editingClient as any).latestFailureReason}
+                </span>
+              )}
+            </div>
+          )}
           <div className="grid gap-4 py-4">
             <div className="grid grid-cols-2 gap-4">
               <div className="grid gap-2">
@@ -2171,47 +2405,49 @@ export default function Clients() {
               </p>
             </div>
 
-            <div className="grid gap-2">
-              <Label>Category</Label>
-              {!isAddingCategory ? (
-                <>
-                  <Select value={archiveCategory} onValueChange={(val) => { if (val === "__add_new__") { setIsAddingCategory(true); } else { setArchiveCategory(val); } }}>
-                    <SelectTrigger data-testid="select-archive-category">
-                      <SelectValue placeholder="Select a category (optional)" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none__">No category</SelectItem>
-                      {nonEngagementCategories.map(cat => (
-                        <SelectItem key={cat.id} value={cat.name}>{cat.name}</SelectItem>
-                      ))}
-                      <SelectItem value="__add_new__" className="text-primary font-medium">+ Add new category</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </>
-              ) : (
-                <div className="flex gap-2">
-                  <Input
-                    placeholder="New category name"
-                    value={newCategoryName}
-                    onChange={(e) => setNewCategoryName(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter" && newCategoryName.trim()) addCategoryMutation.mutate(newCategoryName.trim()); if (e.key === "Escape") { setIsAddingCategory(false); setNewCategoryName(""); } }}
-                    autoFocus
-                    data-testid="input-new-archive-category"
-                  />
-                  <Button
-                    size="sm"
-                    onClick={() => newCategoryName.trim() && addCategoryMutation.mutate(newCategoryName.trim())}
-                    disabled={!newCategoryName.trim() || addCategoryMutation.isPending}
-                    data-testid="btn-save-new-category"
-                  >
-                    Add
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => { setIsAddingCategory(false); setNewCategoryName(""); }}>
-                    Cancel
-                  </Button>
-                </div>
-              )}
-            </div>
+            {nonEngagementEnabled && (
+              <div className="grid gap-2">
+                <Label>Category</Label>
+                {!isAddingCategory ? (
+                  <>
+                    <Select value={archiveCategory} onValueChange={(val) => { if (val === "__add_new__") { setIsAddingCategory(true); } else { setArchiveCategory(val); } }}>
+                      <SelectTrigger data-testid="select-archive-category">
+                        <SelectValue placeholder="Select a category (optional)" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">No category</SelectItem>
+                        {nonEngagementCategories.map(cat => (
+                          <SelectItem key={cat.id} value={cat.name}>{cat.name}</SelectItem>
+                        ))}
+                        <SelectItem value="__add_new__" className="text-primary font-medium">+ Add new category</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </>
+                ) : (
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="New category name"
+                      value={newCategoryName}
+                      onChange={(e) => setNewCategoryName(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter" && newCategoryName.trim()) addCategoryMutation.mutate(newCategoryName.trim()); if (e.key === "Escape") { setIsAddingCategory(false); setNewCategoryName(""); } }}
+                      autoFocus
+                      data-testid="input-new-archive-category"
+                    />
+                    <Button
+                      size="sm"
+                      onClick={() => newCategoryName.trim() && addCategoryMutation.mutate(newCategoryName.trim())}
+                      disabled={!newCategoryName.trim() || addCategoryMutation.isPending}
+                      data-testid="btn-save-new-category"
+                    >
+                      Add
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => { setIsAddingCategory(false); setNewCategoryName(""); }}>
+                      Cancel
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="grid gap-2">
               <Label htmlFor="archive-reason">Reason / Notes</Label>
@@ -2395,6 +2631,205 @@ export default function Clients() {
             <Button variant="outline" onClick={() => setIsViewResponsesOpen(false)}>
               Close
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ===== PAYMENT LINK DIALOG ===== */}
+      <Dialog open={isPaymentLinkOpen} onOpenChange={setIsPaymentLinkOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CreditCard className="h-5 w-5" /> Generate Payment Link
+            </DialogTitle>
+            <DialogDescription>
+              Set an agreed rate and create a Stripe Checkout link for {paymentLinkClient?.displayId}. The client pays the first session and their card is saved for future charges.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Agreed Session Rate (£)</label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">£</span>
+                <input
+                  data-testid="input-agreed-rate"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="e.g. 150.00"
+                  value={agreedRatePounds}
+                  onChange={e => setAgreedRatePounds(e.target.value)}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-8 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              </div>
+            </div>
+
+            {generatedPaymentUrl ? (
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-green-700 flex items-center gap-1">
+                  <CheckCircle2 className="h-4 w-4" /> Payment link ready
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    readOnly
+                    value={generatedPaymentUrl}
+                    className="flex h-9 w-full rounded-md border border-input bg-muted px-3 py-1 text-xs font-mono"
+                    onClick={e => (e.target as HTMLInputElement).select()}
+                  />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      navigator.clipboard.writeText(generatedPaymentUrl);
+                      toast({ title: "Copied", description: "Payment link copied to clipboard." });
+                    }}
+                  >
+                    Copy
+                  </Button>
+                </div>
+                <a
+                  href={generatedPaymentUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                >
+                  <ExternalLink className="h-3 w-3" /> Preview checkout page
+                </a>
+              </div>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsPaymentLinkOpen(false)}>Close</Button>
+            <Button
+              data-testid="button-generate-payment-link"
+              onClick={handleGeneratePaymentLink}
+              disabled={isGeneratingLink || !agreedRatePounds || parseFloat(agreedRatePounds) <= 0}
+            >
+              {isGeneratingLink ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <CreditCard className="h-4 w-4 mr-2" />}
+              {generatedPaymentUrl ? "Regenerate Link" : "Generate Link"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ===== CHARGE SESSION DIALOG ===== */}
+      <Dialog open={isChargeOpen} onOpenChange={setIsChargeOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CreditCard className="h-5 w-5" /> Charge Session
+            </DialogTitle>
+            <DialogDescription>
+              Charge {chargeClient?.displayId}'s saved card for a session.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Amount (£)</label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">£</span>
+                <input
+                  data-testid="input-charge-amount"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="e.g. 150.00"
+                  value={chargeAmountPounds}
+                  onChange={e => setChargeAmountPounds(e.target.value)}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-8 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Notes <span className="text-muted-foreground font-normal">(optional)</span></label>
+              <textarea
+                data-testid="input-charge-notes"
+                placeholder="e.g. Session 4 – 14 Jan"
+                value={chargeNotes}
+                onChange={e => setChargeNotes(e.target.value)}
+                rows={2}
+                className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-none"
+              />
+            </div>
+            <div className="flex items-center gap-2 p-2.5 bg-amber-50 border border-amber-200 rounded-md text-xs text-amber-800">
+              <AlertCircle className="h-4 w-4 flex-shrink-0" />
+              This will immediately charge the client's saved card. Make sure the amount is correct before proceeding.
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsChargeOpen(false)}>Cancel</Button>
+            <Button
+              data-testid="button-confirm-charge"
+              onClick={() => {
+                if (!chargeClient) return;
+                const amountPence = Math.round(parseFloat(chargeAmountPounds) * 100);
+                chargeMutation.mutate({ clientId: chargeClient.id, amountPence, notes: chargeNotes });
+              }}
+              disabled={chargeMutation.isPending || !chargeAmountPounds || parseFloat(chargeAmountPounds) <= 0}
+            >
+              {chargeMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <CreditCard className="h-4 w-4 mr-2" />}
+              Charge £{chargeAmountPounds || "0"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ===== PAYMENT HISTORY DIALOG ===== */}
+      <Dialog open={isHistoryOpen} onOpenChange={setIsHistoryOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <History className="h-5 w-5" /> Payment History
+            </DialogTitle>
+            <DialogDescription>
+              All session charges for {historyClient?.displayId}.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-2">
+            {loadingCharges ? (
+              <div className="flex justify-center py-6">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : charges.length === 0 ? (
+              <p className="text-center text-sm text-muted-foreground py-6">No payment charges recorded yet.</p>
+            ) : (
+              <div className="space-y-2 max-h-80 overflow-y-auto">
+                {charges.map((charge: any) => (
+                  <div key={charge.id} className="p-3 bg-muted/40 rounded-lg">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <p className="text-sm font-medium">£{(charge.amountPence / 100).toFixed(2)}</p>
+                        {charge.notes && <p className="text-xs text-muted-foreground mt-0.5">{charge.notes}</p>}
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {new Date(charge.chargedAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                        </p>
+                      </div>
+                      <span className={`text-xs font-medium px-2 py-0.5 rounded ${
+                        charge.status === "succeeded" ? "bg-green-100 text-green-700" :
+                        charge.status === "failed" ? "bg-red-100 text-red-700" :
+                        "bg-amber-100 text-amber-700"
+                      }`}>
+                        {charge.status}
+                      </span>
+                    </div>
+                    {charge.status === "failed" && charge.failureReason && (
+                      <div className="mt-2 flex items-start gap-1.5 text-xs text-red-700 bg-red-50 border border-red-100 rounded px-2 py-1.5">
+                        <AlertCircle className="h-3 w-3 mt-0.5 flex-shrink-0" />
+                        <span>{charge.failureReason}</span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsHistoryOpen(false)}>Close</Button>
+            {historyClient && historyClient.paymentStatus === "active" && (
+              <Button onClick={() => { setIsHistoryOpen(false); handleOpenCharge(historyClient); }}>
+                <CreditCard className="h-4 w-4 mr-2" /> Charge New Session
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

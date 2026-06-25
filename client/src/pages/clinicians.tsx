@@ -11,7 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { MapPin, Building, Users, Shield, Edit, Briefcase, Lock, Mail, MessageSquare, Phone, Trash2, UserX, Plus } from "lucide-react";
+import { MapPin, Building, Users, Shield, Edit, Briefcase, Lock, Mail, MessageSquare, Phone, Trash2, UserX, Plus, PoundSterling } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { Clinician, TimeSlot } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
@@ -214,6 +214,7 @@ export default function Clinicians() {
     if (editedClinician.contactMethods !== undefined) updates.contactMethods = editedClinician.contactMethods;
     if (editedClinician.isActive !== undefined) updates.isActive = editedClinician.isActive;
     if (editedClinician.email !== undefined) updates.email = editedClinician.email;
+    if (editedClinician.sessionRatePence !== undefined) updates.sessionRatePence = editedClinician.sessionRatePence;
     
     updateClinicianMutation.mutate({
       id: selectedClinician.id,
@@ -346,6 +347,16 @@ export default function Clinicians() {
                     </div>
                   </div>
                 </div>
+
+                {clinician.sessionRatePence != null && (
+                  <div className="flex items-start gap-3 text-sm" data-testid={`text-session-rate-${clinician.id}`}>
+                    <PoundSterling className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />
+                    <div>
+                      <span className="font-medium block text-slate-700">Session Rate</span>
+                      <span className="text-slate-500">£{(clinician.sessionRatePence / 100).toFixed(2)} / session</span>
+                    </div>
+                  </div>
+                )}
               </div>
             </CardContent>
 
@@ -543,23 +554,51 @@ export default function Clinicians() {
                     Stop allocating after this many new clients.
                   </p>
                 </div>
-                <div className="space-y-3 border p-3 rounded-md flex flex-col justify-center">
-                  <div className="flex items-center space-x-2">
-                    <Checkbox 
-                      id="couples" 
-                      checked={editedClinician.worksWithCouples || false}
-                      onCheckedChange={(checked) => setEditedClinician({...editedClinician, worksWithCouples: !!checked})}
-                    />
-                    <Label htmlFor="couples" className="font-medium cursor-pointer">Works with Couples</Label>
+                <div className="space-y-2 border p-3 rounded-md">
+                  <div className="flex items-center justify-between mb-2">
+                    <Label>Session Rate</Label>
+                    <span className="text-xs text-muted-foreground">£ / session</span>
                   </div>
-                  <div className="flex items-center space-x-2">
-                    <Checkbox 
-                      id="bupa" 
-                      checked={editedClinician.allocateForBupa || false}
-                      onCheckedChange={(checked) => setEditedClinician({...editedClinician, allocateForBupa: !!checked})}
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">£</span>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="e.g. 150"
+                      className="pl-7"
+                      value={editedClinician.sessionRatePence != null
+                        ? (editedClinician.sessionRatePence / 100).toFixed(2)
+                        : selectedClinician.sessionRatePence != null
+                        ? (selectedClinician.sessionRatePence / 100).toFixed(2)
+                        : ""}
+                      onChange={(e) => setEditedClinician({
+                        ...editedClinician,
+                        sessionRatePence: e.target.value ? Math.round(parseFloat(e.target.value) * 100) : null
+                      })}
                     />
-                    <Label htmlFor="bupa" className="font-medium cursor-pointer">Allocate for Bupa</Label>
                   </div>
+                  <p className="text-[10px] text-muted-foreground pt-1">
+                    Default rate copied to clients when allocated.
+                  </p>
+                </div>
+              </div>
+              <div className="space-y-3 border p-3 rounded-md">
+                <div className="flex items-center space-x-2">
+                  <Checkbox 
+                    id="couples" 
+                    checked={editedClinician.worksWithCouples || false}
+                    onCheckedChange={(checked) => setEditedClinician({...editedClinician, worksWithCouples: !!checked})}
+                  />
+                  <Label htmlFor="couples" className="font-medium cursor-pointer">Works with Couples</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Checkbox 
+                    id="bupa" 
+                    checked={editedClinician.allocateForBupa || false}
+                    onCheckedChange={(checked) => setEditedClinician({...editedClinician, allocateForBupa: !!checked})}
+                  />
+                  <Label htmlFor="bupa" className="font-medium cursor-pointer">Allocate for Bupa</Label>
                 </div>
               </div>
 

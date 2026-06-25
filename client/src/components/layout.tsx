@@ -153,11 +153,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const navigation = user?.role === "clinician" ? clinicianNavigation : adminNavigation;
 
   const SidebarContent = () => (
-    <div className="flex flex-col h-full bg-sidebar text-sidebar-foreground border-r border-sidebar-border">
-      <div className="p-6 flex flex-col gap-4">
-        <div className="w-full flex flex-col items-center py-2 gap-1">
+    <div className="flex flex-col h-full bg-sidebar text-sidebar-foreground border-r border-sidebar-border overflow-hidden">
+      <div className="px-4 pt-4 pb-2 flex-shrink-0">
+        <div className="w-full flex flex-col items-center gap-1">
              {tenant?.logoUrl ? (
-               <img src={tenant.logoUrl} alt={tenant.name || "Practice"} className="max-h-[80px] max-w-[160px] w-auto object-contain" />
+               <img src={tenant.logoUrl} alt={tenant.name || "Practice"} className="max-h-[64px] max-w-[148px] w-auto object-contain" />
              ) : (
                <span className="text-base font-semibold text-sidebar-foreground text-center leading-tight">
                  {tenant?.name || "Practice Portal"}
@@ -169,7 +169,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         </div>
       </div>
 
-      <div className="px-3 py-2">
+      <div className="px-3 py-2 flex-shrink-0">
         {user?.role === "admin" && (
             <div className="relative">
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-sidebar-foreground/50" />
@@ -181,7 +181,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         )}
       </div>
 
-      <nav className="flex-1 px-3 py-4 space-y-1">
+      <nav className="flex-1 overflow-y-auto px-3 py-2 space-y-1">
         {navigation.map((item) => {
           const isActive = location === item.href;
           return (

@@ -15,7 +15,7 @@ import { forceReseedDatabase } from "./seed";
 import { requireTenant } from './middleware/tenant';
 import { db } from "./db";
 import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs } from "@shared/schema";
-import { isNull, eq } from "drizzle-orm";
+import { isNull, isNotNull, eq, and } from "drizzle-orm";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -87,6 +87,30 @@ export async function registerRoutes(
         }
       }
       counts["stuckLegacyAssignmentsFixed"] = stuckFixed;
+
+      // Release ghost bookings: clients where the slot is still marked booked but
+      // the client has moved backward out of an allocation status (e.g. back to
+      // Forms Completed). assignedSlotId is set but status is no longer allocated.
+      const ACTIVE_ALLOCATION = ["Assigned", "AwaitingConfirmation", "Scheduled"];
+      const ghostClients = await db.select().from(clients)
+        .where(and(isNotNull(clients.assignedSlotId), isNotNull(clients.tenantId)));
+      let ghostsReleased = 0;
+      for (const c of ghostClients) {
+        if (!ACTIVE_ALLOCATION.includes(c.status || "")) {
+          // Client is no longer in allocation — release the slot and clear fields
+          if (c.assignedSlotId) {
+            await db.update(timeSlots).set({ isBooked: false, bookedBy: null })
+              .where(eq(timeSlots.id, c.assignedSlotId));
+          }
+          await db.update(clients).set({
+            assignedSlotId: null,
+            assignedSlot: null,
+            assignedClinicianId: null,
+          }).where(eq(clients.id, c.id));
+          ghostsReleased++;
+        }
+      }
+      counts["ghostBookingsReleased"] = ghostsReleased;
 
       // Deduplicate recurring slots: for each clinician+day+startTime with multiple
       // unbooked copies, keep the oldest and delete the rest

@@ -88,13 +88,26 @@ export async function registerRoutes(
         { name: "emailTemplates", table: emailTemplates },
         { name: "nonEngagementCategories", table: nonEngagementCategories },
         { name: "customInsurers", table: customInsurers },
-        { name: "auditLogs", table: auditLogs },
       ];
       const counts: Record<string, number> = {};
       for (const { name, table } of tables) {
         const updated = await (db.update(table) as any).set({ tenantId: tenant.id }).where(isNull((table as any).tenantId)).returning();
         counts[name] = updated.length;
       }
+
+      // Audit log backfill: stamp null-tenantId logs whose userId belongs to THIS tenant's users.
+      // Scoped by userId to avoid incorrectly stamping another tenant's orphaned logs.
+      const tenantUserIds = await db.select({ id: users.id }).from(users).where(eq(users.tenantId, req.tenant!.id));
+      const userIdList = tenantUserIds.map(u => u.id);
+      let auditLogsFixed = 0;
+      if (userIdList.length > 0) {
+        const updatedLogs = await db.update(auditLogs)
+          .set({ tenantId: req.tenant!.id })
+          .where(and(isNull(auditLogs.tenantId), inArray(auditLogs.userId, userIdList)))
+          .returning();
+        auditLogsFixed = updatedLogs.length;
+      }
+      counts["auditLogsBackfilled"] = auditLogsFixed;
       // Fix stuck legacy assignments: clear assignedSlot/assignedClinicianId for any client
       // where assignedSlotId is null but text fields remain. This covers:
       //   - Confirmed (Scheduled) clients: slot was deleted on confirm but text fields not cleared

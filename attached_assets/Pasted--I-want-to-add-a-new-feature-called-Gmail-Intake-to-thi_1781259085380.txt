@@ -1,0 +1,20 @@
+"I want to add a new feature called 'Gmail Intake' to this multi-tenant practice management app. This feature must be completely opt-in per tenant and must not affect any tenant where it's disabled.
+1. Schema changes (shared/schema.ts):
+
+Add a new boolean column gmailIntakeEnabled to the tenants table, default false.
+Add a new table intakeMessages with these fields: id (uuid pk), tenantId (fk to tenants, not null), channel (text enum: 'email', 'whatsapp', 'phone'), threadId (text, nullable — for matching email reply chains), fromAddress (text), subject (text), body (text), extractedName (text, nullable), extractedPhone (text, nullable), status (text enum: 'new', 'linked', 'ignored', default 'new'), linkedClientId (fk to clients, nullable), receivedAt (timestamp, default now).
+
+2. Purpose of the feature:
+This will eventually receive incoming emails via a Gmail API webhook (Google Pub/Sub push notifications) addressed to a practice's intake inbox. Each incoming email creates a row in intakeMessages. Replies to existing threads (matched via Gmail's threadId) update the existing row rather than creating duplicates. An admin can review these in a new 'Intake Inbox' UI page and convert them into proper clients records.
+3. For now, build the foundational pieces only:
+
+The schema changes above
+A new backend route /api/intake-messages (GET, admin-only, filtered by tenant) that returns all intake messages for the logged-in admin's tenant
+A new backend route /api/intake-messages/:id/convert-to-client (POST, admin-only) that creates a new clients record from an intake message's extracted data and marks the intake message as 'linked'
+A new sidebar navigation item 'Intake Inbox' that only appears if the logged-in admin's tenant has gmailIntakeEnabled = true
+A new page at this route showing a simple table of intake messages with a 'Convert to Client' button on each row
+
+4. Critical constraint:
+Do not modify any existing routes, tables, or UI components except to add the new sidebar navigation item. The new table, routes, and page should be entirely additive. If gmailIntakeEnabled is false or absent for a tenant, the Intake Inbox should not appear in their navigation at all and the API routes should return an empty array or 403 for that tenant.
+5. Testing:
+After building this, set gmailIntakeEnabled = true for one test tenant and false for another, and manually insert 1-2 rows into intakeMessages for the enabled tenant via SQL so the UI can be tested. Confirm the disabled tenant sees no Intake Inbox and the enabled tenant does."

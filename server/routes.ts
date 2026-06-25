@@ -1,6 +1,9 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import crypto from "crypto";
+import path from "path";
+import fs from "fs";
+import multer from "multer";
 import ExcelJS from "exceljs";
 import { storage } from "./storage";
 import { setupAuth, requireAuth, requireAdmin, requireClinician, hashPassword, auditLog } from "./auth";
@@ -10,12 +13,18 @@ import {
   insertFormTemplateSchema, insertTaskSchema, insertUserSchema 
 } from "@shared/schema";
 import { z } from "zod";
-import { sendEmail, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateNewReferralEmail, generateWaitlistUpdateEmail } from "./email";
+import { sendEmail, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail } from "./email";
 import { forceReseedDatabase } from "./seed";
+import { seedDemoData } from "./seedDemo";
+import { parseIntakeEmailBody } from "./intakeParser";
 import { requireTenant } from './middleware/tenant';
+import { requireSuperAdmin } from './middleware/superAdmin';
 import { db } from "./db";
-import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs } from "@shared/schema";
-import { isNull, isNotNull, eq, and } from "drizzle-orm";
+import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs, intakeMessages, gmailConnections, paymentCharges } from "@shared/schema";
+import { isStripeConfigured, getStripeInstance, createCheckoutSession, chargeOffSession, constructWebhookEvent } from "./stripe";
+import { encryptSecret, decryptSecret, isEncryptionConfigured } from "./encryption";
+import { getAuthUrl, exchangeCodeForTokens, syncConnection, buildRedirectUri } from "./gmailSync";
+import { isNull, eq, and, inArray } from "drizzle-orm";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -39,6 +48,18 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Force reseed failed:", error);
       res.status(500).json({ error: "Failed to reseed database" });
+    }
+  });
+
+  // Admin endpoint to seed rich demo data (clients, tasks, slots, submissions)
+  app.post("/api/admin/seed-demo", requireAdmin, async (req, res) => {
+    try {
+      console.log("=== ADMIN TRIGGERED DEMO SEED ===");
+      await seedDemoData();
+      res.json({ success: true, message: "Demo data seeded successfully" });
+    } catch (error) {
+      console.error("Demo seed failed:", error);
+      res.status(500).json({ error: "Failed to seed demo data" });
     }
   });
 
@@ -87,30 +108,6 @@ export async function registerRoutes(
         }
       }
       counts["stuckLegacyAssignmentsFixed"] = stuckFixed;
-
-      // Release ghost bookings: clients where the slot is still marked booked but
-      // the client has moved backward out of an allocation status (e.g. back to
-      // Forms Completed). assignedSlotId is set but status is no longer allocated.
-      const ACTIVE_ALLOCATION = ["Assigned", "AwaitingConfirmation", "Scheduled"];
-      const ghostClients = await db.select().from(clients)
-        .where(and(isNotNull(clients.assignedSlotId), isNotNull(clients.tenantId)));
-      let ghostsReleased = 0;
-      for (const c of ghostClients) {
-        if (!ACTIVE_ALLOCATION.includes(c.status || "")) {
-          // Client is no longer in allocation — release the slot and clear fields
-          if (c.assignedSlotId) {
-            await db.update(timeSlots).set({ isBooked: false, bookedBy: null })
-              .where(eq(timeSlots.id, c.assignedSlotId));
-          }
-          await db.update(clients).set({
-            assignedSlotId: null,
-            assignedSlot: null,
-            assignedClinicianId: null,
-          }).where(eq(clients.id, c.id));
-          ghostsReleased++;
-        }
-      }
-      counts["ghostBookingsReleased"] = ghostsReleased;
 
       // Deduplicate recurring slots: for each clinician+day+startTime with multiple
       // unbooked copies, keep the oldest and delete the rest
@@ -864,7 +861,16 @@ export async function registerRoutes(
   app.get("/api/clients", requireAdmin, auditLog("view", "client"), async (req, res) => {
     try {
       const includeArchived = req.query.includeArchived === "true";
-      const clients = await storage.getAllClients(includeArchived, req.tenant?.id);
+      const [clientList, failedPayments] = await Promise.all([
+        storage.getAllClients(includeArchived, req.tenant?.id),
+        storage.getClientsWithFailedPayments(req.tenant?.id),
+      ]);
+      const failedMap = new Map(failedPayments.map(fp => [fp.clientId, fp.failureReason]));
+      const clients = clientList.map(c => ({
+        ...c,
+        hasFailedPayment: failedMap.has(c.id),
+        latestFailureReason: failedMap.get(c.id) ?? null,
+      }));
       res.json(clients);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch clients" });
@@ -1028,6 +1034,62 @@ export async function registerRoutes(
       }
       if (!updated) {
         return res.status(404).json({ error: "Client not found" });
+      }
+
+      // Auto-create Stripe checkout and email payment link when moving to AwaitingConfirmation
+      if (
+        req.body.status === "AwaitingConfirmation" &&
+        oldStatus !== "AwaitingConfirmation" &&
+        isStripeConfigured(req.tenant?.stripeSecretKey) &&
+        !updated.stripeCheckoutUrl // Only if checkout not already created
+      ) {
+        try {
+          // Resolve agreed rate: use client's rate if set, otherwise default from clinician
+          let amountPence = updated.agreedRatePence ?? 0;
+          if (amountPence <= 0 && updated.assignedClinicianId) {
+            const assignedClinician = await storage.getClinicianById(updated.assignedClinicianId);
+            if (assignedClinician?.sessionRatePence && assignedClinician.sessionRatePence > 0) {
+              amountPence = assignedClinician.sessionRatePence;
+              // Persist the defaulted rate on the client record
+              await db.update(clients).set({ agreedRatePence: amountPence, updatedAt: new Date() })
+                .where(eq(clients.id, updated.id));
+            }
+          }
+
+          if (!updated.email) {
+            console.warn(`AwaitingConfirmation: client ${updated.id} has no email — cannot send payment link`);
+          } else if (amountPence <= 0) {
+            console.warn(`AwaitingConfirmation: client ${updated.id} has no agreed rate and no clinician default — checkout skipped`);
+          } else {
+            const appBase = process.env.APP_BASE_URL || `${req.protocol}://${req.get("host")}`;
+            const checkoutResult = await createCheckoutSession({
+              clientId: updated.id,
+              clientEmail: updated.email,
+              clientDisplayId: updated.displayId,
+              amountPence,
+              successUrl: `${appBase}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+              cancelUrl: `${appBase}/payment-cancel`,
+              tenantId: req.tenant?.id,
+              tenantStripeKey: req.tenant?.stripeSecretKey,
+            });
+            if (checkoutResult) {
+              await db.update(clients).set({
+                stripeCustomerId: checkoutResult.customerId,
+                stripeCheckoutUrl: checkoutResult.url,
+                paymentStatus: "setup_pending",
+                updatedAt: new Date(),
+              }).where(eq(clients.id, updated.id));
+
+              // Email the payment link to the client
+              const amountPounds = (amountPence / 100).toFixed(2);
+              const emailOptions = await generatePaymentLinkEmail(checkoutResult.url, amountPounds);
+              await sendEmail({ ...emailOptions, to: updated.email });
+              console.log(`Auto-generated payment link and emailed to client ${updated.id}`);
+            }
+          }
+        } catch (paymentError) {
+          console.error("Failed to auto-create checkout session on AwaitingConfirmation:", paymentError);
+        }
       }
 
       // Send waitlist update notification if status changed
@@ -1969,6 +2031,1068 @@ export async function registerRoutes(
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete category" });
+    }
+  });
+
+  // Backfill: re-parse all existing intake message bodies for this tenant
+  app.post("/api/intake-messages/backfill-parse", requireAdmin, async (req, res) => {
+    try {
+      if (!req.tenant?.gmailIntakeEnabled) {
+        return res.status(403).json({ error: "Gmail Intake is not enabled for this tenant" });
+      }
+      const rows = await db
+        .select()
+        .from(intakeMessages)
+        .where(eq(intakeMessages.tenantId, req.tenant.id));
+
+      let updated = 0;
+      for (const row of rows) {
+        const parsed = parseIntakeEmailBody(row.body);
+        await db
+          .update(intakeMessages)
+          .set({
+            extractedData: parsed.fields,
+            extractedName: parsed.name ?? row.extractedName,
+            extractedPhone: parsed.phone ?? row.extractedPhone,
+          })
+          .where(eq(intakeMessages.id, row.id));
+        updated++;
+      }
+      res.json({ success: true, updated });
+    } catch (error) {
+      res.status(500).json({ error: "Backfill failed" });
+    }
+  });
+
+  // ============ TENANT INFO ============
+  app.get("/api/tenant", requireAuth, async (req, res) => {
+    try {
+      if (!req.tenant) return res.status(403).json({ error: "No tenant" });
+      res.json(req.tenant);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch tenant" });
+    }
+  });
+
+  // Public endpoint — returns only branding fields, no auth required
+  app.get("/api/tenant/branding", async (req, res) => {
+    try {
+      const [tenant] = await db.select({
+        name: tenants.name,
+        logoUrl: tenants.logoUrl,
+        primaryColor: tenants.primaryColor,
+        accentColor: tenants.accentColor,
+      }).from(tenants).limit(1);
+      if (!tenant) return res.status(404).json({ error: "No tenant configured" });
+      res.json(tenant);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch tenant branding" });
+    }
+  });
+
+  // ============ GMAIL CONNECTIONS ============
+
+  // Debug: return what redirect URI would be used (helps confirm Google Cloud setup)
+  app.get("/api/auth/gmail/debug-redirect-uri", requireAdmin, (req, res) => {
+    res.json({ redirectUri: buildRedirectUri(req) });
+  });
+
+  // Debug: return the full OAuth URL without redirecting so it can be inspected
+  app.get("/api/auth/gmail/debug-oauth-url", requireAdmin, (req, res) => {
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+      return res.status(503).json({ error: "Google OAuth not configured" });
+    }
+    const redirectUri = buildRedirectUri(req);
+    const state = Buffer.from(JSON.stringify({ tenantId: req.tenant?.id, userId: (req.user as any)?.id, redirectUri })).toString("base64url");
+    const url = getAuthUrl(state, redirectUri);
+    res.json({ redirectUri, clientId: process.env.GOOGLE_CLIENT_ID, url });
+  });
+
+  // Start OAuth flow — redirect user to Google consent
+  app.get("/api/auth/gmail/connect", requireAdmin, (req, res) => {
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+      return res.status(503).json({ error: "Google OAuth is not configured (missing GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)" });
+    }
+    const redirectUri = buildRedirectUri(req);
+    const state = Buffer.from(JSON.stringify({ tenantId: req.tenant?.id, userId: (req.user as any)?.id, redirectUri })).toString("base64url");
+    const url = getAuthUrl(state, redirectUri);
+    console.log("[gmail oauth] redirect_uri:", redirectUri);
+    console.log("[gmail oauth] full url:", url);
+    res.redirect(url);
+  });
+
+  // OAuth callback — exchange code, store tokens, kick off first sync
+  app.get("/api/auth/gmail/callback", async (req, res) => {
+    const { code, state, error } = req.query as Record<string, string>;
+    if (error || !code || !state) {
+      return res.redirect("/settings?tab=gmail&error=oauth_denied");
+    }
+    try {
+      const { tenantId, redirectUri } = JSON.parse(Buffer.from(state, "base64url").toString());
+      const tokens = await exchangeCodeForTokens(code, redirectUri);
+      if (!tokens.access_token || !tokens.refresh_token) {
+        return res.redirect("/settings?tab=gmail&error=no_tokens");
+      }
+
+      // Fetch the Gmail address for this account
+      const { google: _g } = await import("googleapis");
+      const auth = new (await import("googleapis")).google.auth.OAuth2(
+        process.env.GOOGLE_CLIENT_ID,
+        process.env.GOOGLE_CLIENT_SECRET,
+        redirectUri,
+      );
+      auth.setCredentials(tokens);
+      const gmail = _g.gmail({ version: "v1", auth });
+      const profile = await gmail.users.getProfile({ userId: "me" });
+      const gmailAddress = profile.data.emailAddress!;
+
+      // Upsert connection (same address replaces old tokens)
+      const existing = await db
+        .select()
+        .from(gmailConnections)
+        .where(and(eq(gmailConnections.tenantId, tenantId), eq(gmailConnections.gmailAddress, gmailAddress)));
+
+      let conn: typeof gmailConnections.$inferSelect;
+      if (existing.length > 0) {
+        const [updated] = await db
+          .update(gmailConnections)
+          .set({
+            accessToken: tokens.access_token,
+            refreshToken: tokens.refresh_token,
+            tokenExpiry: tokens.expiry_date ? new Date(tokens.expiry_date) : null,
+            historyId: null,
+            isActive: true,
+          })
+          .where(eq(gmailConnections.id, existing[0].id))
+          .returning();
+        conn = updated;
+      } else {
+        const [inserted] = await db
+          .insert(gmailConnections)
+          .values({
+            tenantId,
+            gmailAddress,
+            accessToken: tokens.access_token,
+            refreshToken: tokens.refresh_token,
+            tokenExpiry: tokens.expiry_date ? new Date(tokens.expiry_date) : null,
+          } as any)
+          .returning();
+        conn = inserted;
+      }
+
+      // Kick off first sync in background
+      syncConnection(conn).catch(() => {});
+
+      res.redirect("/settings?tab=gmail&connected=" + encodeURIComponent(gmailAddress));
+    } catch (err) {
+      console.error("[gmail oauth callback]", err);
+      res.redirect("/settings?tab=gmail&error=oauth_failed");
+    }
+  });
+
+  // List connections for this tenant
+  app.get("/api/gmail-connections", requireAdmin, async (req, res) => {
+    try {
+      const rows = await db
+        .select({
+          id: gmailConnections.id,
+          gmailAddress: gmailConnections.gmailAddress,
+          label: gmailConnections.label,
+          isActive: gmailConnections.isActive,
+          lastSyncAt: gmailConnections.lastSyncAt,
+          createdAt: gmailConnections.createdAt,
+        })
+        .from(gmailConnections)
+        .where(eq(gmailConnections.tenantId, req.tenant!.id));
+      res.json(rows);
+    } catch {
+      res.status(500).json({ error: "Failed to fetch Gmail connections" });
+    }
+  });
+
+  // Update label for a connection
+  app.patch("/api/gmail-connections/:id", requireAdmin, async (req, res) => {
+    try {
+      const { label } = req.body;
+      const [row] = await db
+        .update(gmailConnections)
+        .set({ label })
+        .where(and(eq(gmailConnections.id, req.params.id), eq(gmailConnections.tenantId, req.tenant!.id)))
+        .returning();
+      if (!row) return res.status(404).json({ error: "Connection not found" });
+      res.json(row);
+    } catch {
+      res.status(500).json({ error: "Failed to update connection" });
+    }
+  });
+
+  // Disconnect (delete) a Gmail connection
+  app.delete("/api/gmail-connections/:id", requireAdmin, async (req, res) => {
+    try {
+      const rows = await db
+        .delete(gmailConnections)
+        .where(and(eq(gmailConnections.id, req.params.id), eq(gmailConnections.tenantId, req.tenant!.id)))
+        .returning();
+      if (rows.length === 0) return res.status(404).json({ error: "Connection not found" });
+      res.json({ success: true });
+    } catch {
+      res.status(500).json({ error: "Failed to disconnect" });
+    }
+  });
+
+  // Manual sync trigger for a single connection
+  app.post("/api/gmail-connections/:id/sync", requireAdmin, async (req, res) => {
+    try {
+      const [conn] = await db
+        .select()
+        .from(gmailConnections)
+        .where(and(eq(gmailConnections.id, req.params.id), eq(gmailConnections.tenantId, req.tenant!.id)));
+      if (!conn) return res.status(404).json({ error: "Connection not found" });
+      const count = await syncConnection(conn);
+      res.json({ success: true, newMessages: count });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Sync failed" });
+    }
+  });
+
+  // ============ INTAKE MESSAGES ============
+  app.post("/api/intake-messages", requireAdmin, async (req, res) => {
+    try {
+      if (!req.tenant?.gmailIntakeEnabled) {
+        return res.status(403).json({ error: "Gmail Intake is not enabled for this tenant" });
+      }
+      const { channel, threadId, fromAddress, subject, body } = req.body;
+      if (!channel || !fromAddress || !subject || !body) {
+        return res.status(400).json({ error: "channel, fromAddress, subject and body are required" });
+      }
+      const parsed = parseIntakeEmailBody(body);
+      const [message] = await db.insert(intakeMessages).values({
+        tenantId: req.tenant.id,
+        channel,
+        threadId: threadId ?? null,
+        fromAddress,
+        subject,
+        body,
+        extractedName: parsed.name,
+        extractedPhone: parsed.phone,
+        extractedData: parsed.fields,
+        status: "new",
+      } as any).returning();
+      res.json(message);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create intake message" });
+    }
+  });
+
+  app.get("/api/intake-messages", requireAdmin, async (req, res) => {
+    try {
+      if (!req.tenant?.gmailIntakeEnabled) {
+        return res.json([]);
+      }
+      const messages = await db
+        .select()
+        .from(intakeMessages)
+        .where(eq(intakeMessages.tenantId, req.tenant.id))
+        .orderBy(intakeMessages.receivedAt);
+      res.json(messages);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch intake messages" });
+    }
+  });
+
+  app.post("/api/intake-messages/:id/convert-to-client", requireAdmin, async (req, res) => {
+    try {
+      if (!req.tenant?.gmailIntakeEnabled) {
+        return res.status(403).json({ error: "Gmail Intake is not enabled for this tenant" });
+      }
+      const [message] = await db
+        .select()
+        .from(intakeMessages)
+        .where(and(eq(intakeMessages.id, req.params.id), eq(intakeMessages.tenantId, req.tenant.id)))
+        .limit(1);
+      if (!message) {
+        return res.status(404).json({ error: "Intake message not found" });
+      }
+      if (message.status !== "new") {
+        return res.status(400).json({ error: "Message has already been processed" });
+      }
+      const suffix = Math.random().toString(36).toUpperCase().slice(2, 8);
+      const displayId = `PENDING-${suffix}`;
+      const parsed = message.extractedData as Record<string, string> | null;
+      const clientEmail = (parsed && Object.entries(parsed).find(([k]) => k.toLowerCase().includes("email"))?.[1])
+        || message.fromAddress;
+      const clientPhone = message.extractedPhone
+        || (parsed && Object.entries(parsed).find(([k]) => ["phone","telephone","mobile"].some(p => k.toLowerCase().includes(p)))?.[1])
+        || "";
+      const clientName = message.extractedName
+        || (parsed && Object.entries(parsed).find(([k]) => ["your name","name"].some(p => k.toLowerCase() === p))?.[1])
+        || null;
+      const [newClient] = await db.insert(clients).values({
+        displayId,
+        email: clientEmail,
+        phone: clientPhone,
+        status: "New",
+        tenantId: req.tenant.id,
+        ...(clientName ? { notes: `Converted from intake email. Name extracted: ${clientName}` } : {}),
+      } as any).returning();
+      await db
+        .update(intakeMessages)
+        .set({ status: "linked", linkedClientId: newClient.id })
+        .where(eq(intakeMessages.id, message.id));
+      res.json({ success: true, client: newClient });
+    } catch (error: any) {
+      if (error?.code === "23505") {
+        return res.status(409).json({ error: "A client with this email address already exists" });
+      }
+      res.status(500).json({ error: "Failed to convert intake message to client" });
+    }
+  });
+
+  app.post("/api/intake-messages/:id/ignore", requireAdmin, async (req, res) => {
+    try {
+      if (!req.tenant?.gmailIntakeEnabled) {
+        return res.status(403).json({ error: "Gmail Intake is not enabled for this tenant" });
+      }
+      const [message] = await db
+        .select()
+        .from(intakeMessages)
+        .where(and(eq(intakeMessages.id, req.params.id), eq(intakeMessages.tenantId, req.tenant.id)))
+        .limit(1);
+      if (!message) return res.status(404).json({ error: "Intake message not found" });
+      await db
+        .update(intakeMessages)
+        .set({ status: "ignored" })
+        .where(eq(intakeMessages.id, message.id));
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to ignore intake message" });
+    }
+  });
+
+  app.post("/api/intake-messages/bulk-ignore", requireAdmin, async (req, res) => {
+    try {
+      if (!req.tenant?.gmailIntakeEnabled) {
+        return res.status(403).json({ error: "Gmail Intake is not enabled for this tenant" });
+      }
+      const { ids } = req.body as { ids: string[] };
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ error: "ids must be a non-empty array" });
+      }
+      await db
+        .update(intakeMessages)
+        .set({ status: "ignored" })
+        .where(and(eq(intakeMessages.tenantId, req.tenant.id), inArray(intakeMessages.id, ids)));
+      res.json({ success: true, count: ids.length });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to bulk ignore intake messages" });
+    }
+  });
+
+  // ============ STRIPE / PAYMENTS ============
+
+  // Check if Stripe is configured
+  app.get("/api/stripe/status", requireAuth, async (req, res) => {
+    const tenantKey = req.tenant?.stripeSecretKey;
+    res.json({
+      configured: isStripeConfigured(tenantKey),
+      webhookConfigured: !!req.tenant?.stripeWebhookSecret,
+      encryptionReady: isEncryptionConfigured(),
+    });
+  });
+
+  // Save Stripe keys for tenant (keys are encrypted at rest via STRIPE_ENCRYPTION_KEY)
+  app.post("/api/settings/stripe", requireAdmin, async (req, res) => {
+    try {
+      const { stripeSecretKey, stripeWebhookSecret } = req.body as {
+        stripeSecretKey?: string;
+        stripeWebhookSecret?: string;
+      };
+      if (!req.tenant) return res.status(400).json({ error: "Tenant not found" });
+      if (!isEncryptionConfigured()) {
+        return res.status(503).json({
+          error: "STRIPE_ENCRYPTION_KEY environment variable is not configured. " +
+                 "Set it to a 32-byte base64-encoded value before storing Stripe credentials.",
+        });
+      }
+      const updates: Record<string, string | null> = {};
+      if (stripeSecretKey !== undefined) {
+        updates.stripeSecretKey = stripeSecretKey ? encryptSecret(stripeSecretKey) : null;
+      }
+      if (stripeWebhookSecret !== undefined) {
+        updates.stripeWebhookSecret = stripeWebhookSecret ? encryptSecret(stripeWebhookSecret) : null;
+      }
+
+      // Enforce: a webhook secret must be stored before (or alongside) a secret key
+      const willHaveSecretKey = "stripeSecretKey" in updates
+        ? !!updates.stripeSecretKey
+        : !!req.tenant.stripeSecretKey;
+      const willHaveWebhookSecret = "stripeWebhookSecret" in updates
+        ? !!updates.stripeWebhookSecret
+        : !!req.tenant.stripeWebhookSecret;
+
+      if (willHaveSecretKey && !willHaveWebhookSecret) {
+        return res.status(400).json({
+          error: "A webhook signing secret is required alongside the Stripe secret key. " +
+                 "Create a webhook endpoint in your Stripe Dashboard and paste the signing secret here.",
+        });
+      }
+
+      await db.update(tenants).set(updates).where(eq(tenants.id, req.tenant.id));
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to save Stripe settings" });
+    }
+  });
+
+  // Create a Checkout session for a client (sends payment link to their email)
+  app.post("/api/stripe/checkout", requireAdmin, async (req, res) => {
+    try {
+      if (!isStripeConfigured(req.tenant?.stripeSecretKey)) {
+        return res.status(400).json({ error: "Stripe is not configured" });
+      }
+      const { clientId } = req.body as { clientId: string };
+      if (!clientId) return res.status(400).json({ error: "clientId required" });
+
+      const client = await storage.getClientById(clientId);
+      if (!client) return res.status(404).json({ error: "Client not found" });
+      if (req.tenant?.id && client.tenantId !== req.tenant.id) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      if (!client.email) return res.status(400).json({ error: "Client has no email address" });
+
+      const amountPence = client.agreedRatePence ?? 0;
+      if (amountPence <= 0) {
+        return res.status(400).json({ error: "Client has no agreed rate set. Please set the agreed rate before creating a payment link." });
+      }
+
+      const appBase = process.env.APP_BASE_URL || `${req.protocol}://${req.get("host")}`;
+      const result = await createCheckoutSession({
+        clientId: client.id,
+        clientEmail: client.email,
+        clientDisplayId: client.displayId,
+        amountPence,
+        successUrl: `${appBase}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+        cancelUrl: `${appBase}/payment-cancel`,
+        tenantId: req.tenant?.id,
+        tenantStripeKey: req.tenant?.stripeSecretKey,
+      });
+
+      if (!result) return res.status(500).json({ error: "Failed to create checkout session" });
+
+      // Store customer ID and checkout URL on client; mark as setup_pending
+      await db.update(clients).set({
+        stripeCustomerId: result.customerId,
+        stripeCheckoutUrl: result.url,
+        paymentStatus: "setup_pending",
+        updatedAt: new Date(),
+      }).where(eq(clients.id, clientId));
+
+      res.json({ url: result.url, customerId: result.customerId });
+    } catch (error: any) {
+      console.error("Stripe checkout error:", error?.message);
+      res.status(500).json({ error: error?.message || "Failed to create checkout session" });
+    }
+  });
+
+  // Stripe webhook — called by Stripe to confirm payment & card save
+  // Note: /api/stripe/webhook is exempted from requireTenant middleware (unauthenticated, called by Stripe)
+  app.post("/api/stripe/webhook", async (req, res) => {
+    const sig = req.headers["stripe-signature"] as string;
+    const rawBody = (req as any).rawBody as Buffer;
+
+    if (!sig || !rawBody) {
+      return res.status(400).json({ error: "Missing stripe-signature header or raw body" });
+    }
+
+    // Step 1: Parse raw body to extract tenantId from metadata (before verifying)
+    // This lets us look up the tenant's webhook secret for multi-tenant verification
+    let parsedBody: any;
+    try {
+      parsedBody = JSON.parse(rawBody.toString("utf8"));
+    } catch {
+      return res.status(400).json({ error: "Invalid JSON body" });
+    }
+
+    // Extract tenantId from metadata (we store it there at checkout session creation)
+    const metaTenantId: string | null =
+      parsedBody?.data?.object?.metadata?.tenantId ?? null;
+
+    // Step 2: Look up tenant to get their stored webhook secret and Stripe key
+    // STRIPE_WEBHOOK_SECRET env var is a dev-only escape hatch; it must NOT be used in production.
+    const isDev = process.env.NODE_ENV !== "production";
+    let webhookSecret: string | null = null;
+    let tenantStripeKey: string | null = null;
+
+    if (metaTenantId) {
+      try {
+        const [tenant] = await db.select().from(tenants).where(eq(tenants.id, metaTenantId));
+        if (tenant) {
+          // Decrypt at-rest encrypted credentials before use
+          if (tenant.stripeWebhookSecret) {
+            try {
+              webhookSecret = decryptSecret(tenant.stripeWebhookSecret);
+            } catch (e) {
+              console.error("Webhook: failed to decrypt webhook secret for tenant", metaTenantId, e);
+              return res.status(400).json({ error: "Unable to decrypt webhook secret for this tenant" });
+            }
+          }
+          if (tenant.stripeSecretKey) {
+            try {
+              tenantStripeKey = decryptSecret(tenant.stripeSecretKey);
+            } catch (e) {
+              console.error("Webhook: failed to decrypt Stripe key for tenant", metaTenantId, e);
+              return res.status(400).json({ error: "Unable to decrypt Stripe key for this tenant" });
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Webhook: failed to look up tenant:", e);
+      }
+    }
+
+    // Fall back to env vars only in development to ease local testing
+    if (!webhookSecret) {
+      if (isDev && process.env.STRIPE_WEBHOOK_SECRET) {
+        console.warn(
+          "[DEV ONLY] Using global STRIPE_WEBHOOK_SECRET env var as webhook secret fallback. " +
+          "In production every tenant must have their own webhook secret stored in the database."
+        );
+        webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+      } else {
+        return res.status(400).json({ error: "Webhook secret not configured for this tenant" });
+      }
+    }
+    if (!tenantStripeKey && isDev && process.env.STRIPE_SECRET_KEY) {
+      tenantStripeKey = process.env.STRIPE_SECRET_KEY;
+    }
+
+    // Step 3: Verify signature with the tenant's webhook secret
+    let event: any;
+    try {
+      event = constructWebhookEvent(rawBody, sig, webhookSecret, tenantStripeKey);
+    } catch (err: any) {
+      console.error("Webhook signature verification failed:", err?.message);
+      return res.status(400).json({ error: "Invalid webhook signature" });
+    }
+
+    // Step 4: Process the event
+    try {
+      if (event.type === "checkout.session.completed") {
+        const session = event.data.object as any;
+        const clientId = session.metadata?.clientId;
+        if (!clientId) return res.json({ received: true });
+
+        // Idempotency: skip if we've already processed a succeeded charge for this session
+        const existingCharge = session.payment_intent
+          ? await db.select().from(paymentCharges)
+              .where(eq(paymentCharges.stripePaymentIntentId, session.payment_intent))
+              .then(rows => rows[0])
+          : null;
+
+        if (!existingCharge) {
+          // Get the payment intent to find the payment method
+          const paymentIntentId = session.payment_intent;
+          if (paymentIntentId) {
+            const stripeInstance = getStripeInstance(tenantStripeKey);
+            if (stripeInstance) {
+              const pi = await stripeInstance.paymentIntents.retrieve(paymentIntentId);
+              const paymentMethodId = typeof pi.payment_method === "string" ? pi.payment_method : pi.payment_method?.id;
+
+              if (paymentMethodId) {
+                // Validate tenant ownership before mutating
+                const clientForUpdate = await storage.getClientById(clientId);
+                if (!clientForUpdate) {
+                  return res.json({ received: true });
+                }
+                if (metaTenantId && clientForUpdate.tenantId !== metaTenantId) {
+                  console.error(`Webhook: tenant mismatch for client ${clientId}`);
+                  return res.json({ received: true });
+                }
+
+                await db.update(clients).set({
+                  stripePaymentMethodId: paymentMethodId,
+                  paymentStatus: "active",
+                  updatedAt: new Date(),
+                }).where(eq(clients.id, clientId));
+
+                // Record the initial charge (idempotent — checked above)
+                const client = clientForUpdate;
+                if (client) {
+                  await storage.createPaymentCharge({
+                    clientId,
+                    amountPence: session.amount_total,
+                    stripePaymentIntentId: paymentIntentId,
+                    status: "succeeded",
+                    notes: "Initial session payment via Checkout",
+                    tenantId: client.tenantId,
+                  });
+                }
+              }
+            }
+          }
+        }
+      }
+
+      if (event.type === "payment_intent.succeeded") {
+        const pi = event.data.object as any;
+        const [charge] = await db.select().from(paymentCharges)
+          .where(eq(paymentCharges.stripePaymentIntentId, pi.id));
+        if (charge && charge.status === "pending") {
+          await storage.updatePaymentCharge(charge.id, { status: "succeeded" });
+        }
+      }
+
+      if (event.type === "payment_intent.payment_failed") {
+        const pi = event.data.object as any;
+        const failureReason: string = pi.last_payment_error?.message || "Unknown reason";
+        const [charge] = await db.select().from(paymentCharges)
+          .where(eq(paymentCharges.stripePaymentIntentId, pi.id));
+
+        if (charge) {
+          // Only transition to failed if not already in a terminal state (idempotent on retries)
+          const alreadyFailed = charge.status === "failed";
+          if (!alreadyFailed) {
+            await storage.updatePaymentCharge(charge.id, { status: "failed", failureReason });
+          }
+
+          // Notify admins — scoped to the client's tenant to prevent cross-tenant disclosure.
+          // Only send on first transition to avoid duplicate emails on webhook retries.
+          if (!alreadyFailed) {
+            try {
+              const client = await storage.getClientById(charge.clientId);
+              if (client) {
+                const adminUsers = await storage.getAdminUsersByTenantId(client.tenantId);
+                if (adminUsers.length > 0) {
+                  const clientName = `${client.firstName || ''} ${client.lastName || ''}`.trim() || 'Unknown';
+                  const amountPounds = charge.amountPence ? (charge.amountPence / 100).toFixed(2) : '0.00';
+                  const emailOptions = generatePaymentFailureEmail(client.displayId, clientName, amountPounds, failureReason);
+                  for (const admin of adminUsers) {
+                    await sendEmail({ ...emailOptions, to: admin.email });
+                  }
+                }
+              }
+            } catch (notifyErr) {
+              console.error("Webhook: failed to send payment failure notifications:", notifyErr);
+            }
+          }
+        } else {
+          // No charge record exists (e.g. PI was created outside our charge flow or DB missed it).
+          // Try to identify the client from PI metadata and notify admins scoped to that tenant.
+          const clientId: string | undefined = pi.metadata?.clientId;
+          const piTenantId: string | undefined = pi.metadata?.tenantId ?? metaTenantId ?? undefined;
+          if (clientId && piTenantId) {
+            try {
+              const client = await storage.getClientById(clientId);
+              // Verify the client belongs to the tenant in the event metadata
+              if (client && client.tenantId === piTenantId) {
+                const adminUsers = await storage.getAdminUsersByTenantId(piTenantId);
+                if (adminUsers.length > 0) {
+                  const clientName = `${client.firstName || ''} ${client.lastName || ''}`.trim() || 'Unknown';
+                  const amountPounds = pi.amount ? (pi.amount / 100).toFixed(2) : '0.00';
+                  const emailOptions = generatePaymentFailureEmail(client.displayId, clientName, amountPounds, failureReason);
+                  for (const admin of adminUsers) {
+                    await sendEmail({ ...emailOptions, to: admin.email });
+                  }
+                }
+              }
+            } catch (notifyErr) {
+              console.error("Webhook: failed to send payment failure notifications (no charge record):", notifyErr);
+            }
+          }
+        }
+      }
+
+      res.json({ received: true });
+    } catch (error: any) {
+      console.error("Webhook processing error:", error?.message);
+      res.status(500).json({ error: "Webhook processing failed" });
+    }
+  });
+
+  // Charge a subsequent session off-session (admin or assigned clinician)
+  app.post("/api/stripe/charge", requireAuth, async (req, res) => {
+    try {
+      if (!isStripeConfigured(req.tenant?.stripeSecretKey)) {
+        return res.status(400).json({ error: "Stripe is not configured" });
+      }
+      const { clientId, amountPence, notes } = req.body as {
+        clientId: string;
+        amountPence?: number;
+        notes?: string;
+      };
+      if (!clientId) return res.status(400).json({ error: "clientId required" });
+
+      const client = await storage.getClientById(clientId);
+      if (!client) return res.status(404).json({ error: "Client not found" });
+      if (req.tenant?.id && client.tenantId !== req.tenant.id) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      // Access check: admin can charge any client; clinician can only charge their assigned client
+      const reqUser = req.user as any;
+      if (reqUser?.role !== "admin") {
+        const clinician = await storage.getClinicianByUserId(reqUser?.id);
+        if (!clinician || client.assignedClinicianId !== clinician.id) {
+          return res.status(403).json({ error: "You can only charge sessions for your own clients" });
+        }
+      }
+      if (!client.stripeCustomerId || !client.stripePaymentMethodId) {
+        return res.status(400).json({ error: "Client does not have a saved payment method. They must complete the initial checkout first." });
+      }
+
+      const amount = amountPence ?? client.agreedRatePence ?? 0;
+      if (amount <= 0) return res.status(400).json({ error: "Invalid amount" });
+
+      // Create a pending charge record first
+      const charge = await storage.createPaymentCharge({
+        clientId,
+        amountPence: amount,
+        status: "pending",
+        notes: notes || null,
+        chargedByUserId: (req.user as any)?.id,
+        tenantId: client.tenantId,
+      });
+
+      try {
+        const result = await chargeOffSession({
+          customerId: client.stripeCustomerId,
+          paymentMethodId: client.stripePaymentMethodId,
+          amountPence: amount,
+          clientDisplayId: client.displayId,
+          clientId: client.id,
+          tenantId: req.tenant?.id,
+          tenantStripeKey: req.tenant?.stripeSecretKey,
+        });
+
+        await storage.updatePaymentCharge(charge.id, {
+          stripePaymentIntentId: result.paymentIntentId,
+          status: result.status === "succeeded" ? "succeeded" : "pending",
+        });
+
+        res.json({ success: true, chargeId: charge.id, status: result.status });
+      } catch (stripeError: any) {
+        await storage.updatePaymentCharge(charge.id, { status: "failed", failureReason: stripeError?.message || "Unknown reason" });
+        res.status(402).json({ error: stripeError?.message || "Payment failed" });
+      }
+    } catch (error: any) {
+      console.error("Charge error:", error?.message);
+      res.status(500).json({ error: error?.message || "Failed to charge session" });
+    }
+  });
+
+  // Get payment history for a client (admin or assigned clinician)
+  app.get("/api/stripe/charges/:clientId", requireAuth, async (req, res) => {
+    try {
+      const reqUser = req.user as any;
+      const client = await storage.getClientById(req.params.clientId);
+      if (!client) return res.status(404).json({ error: "Client not found" });
+      if (req.tenant?.id && client.tenantId !== req.tenant.id) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      // Access check: admin sees all, clinician sees only their assigned client
+      if (reqUser?.role !== "admin") {
+        const clinician = await storage.getClinicianByUserId(reqUser?.id);
+        if (!clinician || client.assignedClinicianId !== clinician.id) {
+          return res.status(403).json({ error: "Access denied" });
+        }
+      }
+      const charges = await storage.getPaymentChargesByClientId(req.params.clientId);
+      res.json(charges);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch charges" });
+    }
+  });
+
+  // Get all payment charges across all clients (admin only)
+  app.get("/api/stripe/charges", requireAdmin, async (req, res) => {
+    try {
+      const charges = await storage.getAllPaymentCharges(req.tenant?.id);
+      res.json(charges);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch charges" });
+    }
+  });
+
+  // Update agreed rate for a client
+  app.patch("/api/clients/:id/agreed-rate", requireAdmin, async (req, res) => {
+    try {
+      const { agreedRatePence } = req.body as { agreedRatePence: number };
+      if (typeof agreedRatePence !== "number") {
+        return res.status(400).json({ error: "agreedRatePence must be a number" });
+      }
+      const tenantId = req.tenant?.id;
+      const whereClause = tenantId
+        ? and(eq(clients.id, req.params.id), eq(clients.tenantId, tenantId))
+        : eq(clients.id, req.params.id);
+      const [updated] = await db.update(clients)
+        .set({ agreedRatePence, updatedAt: new Date() })
+        .where(whereClause)
+        .returning();
+      if (!updated) return res.status(404).json({ error: "Client not found" });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update rate" });
+    }
+  });
+
+  // ============ SUPER-ADMIN ROUTES ============
+  // All routes below are gated by requireSuperAdmin (x-super-admin-key header).
+  // They bypass tenant middleware via the open-path check in middleware/tenant.ts.
+
+  // Verify the key is valid (used by the frontend on first load)
+  app.get("/api/super-admin/verify", requireSuperAdmin, (_req, res) => {
+    res.json({ ok: true });
+  });
+
+  // List all tenants with status summary
+  app.get("/api/super-admin/tenants", requireSuperAdmin, async (_req, res) => {
+    try {
+      const allTenants = await db.select().from(tenants).orderBy(tenants.createdAt);
+
+      // For each tenant, check gmail connection status
+      const tenantIds = allTenants.map(t => t.id);
+      const gmailRows = tenantIds.length
+        ? await db.select({ tenantId: gmailConnections.tenantId, gmailAddress: gmailConnections.gmailAddress, isActive: gmailConnections.isActive })
+            .from(gmailConnections)
+            .where(inArray(gmailConnections.tenantId, tenantIds))
+        : [];
+
+      const gmailByTenant = new Map<string, typeof gmailRows>();
+      for (const row of gmailRows) {
+        if (!gmailByTenant.has(row.tenantId)) gmailByTenant.set(row.tenantId, []);
+        gmailByTenant.get(row.tenantId)!.push(row);
+      }
+
+      const result = allTenants.map(t => ({
+        ...t,
+        // Never expose decrypted secrets in the list view
+        stripeSecretKey: t.stripeSecretKey ? "***" : null,
+        stripeWebhookSecret: t.stripeWebhookSecret ? "***" : null,
+        stripeConnected: !!t.stripeSecretKey,
+        gmailConnections: gmailByTenant.get(t.id) || [],
+      }));
+
+      res.json(result);
+    } catch (error) {
+      console.error("Super-admin list tenants error:", error);
+      res.status(500).json({ error: "Failed to fetch tenants" });
+    }
+  });
+
+  // Get a single tenant (never return decrypted secrets)
+  app.get("/api/super-admin/tenants/:id", requireSuperAdmin, async (req, res) => {
+    try {
+      const [tenant] = await db.select().from(tenants).where(eq(tenants.id, req.params.id));
+      if (!tenant) return res.status(404).json({ error: "Tenant not found" });
+
+      // Select only safe status columns — never return OAuth tokens to the browser
+      const gmailRows = await db.select({
+        id: gmailConnections.id,
+        tenantId: gmailConnections.tenantId,
+        gmailAddress: gmailConnections.gmailAddress,
+        label: gmailConnections.label,
+        isActive: gmailConnections.isActive,
+        lastSyncAt: gmailConnections.lastSyncAt,
+        createdAt: gmailConnections.createdAt,
+      }).from(gmailConnections).where(eq(gmailConnections.tenantId, tenant.id));
+
+      res.json({
+        ...tenant,
+        stripeSecretKey: tenant.stripeSecretKey ? "***" : null,
+        stripeWebhookSecret: tenant.stripeWebhookSecret ? "***" : null,
+        stripeConnected: !!tenant.stripeSecretKey,
+        stripeWebhookConnected: !!tenant.stripeWebhookSecret,
+        gmailConnections: gmailRows,
+      });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch tenant" });
+    }
+  });
+
+  // Update tenant branding
+  app.patch("/api/super-admin/tenants/:id/branding", requireSuperAdmin, async (req, res) => {
+    try {
+      const schema = z.object({
+        name: z.string().min(1).optional(),
+        logoUrl: z.string().url().optional().or(z.literal("")),
+        primaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().or(z.literal("")),
+        accentColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().or(z.literal("")),
+      });
+      const body = schema.parse(req.body);
+      const [updated] = await db.update(tenants).set(body).where(eq(tenants.id, req.params.id)).returning();
+      if (!updated) return res.status(404).json({ error: "Tenant not found" });
+      res.json({ ...updated, stripeSecretKey: updated.stripeSecretKey ? "***" : null, stripeWebhookSecret: updated.stripeWebhookSecret ? "***" : null });
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors });
+      res.status(500).json({ error: "Failed to update branding" });
+    }
+  });
+
+  // Logo upload for a tenant
+  const logoUpload = multer({
+    storage: multer.diskStorage({
+      destination: (_req, _file, cb) => {
+        const dir = path.join(process.cwd(), "client", "public", "logos");
+        fs.mkdirSync(dir, { recursive: true });
+        cb(null, dir);
+      },
+      filename: (req, file, cb) => {
+        const ext = path.extname(file.originalname).toLowerCase() || ".png";
+        cb(null, `${req.params.id}${ext}`);
+      },
+    }),
+    limits: { fileSize: 2 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+      const allowed = ["image/png", "image/jpeg", "image/svg+xml", "image/gif", "image/webp"];
+      cb(null, allowed.includes(file.mimetype));
+    },
+  });
+
+  app.post("/api/super-admin/tenants/:id/logo-upload", requireSuperAdmin, logoUpload.single("logo"), async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: "No file uploaded or unsupported type" });
+      const ext = path.extname(req.file.originalname).toLowerCase() || ".png";
+      const logoUrl = `/logos/${req.params.id}${ext}`;
+      const [updated] = await db.update(tenants).set({ logoUrl }).where(eq(tenants.id, req.params.id)).returning();
+      if (!updated) return res.status(404).json({ error: "Tenant not found" });
+      res.json({ logoUrl });
+    } catch (error) {
+      console.error("Logo upload error:", error);
+      res.status(500).json({ error: "Failed to upload logo" });
+    }
+  });
+
+  // Update tenant feature flags
+  app.patch("/api/super-admin/tenants/:id/features", requireSuperAdmin, async (req, res) => {
+    try {
+      const schema = z.object({
+        paymentsEnabled: z.boolean().optional(),
+        tasksEnabled: z.boolean().optional(),
+        analyticsEnabled: z.boolean().optional(),
+        waitlistEnabled: z.boolean().optional(),
+        formsEnabled: z.boolean().optional(),
+        dataExportEnabled: z.boolean().optional(),
+        nonEngagementEnabled: z.boolean().optional(),
+        gmailIntakeEnabled: z.boolean().optional(),
+      });
+      const body = schema.parse(req.body);
+      const [updated] = await db.update(tenants).set(body).where(eq(tenants.id, req.params.id)).returning();
+      if (!updated) return res.status(404).json({ error: "Tenant not found" });
+      res.json({ ...updated, stripeSecretKey: updated.stripeSecretKey ? "***" : null, stripeWebhookSecret: updated.stripeWebhookSecret ? "***" : null });
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors });
+      res.status(500).json({ error: "Failed to update features" });
+    }
+  });
+
+  // Update tenant Stripe credentials (encrypted at rest)
+  app.patch("/api/super-admin/tenants/:id/stripe", requireSuperAdmin, async (req, res) => {
+    try {
+      const schema = z.object({
+        stripeSecretKey: z.string().optional(),
+        stripeWebhookSecret: z.string().optional(),
+      });
+      const body = schema.parse(req.body);
+
+      const updates: { stripeSecretKey?: string | null; stripeWebhookSecret?: string | null } = {};
+
+      // Enforce encryption-at-rest: refuse to store plaintext secrets if key is missing
+      const hasSecret = (body.stripeSecretKey && body.stripeSecretKey !== "") ||
+                        (body.stripeWebhookSecret && body.stripeWebhookSecret !== "");
+      if (hasSecret && !isEncryptionConfigured()) {
+        return res.status(422).json({
+          error: "STRIPE_ENCRYPTION_KEY is not configured. Set a 32-byte base64 key before saving credentials.",
+        });
+      }
+
+      if (body.stripeSecretKey !== undefined) {
+        if (body.stripeSecretKey === "") {
+          updates.stripeSecretKey = null;
+        } else {
+          updates.stripeSecretKey = encryptSecret(body.stripeSecretKey);
+        }
+      }
+
+      if (body.stripeWebhookSecret !== undefined) {
+        if (body.stripeWebhookSecret === "") {
+          updates.stripeWebhookSecret = null;
+        } else {
+          updates.stripeWebhookSecret = encryptSecret(body.stripeWebhookSecret);
+        }
+      }
+
+      const [updated] = await db.update(tenants).set(updates).where(eq(tenants.id, req.params.id)).returning();
+      if (!updated) return res.status(404).json({ error: "Tenant not found" });
+      res.json({
+        stripeConnected: !!updated.stripeSecretKey,
+        stripeWebhookConnected: !!updated.stripeWebhookSecret,
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors });
+      res.status(500).json({ error: "Failed to update Stripe credentials" });
+    }
+  });
+
+  // Disconnect Gmail for a tenant (clear a specific connection)
+  app.delete("/api/super-admin/tenants/:id/gmail/:connectionId", requireSuperAdmin, async (req, res) => {
+    try {
+      await db.delete(gmailConnections).where(
+        and(eq(gmailConnections.id, req.params.connectionId), eq(gmailConnections.tenantId, req.params.id))
+      );
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to disconnect Gmail" });
+    }
+  });
+
+  // Create a new tenant + first admin user
+  app.post("/api/super-admin/tenants", requireSuperAdmin, async (req, res) => {
+    try {
+      const schema = z.object({
+        name: z.string().min(1, "Practice name is required"),
+        slug: z.string().regex(/^[a-z0-9-]*$/).optional().or(z.literal("")),
+        adminEmail: z.string().email("Valid admin email is required"),
+        adminName: z.string().min(1, "Admin name is required"),
+        adminPassword: z.string().min(8, "Password must be at least 8 characters"),
+        logoUrl: z.string().optional(),
+        primaryColor: z.string().optional(),
+        accentColor: z.string().optional(),
+      });
+      const body = schema.parse(req.body);
+
+      // Check email uniqueness
+      const existing = await storage.getUserByEmail(body.adminEmail.toLowerCase());
+      if (existing) {
+        return res.status(400).json({ error: "Email already in use" });
+      }
+
+      // Create tenant
+      const [tenant] = await db.insert(tenants).values({
+        name: body.name,
+        slug: body.slug || null,
+        logoUrl: body.logoUrl || null,
+        primaryColor: body.primaryColor || null,
+        accentColor: body.accentColor || null,
+      }).returning();
+
+      // Create first admin user
+      const hashedPassword = await hashPassword(body.adminPassword);
+      const user = await storage.createUser({
+        email: body.adminEmail.toLowerCase(),
+        name: body.adminName,
+        password: hashedPassword,
+        role: "admin",
+        tenantId: tenant.id,
+      });
+
+      res.status(201).json({
+        tenant: { ...tenant, stripeSecretKey: null, stripeWebhookSecret: null },
+        adminUser: { id: user.id, email: user.email, name: user.name },
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors });
+      console.error("Super-admin create tenant error:", error);
+      res.status(500).json({ error: "Failed to create tenant" });
     }
   });
 

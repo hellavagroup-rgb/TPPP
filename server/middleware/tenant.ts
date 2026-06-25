@@ -1,6 +1,7 @@
 import { db } from "../db";
 import { users, tenants } from "@shared/schema";
 import { eq } from "drizzle-orm";
+import { decryptSecret } from "../encryption";
 
 export async function requireTenant(req: any, res: any, next: any) {
   const openPaths = [
@@ -10,15 +11,19 @@ export async function requireTenant(req: any, res: any, next: any) {
     '/admin-users/accept-invite',
     '/auth/me',
     '/admin/seed-tenant',
+    '/tenant/branding',
   ];
 
   if (
     openPaths.some(path => req.path === path) ||
+    req.path.startsWith('/super-admin/') ||
+    req.path === '/super-admin' ||
     req.path.startsWith('/admin-users/invite/') ||
     req.path.startsWith('/clients/public/') ||
     req.path.startsWith('/forms/') ||
     req.path.startsWith('/form-submissions') ||
-    req.path.startsWith('/form-drafts')
+    req.path.startsWith('/form-drafts') ||
+    req.path === '/stripe/webhook'
   ) {
     return next();
   }
@@ -39,7 +44,16 @@ export async function requireTenant(req: any, res: any, next: any) {
       return res.status(403).json({ error: 'No tenant found for this user' });
     }
 
-    req.tenant = result[0].tenant;
+    const tenant = result[0].tenant;
+    // Decrypt Stripe credentials at read time — they are stored encrypted at rest
+    // using a STRIPE_ENCRYPTION_KEY env var so plaintext secrets never sit in the DB.
+    if (tenant.stripeSecretKey) {
+      try { tenant.stripeSecretKey = decryptSecret(tenant.stripeSecretKey); } catch { /* ignore decrypt errors */ }
+    }
+    if (tenant.stripeWebhookSecret) {
+      try { tenant.stripeWebhookSecret = decryptSecret(tenant.stripeWebhookSecret); } catch { /* ignore decrypt errors */ }
+    }
+    req.tenant = tenant;
     next();
   } catch (err) {
     console.error('Tenant middleware error:', err);

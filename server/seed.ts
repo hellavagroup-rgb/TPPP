@@ -1,6 +1,19 @@
 import { db } from "./db";
-import { users, clinicians, formTemplates, clients, tasks, formSubmissions, timeSlots, auditLogs } from "../shared/schema";
-import { eq } from "drizzle-orm";
+import { users, clinicians, formTemplates, clients, tasks, formSubmissions, timeSlots, auditLogs, tenants } from "../shared/schema";
+import { eq, isNull } from "drizzle-orm";
+
+const PERINATAL_TENANT_ID = "11111111-0000-0000-0000-000000000001";
+
+/** Assign any null-tenantId rows to the Perinatal tenant (idempotent). */
+async function fixNullTenantIds() {
+  await db.update(users).set({ tenantId: PERINATAL_TENANT_ID }).where(isNull(users.tenantId));
+  await db.update(clinicians).set({ tenantId: PERINATAL_TENANT_ID }).where(isNull(clinicians.tenantId));
+  await db.update(clients).set({ tenantId: PERINATAL_TENANT_ID }).where(isNull(clients.tenantId));
+  await db.update(tasks).set({ tenantId: PERINATAL_TENANT_ID }).where(isNull(tasks.tenantId));
+  await db.update(timeSlots).set({ tenantId: PERINATAL_TENANT_ID }).where(isNull(timeSlots.tenantId));
+  await db.update(formTemplates).set({ tenantId: PERINATAL_TENANT_ID }).where(isNull(formTemplates.tenantId));
+  await db.update(formSubmissions).set({ tenantId: PERINATAL_TENANT_ID }).where(isNull(formSubmissions.tenantId));
+}
 
 const seedData = {
   users: [
@@ -118,6 +131,12 @@ export async function seedDatabaseIfEmpty() {
     const existingFieldCount = existingForm ? (existingForm.fields as any[])?.length || 0 : 0;
     const formNeedsUpdate = existingForm && existingFieldCount < expectedFieldCount;
     
+    // Tenant logo is configured via the super-admin panel — do not hardcode here
+
+    // Always fix any null tenantId rows so legacy data is always visible
+    await fixNullTenantIds();
+    console.log("Ensured all null-tenantId records assigned to Perinatal tenant");
+
     // Always update form templates if they're outdated
     if (formNeedsUpdate) {
       console.log(`Form template needs update: ${existingFieldCount} fields -> ${expectedFieldCount} fields`);

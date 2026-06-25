@@ -1,7 +1,16 @@
 import { Resend } from 'resend';
 import { storage } from './storage';
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+let resend: Resend | null = null;
+function getResend(): Resend {
+  if (!resend) {
+    if (!process.env.RESEND_API_KEY) {
+      throw new Error('RESEND_API_KEY is not set. Email sending is unavailable.');
+    }
+    resend = new Resend(process.env.RESEND_API_KEY);
+  }
+  return resend;
+}
 
 // From address - defaults to Resend sandbox for testing, should be set to verified domain in production
 const FROM_EMAIL = process.env.FROM_EMAIL || 'The Perinatal Psychology Practice <onboarding@resend.dev>';
@@ -67,7 +76,7 @@ export interface EmailOptions {
 
 export async function sendEmail(options: EmailOptions): Promise<{ success: boolean; error?: string }> {
   try {
-    const { data, error } = await resend.emails.send({
+    const { data, error } = await getResend().emails.send({
       from: FROM_EMAIL,
       to: options.to,
       subject: options.subject,
@@ -478,4 +487,93 @@ export async function generateWaitlistUpdateEmail(clientDisplayId: string, clien
     html: wrapInHtmlTemplate(bodyText, 'Waitlist Update'),
     text: bodyText,
   };
+}
+
+export async function generatePaymentLinkEmail(paymentUrl: string, amountPounds: string): Promise<EmailOptions> {
+  const storedTemplate = await getStoredTemplate('payment_link');
+
+  const subject = storedTemplate
+    ? storedTemplate.subject
+    : 'Your Session Payment Link - The Perinatal Psychology Practice';
+
+  const rawBody = storedTemplate
+    ? storedTemplate.bodyText
+    : `Thank you for completing your intake process. To confirm your first therapy session, please complete your initial session payment using the secure link below.
+
+Payment amount: £{{amount}}
+
+Pay securely here: {{payment_url}}
+
+Your card details will be saved securely so that future session payments can be processed automatically.
+
+If you have any questions, please don't hesitate to contact us.
+
+Warm regards,
+The Perinatal Psychology Practice Team`;
+
+  const bodyText = rawBody
+    .replace(/\{\{amount\}\}/g, amountPounds)
+    .replace(/\{\{payment_url\}\}/g, paymentUrl);
+
+  const html = `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }
+      .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+      .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+      .content { background: #f8f9fa; padding: 30px; border-radius: 0 0 8px 8px; }
+      .pay-button { display: inline-block; background: #667eea; color: white; padding: 14px 28px; border-radius: 6px; text-decoration: none; font-weight: bold; margin: 20px 0; }
+      .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header"><h1>Complete Your Session Payment</h1></div>
+      <div class="content">
+        <p>${bodyText.replace(/\n/g, '<br>')}</p>
+        <p style="text-align:center;"><a href="${paymentUrl}" class="pay-button">Pay Securely Now</a></p>
+      </div>
+      <div class="footer">The Perinatal Psychology Practice</div>
+    </div>
+  </body>
+</html>`;
+
+  return { to: '', subject, html, text: bodyText };
+}
+
+export function generatePaymentFailureEmail(clientDisplayId: string, clientName: string, amountPounds: string, failureReason: string): EmailOptions {
+  const subject = `Payment Failed – ${clientDisplayId}`;
+  const bodyText = `A payment has failed for a client.\n\nClient ID: ${clientDisplayId}\nClient Name: ${clientName}\nAmount: £${amountPounds}\nReason: ${failureReason}\n\nPlease log in to the practice management system to review this client's payment status and take action if required.\n\nThe Perinatal Psychology Practice`;
+  const html = `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }
+      .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+      .header { background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+      .content { background: #f8f9fa; padding: 30px; border-radius: 0 0 8px 8px; }
+      .detail-row { margin: 8px 0; }
+      .label { font-weight: bold; }
+      .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header"><h1>Payment Failed</h1></div>
+      <div class="content">
+        <p>A payment has failed for a client and may require your attention.</p>
+        <div class="detail-row"><span class="label">Client ID:</span> ${clientDisplayId}</div>
+        <div class="detail-row"><span class="label">Client Name:</span> ${clientName}</div>
+        <div class="detail-row"><span class="label">Amount:</span> £${amountPounds}</div>
+        <div class="detail-row"><span class="label">Failure Reason:</span> ${failureReason}</div>
+        <p>Please log in to the practice management system to review this client's payment status and take action if required.</p>
+      </div>
+      <div class="footer">The Perinatal Psychology Practice</div>
+    </div>
+  </body>
+</html>`;
+  return { to: '', subject, html, text: bodyText };
 }

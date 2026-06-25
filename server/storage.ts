@@ -1,5 +1,5 @@
 import { 
-  users, clients, clinicians, timeSlots, formTemplates, formSubmissions, tasks, auditLogs, emailTemplates, inviteTokens, passwordResetTokens, nonEngagementCategories, customInsurers,
+  users, clients, clinicians, timeSlots, formTemplates, formSubmissions, tasks, auditLogs, emailTemplates, inviteTokens, passwordResetTokens, nonEngagementCategories, customInsurers, paymentCharges,
   type User, type InsertUser, type SafeUser,
   type Client, type InsertClient,
   type Clinician, type InsertClinician,
@@ -12,7 +12,8 @@ import {
   type InviteToken,
   type PasswordResetToken,
   type NonEngagementCategory, type InsertNonEngagementCategory,
-  type CustomInsurer, type InsertCustomInsurer
+  type CustomInsurer, type InsertCustomInsurer,
+  type PaymentCharge, type InsertPaymentCharge,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, or, desc, sql, isNull, inArray } from "drizzle-orm";
@@ -28,6 +29,7 @@ export interface IStorage {
   updateUser(id: string, updates: Partial<InsertUser>): Promise<User | undefined>;
   deleteUser(id: string): Promise<void>;
   getAdminUsers(): Promise<User[]>;
+  getAdminUsersByTenantId(tenantId: string): Promise<User[]>;
   
   // ============ INVITE TOKENS ============
   createInviteToken(userId: string, token: string, expiresAt: Date): Promise<InviteToken>;
@@ -108,6 +110,13 @@ export interface IStorage {
   // ============ CUSTOM INSURERS ============
   getCustomInsurers(tenantId?: string | null): Promise<CustomInsurer[]>;
   addCustomInsurer(name: string, tenantId?: string | null): Promise<CustomInsurer>;
+
+  // ============ PAYMENT CHARGES ============
+  createPaymentCharge(charge: InsertPaymentCharge): Promise<PaymentCharge>;
+  getPaymentChargesByClientId(clientId: string): Promise<PaymentCharge[]>;
+  getAllPaymentCharges(tenantId?: string | null): Promise<(PaymentCharge & { clientDisplayId: string; clinicianName: string | null })[]>;
+  updatePaymentCharge(id: string, updates: Partial<InsertPaymentCharge>): Promise<PaymentCharge | undefined>;
+  getClientsWithFailedPayments(tenantId?: string | null): Promise<{ clientId: string; failureReason: string | null }[]>;
 }
 
 // Database implementation with PostgreSQL
@@ -149,6 +158,12 @@ export class DatabaseStorage implements IStorage {
 
   async getAdminUsers(): Promise<User[]> {
     return db.select().from(users).where(eq(users.role, "admin"));
+  }
+
+  async getAdminUsersByTenantId(tenantId: string): Promise<User[]> {
+    return db.select().from(users).where(
+      and(eq(users.role, "admin"), eq(users.tenantId, tenantId))
+    );
   }
 
   // ============ INVITE TOKENS ============
@@ -209,6 +224,7 @@ export class DatabaseStorage implements IStorage {
         allocateForBupa: clinicians.allocateForBupa,
         tier: clinicians.tier,
         isActive: clinicians.isActive,
+        sessionRatePence: clinicians.sessionRatePence,
         lastUpdatedAvailability: clinicians.lastUpdatedAvailability,
         createdAt: clinicians.createdAt,
         name: users.name,
@@ -863,6 +879,70 @@ export class DatabaseStorage implements IStorage {
   async addCustomInsurer(name: string, tenantId?: string | null): Promise<CustomInsurer> {
     const [result] = await db.insert(customInsurers).values({ name, ...(tenantId ? { tenantId } : {}) }).returning();
     return result;
+  }
+
+  // ============ PAYMENT CHARGES ============
+  async createPaymentCharge(charge: InsertPaymentCharge): Promise<PaymentCharge> {
+    const [result] = await db.insert(paymentCharges).values(charge).returning();
+    return result;
+  }
+
+  async getPaymentChargesByClientId(clientId: string): Promise<PaymentCharge[]> {
+    return await db.select().from(paymentCharges)
+      .where(eq(paymentCharges.clientId, clientId))
+      .orderBy(desc(paymentCharges.chargedAt));
+  }
+
+  async getAllPaymentCharges(tenantId?: string | null): Promise<(PaymentCharge & { clientDisplayId: string; clinicianName: string | null })[]> {
+    const cliniciansAlias = clinicians;
+    const usersAlias = users;
+    const rows = await db
+      .select({
+        id: paymentCharges.id,
+        clientId: paymentCharges.clientId,
+        amountPence: paymentCharges.amountPence,
+        stripePaymentIntentId: paymentCharges.stripePaymentIntentId,
+        status: paymentCharges.status,
+        notes: paymentCharges.notes,
+        chargedByUserId: paymentCharges.chargedByUserId,
+        chargedAt: paymentCharges.chargedAt,
+        tenantId: paymentCharges.tenantId,
+        clientDisplayId: clients.displayId,
+        clinicianName: usersAlias.name,
+      })
+      .from(paymentCharges)
+      .leftJoin(clients, eq(paymentCharges.clientId, clients.id))
+      .leftJoin(cliniciansAlias, eq(clients.assignedClinicianId, cliniciansAlias.id))
+      .leftJoin(usersAlias, eq(cliniciansAlias.userId, usersAlias.id))
+      .where(tenantId ? eq(paymentCharges.tenantId, tenantId) : undefined)
+      .orderBy(desc(paymentCharges.chargedAt));
+    return rows.map(r => ({ ...r, clientDisplayId: r.clientDisplayId ?? '', clinicianName: r.clinicianName ?? null }));
+  }
+
+  async updatePaymentCharge(id: string, updates: Partial<InsertPaymentCharge>): Promise<PaymentCharge | undefined> {
+    const [result] = await db.update(paymentCharges).set(updates).where(eq(paymentCharges.id, id)).returning();
+    return result || undefined;
+  }
+
+  async getClientsWithFailedPayments(tenantId?: string | null): Promise<{ clientId: string; failureReason: string | null }[]> {
+    try {
+      const rows = await db.execute(sql`
+        SELECT pc.client_id, pc.failure_reason
+        FROM payment_charges pc
+        WHERE pc.status = 'failed'
+          ${tenantId ? sql`AND pc.tenant_id = ${tenantId}` : sql``}
+          AND pc.charged_at = (
+            SELECT MAX(pc2.charged_at)
+            FROM payment_charges pc2
+            WHERE pc2.client_id = pc.client_id
+              ${tenantId ? sql`AND pc2.tenant_id = ${tenantId}` : sql``}
+          )
+      `);
+      return (rows as any[]).map((r: any) => ({ clientId: r.client_id, failureReason: r.failure_reason ?? null }));
+    } catch {
+      // payment_charges table not yet migrated — return empty until Stripe is set up
+      return [];
+    }
   }
 }
 

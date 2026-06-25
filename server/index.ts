@@ -5,6 +5,7 @@ import { createServer } from "http";
 import { seedDatabaseIfEmpty } from "./seed";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
+import { syncAllActiveConnections } from "./gmailSync";
 
 const app = express();
 
@@ -25,6 +26,9 @@ const generalLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests, please try again later" },
+  // Stripe webhooks must not be rate-limited — Stripe retries on failure and
+  // could be blocked if the general limiter counts its delivery attempts
+  skip: (req) => req.originalUrl === "/api/stripe/webhook",
 });
 
 const authLimiter = rateLimit({
@@ -124,4 +128,14 @@ app.use((req, res, next) => {
       log(`serving on port ${port}`);
     },
   );
+
+  // Background Gmail polling — every 5 minutes for all active connections
+  const GMAIL_POLL_INTERVAL_MS = 5 * 60 * 1000;
+  setInterval(async () => {
+    try {
+      await syncAllActiveConnections();
+    } catch (err) {
+      log(`[gmail] background sync error: ${err}`);
+    }
+  }, GMAIL_POLL_INTERVAL_MS);
 })();

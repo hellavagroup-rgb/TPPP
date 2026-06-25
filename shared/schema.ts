@@ -8,10 +8,25 @@ import { z } from "zod";
 export const tenants = pgTable("tenants", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
+  slug: text("slug"),
+  logoUrl: text("logo_url"),
+  primaryColor: text("primary_color"),
+  accentColor: text("accent_color"),
   pmsType: text("pms_type"),
   clinikoApiKey: text("cliniko_api_key"),
   whatsappEnabled: boolean("whatsapp_enabled").default(false),
   gmailAddress: text("gmail_address"),
+  gmailIntakeEnabled: boolean("gmail_intake_enabled").default(false),
+  stripeSecretKey: text("stripe_secret_key"), // Stored per-tenant for in-app configuration
+  stripeWebhookSecret: text("stripe_webhook_secret"),
+  // Feature flags — all default true so existing tenants lose no functionality
+  paymentsEnabled: boolean("payments_enabled").default(true),
+  tasksEnabled: boolean("tasks_enabled").default(true),
+  analyticsEnabled: boolean("analytics_enabled").default(true),
+  waitlistEnabled: boolean("waitlist_enabled").default(true),
+  formsEnabled: boolean("forms_enabled").default(true),
+  dataExportEnabled: boolean("data_export_enabled").default(true),
+  nonEngagementEnabled: boolean("non_engagement_enabled").default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -60,6 +75,7 @@ export const clinicians = pgTable("clinicians", {
   tier: text("tier", { enum: ["High", "Mid", "Low"] }),
   isActive: boolean("is_active").default(true).notNull(),
   lastUpdatedAvailability: timestamp("last_updated_availability"),
+  sessionRatePence: integer("session_rate_pence"), // Session rate in pence (e.g. 15000 = £150)
   createdAt: timestamp("created_at").defaultNow().notNull(),
   tenantId: varchar("tenant_id").references(() => tenants.id),
 });
@@ -140,6 +156,12 @@ export const clients = pgTable("clients", {
   allocatedAt: timestamp("allocated_at"), // When client was allocated to clinician
   awaitingConfirmationAt: timestamp("awaiting_confirmation_at"), // When email sent to client for confirmation
   confirmedAt: timestamp("confirmed_at"), // When appointment was confirmed
+  // Stripe / Payment
+  agreedRatePence: integer("agreed_rate_pence"), // Agreed session rate in pence
+  stripeCustomerId: text("stripe_customer_id"), // Stripe Customer ID (cus_...)
+  stripePaymentMethodId: text("stripe_payment_method_id"), // Stripe PaymentMethod ID (pm_...)
+  stripeCheckoutUrl: text("stripe_checkout_url"), // Checkout URL sent to client
+  paymentStatus: text("payment_status", { enum: ["none", "setup_pending", "active"] }).default("none"),
   // Timestamps
   intakeDate: timestamp("intake_date").defaultNow().notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -310,6 +332,62 @@ export const nonEngagementCategories = pgTable("non_engagement_categories", {
 export const insertNonEngagementCategorySchema = createInsertSchema(nonEngagementCategories).omit({ id: true, createdAt: true });
 export type InsertNonEngagementCategory = z.infer<typeof insertNonEngagementCategorySchema>;
 export type NonEngagementCategory = typeof nonEngagementCategories.$inferSelect;
+
+// ============ PAYMENT CHARGES ============
+export const paymentCharges = pgTable("payment_charges", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  clientId: varchar("client_id").references(() => clients.id).notNull(),
+  amountPence: integer("amount_pence").notNull(),
+  stripePaymentIntentId: text("stripe_payment_intent_id"),
+  status: text("status", { enum: ["pending", "succeeded", "failed"] }).notNull().default("pending"),
+  notes: text("notes"),
+  failureReason: text("failure_reason"),
+  chargedByUserId: varchar("charged_by_user_id").references(() => users.id),
+  chargedAt: timestamp("charged_at").defaultNow().notNull(),
+  tenantId: varchar("tenant_id").references(() => tenants.id),
+});
+
+export const insertPaymentChargeSchema = createInsertSchema(paymentCharges).omit({ id: true, chargedAt: true });
+export type InsertPaymentCharge = z.infer<typeof insertPaymentChargeSchema>;
+export type PaymentCharge = typeof paymentCharges.$inferSelect;
+
+// ============ INTAKE MESSAGES ============
+export const intakeMessages = pgTable("intake_messages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").references(() => tenants.id).notNull(),
+  channel: text("channel", { enum: ["email", "whatsapp", "phone"] }).notNull(),
+  threadId: text("thread_id"),
+  fromAddress: text("from_address").notNull(),
+  subject: text("subject").notNull(),
+  body: text("body").notNull(),
+  extractedName: text("extracted_name"),
+  extractedPhone: text("extracted_phone"),
+  extractedData: json("extracted_data").$type<Record<string, string>>(),
+  status: text("status", { enum: ["new", "linked", "ignored"] }).notNull().default("new"),
+  linkedClientId: varchar("linked_client_id").references(() => clients.id),
+  receivedAt: timestamp("received_at").defaultNow().notNull(),
+});
+
+export const insertIntakeMessageSchema = createInsertSchema(intakeMessages).omit({ id: true, receivedAt: true });
+export type InsertIntakeMessage = z.infer<typeof insertIntakeMessageSchema>;
+export type IntakeMessage = typeof intakeMessages.$inferSelect;
+
+// ============ GMAIL CONNECTIONS ============
+export const gmailConnections = pgTable("gmail_connections", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").references(() => tenants.id).notNull(),
+  gmailAddress: text("gmail_address").notNull(),
+  accessToken: text("access_token").notNull(),
+  refreshToken: text("refresh_token").notNull(),
+  tokenExpiry: timestamp("token_expiry"),
+  historyId: text("history_id"),
+  lastSyncAt: timestamp("last_sync_at"),
+  isActive: boolean("is_active").default(true).notNull(),
+  label: text("label"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export type GmailConnection = typeof gmailConnections.$inferSelect;
 
 // ============ PASSWORD RESET TOKENS ============
 export const passwordResetTokens = pgTable("password_reset_tokens", {

@@ -2,6 +2,7 @@ import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 import { useData } from "@/lib/mockData";
 import { useAuth } from "@/lib/auth";
+import { useQuery } from "@tanstack/react-query";
 import { 
   LayoutDashboard, 
   Users, 
@@ -16,9 +17,10 @@ import {
   BarChart3,
   Brain,
   UserCircle,
-  KeyRound
+  KeyRound,
+  Inbox,
+  CreditCard
 } from "lucide-react";
-import logo from "@assets/xPerinatalPP-logo-large-digital.png.pagespeed.ic.wAjk_RUOnf_1766008188694.png";
 import { useState } from "react";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
@@ -34,6 +36,17 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const { notifications } = useData();
   const { user, logout } = useAuth();
+
+  const { data: tenant } = useQuery({
+    queryKey: ["/api/tenant"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/tenant");
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: !!user,
+    staleTime: 60_000,
+  });
   const { toast } = useToast();
   
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
@@ -83,12 +96,14 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const adminNavigation = [
     { name: "Dashboard", href: "/", icon: LayoutDashboard },
     { name: "Clients", href: "/clients", icon: Users },
-    { name: "Waitlist", href: "/waitlist", icon: CalendarClock },
-    { name: "Tasks", href: "/tasks", icon: ClipboardList },
+    ...(tenant?.waitlistEnabled !== false ? [{ name: "Waitlist", href: "/waitlist", icon: CalendarClock }] : []),
+    ...(tenant?.tasksEnabled !== false ? [{ name: "Tasks", href: "/tasks", icon: ClipboardList }] : []),
     { name: "Clinicians", href: "/clinicians", icon: Brain },
     { name: "Availability", href: "/availability", icon: CalendarClock },
-    { name: "Forms", href: "/forms", icon: FileText },
-    { name: "Analytics", href: "/analytics", icon: BarChart3 },
+    ...(tenant?.formsEnabled !== false ? [{ name: "Forms", href: "/forms", icon: FileText }] : []),
+    ...(tenant?.analyticsEnabled !== false ? [{ name: "Analytics", href: "/analytics", icon: BarChart3 }] : []),
+    ...(tenant?.paymentsEnabled !== false ? [{ name: "Payments", href: "/payments", icon: CreditCard }] : []),
+    ...(tenant?.gmailIntakeEnabled ? [{ name: "Intake Inbox", href: "/intake-inbox", icon: Inbox }] : []),
     { name: "Settings", href: "/settings", icon: Settings },
   ];
 
@@ -103,7 +118,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     <div className="flex flex-col h-full bg-sidebar text-sidebar-foreground border-r border-sidebar-border">
       <div className="p-6 flex flex-col gap-4">
         <div className="w-full flex flex-col items-center py-2 gap-1">
-             <img src={logo} alt="The Perinatal Psychology Practice" className="w-full max-w-[200px] object-contain" />
+             {tenant?.logoUrl ? (
+               <img src={tenant.logoUrl} alt={tenant.name || "Practice"} className="w-full max-w-[200px] object-contain" />
+             ) : (
+               <span className="text-base font-semibold text-sidebar-foreground text-center leading-tight">
+                 {tenant?.name || "Practice Portal"}
+               </span>
+             )}
              <span className="text-[10px] uppercase tracking-widest text-sidebar-foreground/60 font-medium">
                 {user?.role === "clinician" ? "Clinician Portal" : "Client Management"}
              </span>

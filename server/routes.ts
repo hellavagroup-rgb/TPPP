@@ -2944,9 +2944,9 @@ export async function registerRoutes(
     try {
       const schema = z.object({
         name: z.string().min(1).optional(),
-        logoUrl: z.string().url().optional().or(z.literal("")),
-        primaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().or(z.literal("")),
-        accentColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().or(z.literal("")),
+        logoUrl: z.string().optional().or(z.literal("")),
+        primaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/i).optional().or(z.literal("")),
+        accentColor: z.string().regex(/^#[0-9a-fA-F]{6}$/i).optional().or(z.literal("")),
       });
       const body = schema.parse(req.body);
       const [updated] = await db.update(tenants).set(body).where(eq(tenants.id, req.params.id)).returning();

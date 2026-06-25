@@ -2932,7 +2932,11 @@ export async function registerRoutes(
   const logoUpload = multer({
     storage: multer.diskStorage({
       destination: (_req, _file, cb) => {
-        const dir = path.join(process.cwd(), "client", "public", "logos");
+        // In production the server compiles to dist/ and static files are served
+        // from dist/public/. In development Vite handles static serving so the
+        // exact path doesn't matter, but we use the same base as serveStatic so
+        // uploads always land where Express can actually serve them.
+        const dir = path.join(__dirname, "public", "logos");
         fs.mkdirSync(dir, { recursive: true });
         cb(null, dir);
       },

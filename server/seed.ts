@@ -2,17 +2,18 @@ import { db } from "./db";
 import { users, clinicians, formTemplates, clients, tasks, formSubmissions, timeSlots, auditLogs, tenants } from "../shared/schema";
 import { eq, isNull } from "drizzle-orm";
 
-const PERINATAL_TENANT_ID = "11111111-0000-0000-0000-000000000001";
-
-/** Assign any null-tenantId rows to the Perinatal tenant (idempotent). */
+/** Assign any null-tenantId rows to the first existing tenant (idempotent). */
 async function fixNullTenantIds() {
-  await db.update(users).set({ tenantId: PERINATAL_TENANT_ID }).where(isNull(users.tenantId));
-  await db.update(clinicians).set({ tenantId: PERINATAL_TENANT_ID }).where(isNull(clinicians.tenantId));
-  await db.update(clients).set({ tenantId: PERINATAL_TENANT_ID }).where(isNull(clients.tenantId));
-  await db.update(tasks).set({ tenantId: PERINATAL_TENANT_ID }).where(isNull(tasks.tenantId));
-  await db.update(timeSlots).set({ tenantId: PERINATAL_TENANT_ID }).where(isNull(timeSlots.tenantId));
-  await db.update(formTemplates).set({ tenantId: PERINATAL_TENANT_ID }).where(isNull(formTemplates.tenantId));
-  await db.update(formSubmissions).set({ tenantId: PERINATAL_TENANT_ID }).where(isNull(formSubmissions.tenantId));
+  const [tenant] = await db.select().from(tenants).limit(1);
+  if (!tenant) return; // No tenants exist yet — nothing to fix
+  const tenantId = tenant.id;
+  await db.update(users).set({ tenantId }).where(isNull(users.tenantId));
+  await db.update(clinicians).set({ tenantId }).where(isNull(clinicians.tenantId));
+  await db.update(clients).set({ tenantId }).where(isNull(clients.tenantId));
+  await db.update(tasks).set({ tenantId }).where(isNull(tasks.tenantId));
+  await db.update(timeSlots).set({ tenantId }).where(isNull(timeSlots.tenantId));
+  await db.update(formTemplates).set({ tenantId }).where(isNull(formTemplates.tenantId));
+  await db.update(formSubmissions).set({ tenantId }).where(isNull(formSubmissions.tenantId));
 }
 
 const seedData = {

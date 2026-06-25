@@ -2942,18 +2942,19 @@ export async function registerRoutes(
   // Update tenant branding
   app.patch("/api/super-admin/tenants/:id/branding", requireSuperAdmin, async (req, res) => {
     try {
-      const schema = z.object({
-        name: z.string().min(1).optional(),
-        logoUrl: z.string().optional().or(z.literal("")),
-        primaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/i).optional().or(z.literal("")),
-        accentColor: z.string().regex(/^#[0-9a-fA-F]{6}$/i).optional().or(z.literal("")),
-      });
-      const body = schema.parse(req.body);
-      const [updated] = await db.update(tenants).set(body).where(eq(tenants.id, req.params.id)).returning();
+      const b = req.body as Record<string, any>;
+      const hexRe = /^#[0-9a-fA-F]{6}$/i;
+      const patch: Record<string, any> = {};
+      if (typeof b.name === "string" && b.name.trim().length > 0) patch.name = b.name.trim();
+      if (typeof b.logoUrl === "string") patch.logoUrl = b.logoUrl || null;
+      if (typeof b.primaryColor === "string") patch.primaryColor = hexRe.test(b.primaryColor) ? b.primaryColor : null;
+      if (typeof b.accentColor === "string") patch.accentColor = hexRe.test(b.accentColor) ? b.accentColor : null;
+      if (Object.keys(patch).length === 0) return res.status(400).json({ error: "No valid fields to update" });
+      const [updated] = await db.update(tenants).set(patch).where(eq(tenants.id, req.params.id)).returning();
       if (!updated) return res.status(404).json({ error: "Tenant not found" });
       res.json({ ...updated, stripeSecretKey: updated.stripeSecretKey ? "***" : null, stripeWebhookSecret: updated.stripeWebhookSecret ? "***" : null });
     } catch (error) {
-      if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors });
+      console.error("Branding save error:", error);
       res.status(500).json({ error: "Failed to update branding" });
     }
   });

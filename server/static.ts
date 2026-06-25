@@ -3,6 +3,11 @@ import fs from "fs";
 import path from "path";
 
 export function serveStatic(app: Express) {
+  // Serve uploaded logos from the persistent uploads directory (survives redeploys)
+  const uploadsPath = path.join(process.cwd(), "uploads", "logos");
+  fs.mkdirSync(uploadsPath, { recursive: true });
+  app.use("/logos", express.static(uploadsPath));
+
   const distPath = path.resolve(__dirname, "public");
   if (!fs.existsSync(distPath)) {
     throw new Error(

@@ -357,6 +357,7 @@ export const intakeMessages = pgTable("intake_messages", {
   tenantId: varchar("tenant_id").references(() => tenants.id).notNull(),
   channel: text("channel", { enum: ["email", "whatsapp", "phone"] }).notNull(),
   threadId: text("thread_id"),
+  gmailMessageId: text("gmail_message_id"),
   fromAddress: text("from_address").notNull(),
   subject: text("subject").notNull(),
   body: text("body").notNull(),

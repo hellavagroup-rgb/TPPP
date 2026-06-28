@@ -127,20 +127,25 @@ export async function syncConnection(connection: {
   if (connection.historyId) {
     // Incremental sync: fetch history since last known point
     try {
+      log(`[gmail] ${connection.gmailAddress}: incremental sync from historyId ${connection.historyId}`);
       const historyRes = await gmail.users.history.list({
         userId: "me",
         startHistoryId: connection.historyId,
         historyTypes: ["messageAdded"],
-        labelId: "INBOX",
+        // NOTE: no labelId filter — it silently drops messages that arrive via
+        // Gmail filters or rules before the INBOX label is applied
       });
 
       newHistoryId = historyRes.data.historyId ?? connection.historyId;
+      const records = historyRes.data.history ?? [];
+      log(`[gmail] ${connection.gmailAddress}: history returned ${records.length} record(s), new historyId=${newHistoryId}`);
 
-      for (const record of historyRes.data.history ?? []) {
+      for (const record of records) {
         for (const msg of record.messagesAdded ?? []) {
           if (msg.message?.id) messageIds.push(msg.message.id);
         }
       }
+      log(`[gmail] ${connection.gmailAddress}: ${messageIds.length} candidate message(s) from history`);
     } catch (err: any) {
       // historyId too old (404) — fall back to full sweep
       if (err?.status === 404) {
@@ -176,17 +181,24 @@ export async function syncConnection(connection: {
     return 0;
   }
 
-  // Fetch existing threadIds for this tenant to avoid duplicates
+  // Fetch existing gmail message IDs for this tenant to avoid exact duplicates
   const existing = await db
-    .select({ threadId: intakeMessages.threadId })
+    .select({ gmailMessageId: intakeMessages.gmailMessageId })
     .from(intakeMessages)
     .where(eq(intakeMessages.tenantId, connection.tenantId));
-  const existingThreadIds = new Set(existing.map(r => r.threadId).filter(Boolean));
+  const existingMsgIds = new Set(existing.map(r => r.gmailMessageId).filter(Boolean));
 
   let created = 0;
 
   for (const msgId of messageIds) {
     try {
+      // Skip if we already stored this exact message
+      if (existingMsgIds.has(msgId)) {
+        log(`[gmail] ${connection.gmailAddress}: skipping ${msgId} — already stored`);
+        continue;
+      }
+      existingMsgIds.add(msgId);
+
       const msgRes = await gmail.users.messages.get({
         userId: "me",
         id: msgId,
@@ -194,16 +206,20 @@ export async function syncConnection(connection: {
       });
       const msg = msgRes.data;
       const threadId = msg.threadId ?? msgId;
-
-      // Skip if we already have a message from this thread
-      if (existingThreadIds.has(threadId)) continue;
-      existingThreadIds.add(threadId);
-
       const headers = msg.payload?.headers ?? [];
       const labelIds = msg.labelIds ?? [];
 
+      // Only accept messages that are actually in INBOX (not sent, drafts, etc.)
+      if (!labelIds.includes("INBOX")) {
+        log(`[gmail] ${connection.gmailAddress}: skipping ${msgId} — not in INBOX (labels: ${labelIds.join(",")})`);
+        continue;
+      }
+
       // Skip marketing / automated / promotional emails
-      if (isMarketingEmail(headers, labelIds)) continue;
+      if (isMarketingEmail(headers, labelIds)) {
+        log(`[gmail] ${connection.gmailAddress}: skipping ${msgId} — marketing filter`);
+        continue;
+      }
 
       const subject = extractHeader(headers, "subject") || "(no subject)";
       const fromHeader = extractHeader(headers, "from");
@@ -212,7 +228,12 @@ export async function syncConnection(connection: {
       const fromAddress = fromMatch ? fromMatch[1] : fromHeader;
       const rawBody = extractTextBody(msg.payload);
 
-      if (!rawBody.trim()) continue; // skip empty messages
+      if (!rawBody.trim()) {
+        log(`[gmail] ${connection.gmailAddress}: skipping ${msgId} — empty body`);
+        continue;
+      }
+
+      log(`[gmail] ${connection.gmailAddress}: storing message ${msgId} from ${fromAddress} — "${subject}"`);
 
       const body = cleanBodyText(rawBody);
       const parsed = parseIntakeEmailBody(rawBody); // parse before cleaning to preserve structure
@@ -221,6 +242,7 @@ export async function syncConnection(connection: {
         tenantId: connection.tenantId,
         channel: "email",
         threadId,
+        gmailMessageId: msgId,
         fromAddress,
         subject,
         body,

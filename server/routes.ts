@@ -425,6 +425,9 @@ export async function registerRoutes(
       if (!clinician) {
         return res.status(404).json({ error: "Clinician not found" });
       }
+      if (clinician.tenantId !== req.tenant?.id) {
+        return res.status(403).json({ error: "Access denied" });
+      }
 
       if (!clinician.userId) {
         return res.status(400).json({ error: "Clinician has no associated user account" });
@@ -477,6 +480,9 @@ export async function registerRoutes(
       if (!clinician) {
         return res.status(404).json({ error: "Clinician not found" });
       }
+      if (clinician.tenantId !== req.tenant?.id) {
+        return res.status(403).json({ error: "Access denied" });
+      }
 
       // Handle name and email updates separately (stored on user record, not clinician)
       const { email, name, ...clinicianUpdates } = req.body;
@@ -501,6 +507,9 @@ export async function registerRoutes(
       const clinician = await storage.getClinicianById(req.params.id);
       if (!clinician) {
         return res.status(404).json({ error: "Clinician not found" });
+      }
+      if (clinician.tenantId !== req.tenant?.id) {
+        return res.status(403).json({ error: "Access denied" });
       }
       await storage.deleteClinician(req.params.id);
       res.json({ success: true, message: "Clinician permanently deleted" });
@@ -873,6 +882,9 @@ export async function registerRoutes(
       if (slot.clinicianId !== req.params.clinicianId) {
         return res.status(403).json({ error: "Forbidden" });
       }
+      if (slot.tenantId !== req.tenant?.id) {
+        return res.status(403).json({ error: "Access denied" });
+      }
 
       await storage.deleteTimeSlotById(req.params.slotId);
       const allSlots = await storage.getTimeSlotsByClinicianId(req.params.clinicianId);
@@ -905,6 +917,9 @@ export async function registerRoutes(
 
   app.post("/api/clients/:id/restore", requireAdmin, auditLog("update", "client"), async (req, res) => {
     try {
+      const clientToRestore = await storage.getClientById(req.params.id);
+      if (!clientToRestore) return res.status(404).json({ error: "Client not found" });
+      if (clientToRestore.tenantId !== req.tenant?.id) return res.status(403).json({ error: "Access denied" });
       const restored = await storage.restoreClient(req.params.id);
       if (!restored) {
         return res.status(404).json({ error: "Client not found" });
@@ -937,6 +952,9 @@ export async function registerRoutes(
       if (!client) {
         return res.status(404).json({ error: "Client not found" });
       }
+      if (client.tenantId !== req.tenant?.id) {
+        return res.status(403).json({ error: "Access denied" });
+      }
       if (!client.isArchived) {
         return res.status(400).json({ error: "Only archived clients can be permanently deleted" });
       }
@@ -956,6 +974,9 @@ export async function registerRoutes(
       const client = await storage.getClientById(req.params.id);
       if (!client) {
         return res.status(404).json({ error: "Client not found" });
+      }
+      if (client.tenantId !== req.tenant?.id) {
+        return res.status(403).json({ error: "Access denied" });
       }
       res.json(client);
     } catch (error) {
@@ -999,6 +1020,12 @@ export async function registerRoutes(
     try {
       // Get current client to check for status change
       const currentClient = await storage.getClientById(req.params.id);
+      if (!currentClient) {
+        return res.status(404).json({ error: "Client not found" });
+      }
+      if (currentClient.tenantId !== req.tenant?.id) {
+        return res.status(403).json({ error: "Access denied" });
+      }
       const oldStatus = currentClient?.status;
       
       // Add workflow timestamps based on status change
@@ -1158,6 +1185,10 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Missing clinicianId or slotId" });
       }
 
+      const clientToAssign = await storage.getClientById(req.params.clientId);
+      if (!clientToAssign) return res.status(404).json({ error: "Client not found" });
+      if (clientToAssign.tenantId !== req.tenant?.id) return res.status(403).json({ error: "Access denied" });
+
       await storage.assignClinicianToClient(req.params.clientId, clinicianId, slotId, allocationMethod, allocationReason);
       
       const updated = await storage.getClientById(req.params.clientId);
@@ -1174,6 +1205,10 @@ export async function registerRoutes(
       if (!status) {
         return res.status(400).json({ error: "Missing status" });
       }
+
+      const clientToReassign = await storage.getClientById(req.params.clientId);
+      if (!clientToReassign) return res.status(404).json({ error: "Client not found" });
+      if (clientToReassign.tenantId !== req.tenant?.id) return res.status(403).json({ error: "Access denied" });
 
       const updated = await storage.reassignClient(req.params.clientId, clinicianId || null, slotId || null, status);
       if (!updated) {
@@ -1193,6 +1228,9 @@ export async function registerRoutes(
   app.post("/api/clients/:id/archive", requireAdmin, auditLog("archive", "client"), async (req, res) => {
     try {
       const { reason, category } = req.body || {};
+      const clientToArchive = await storage.getClientById(req.params.id);
+      if (!clientToArchive) return res.status(404).json({ error: "Client not found" });
+      if (clientToArchive.tenantId !== req.tenant?.id) return res.status(403).json({ error: "Access denied" });
       const archived = await storage.archiveClient(req.params.id, reason, category);
       if (!archived) {
         return res.status(404).json({ error: "Client not found" });
@@ -1395,10 +1433,13 @@ export async function registerRoutes(
   // Get form submissions for a client (admin only)
   app.get("/api/clients/:id/submissions", requireAdmin, async (req, res) => {
     try {
-      // Verify client exists
+      // Verify client exists and belongs to this tenant
       const client = await storage.getClientById(req.params.id);
       if (!client) {
         return res.status(404).json({ error: "Client not found" });
+      }
+      if (client.tenantId !== req.tenant?.id) {
+        return res.status(403).json({ error: "Access denied" });
       }
 
       const submissions = await storage.getFormSubmissionsByClientId(req.params.id);
@@ -1465,6 +1506,9 @@ export async function registerRoutes(
 
   app.patch("/api/forms/:id", requireAdmin, async (req, res) => {
     try {
+      const form = await storage.getFormTemplateById(req.params.id);
+      if (!form) return res.status(404).json({ error: "Form not found" });
+      if (form.tenantId !== req.tenant?.id) return res.status(403).json({ error: "Access denied" });
       const validated = insertFormTemplateSchema.partial().parse(req.body);
       const updated = await storage.updateFormTemplate(req.params.id, validated);
       if (!updated) {
@@ -1478,6 +1522,9 @@ export async function registerRoutes(
 
   app.delete("/api/forms/:id", requireAdmin, async (req, res) => {
     try {
+      const form = await storage.getFormTemplateById(req.params.id);
+      if (!form) return res.status(404).json({ error: "Form not found" });
+      if (form.tenantId !== req.tenant?.id) return res.status(403).json({ error: "Access denied" });
       await storage.deleteFormTemplate(req.params.id);
       res.json({ success: true });
     } catch (error) {
@@ -1555,6 +1602,9 @@ export async function registerRoutes(
 
   app.patch("/api/tasks/:id", requireAdmin, async (req, res) => {
     try {
+      const task = await storage.getTaskById(req.params.id);
+      if (!task) return res.status(404).json({ error: "Task not found" });
+      if (task.tenantId !== req.tenant?.id) return res.status(403).json({ error: "Access denied" });
       // Parse dueDate string to Date object if present
       const body = { ...req.body };
       if (typeof body.dueDate === 'string') {
@@ -1572,6 +1622,9 @@ export async function registerRoutes(
 
   app.delete("/api/tasks/:id", requireAdmin, async (req, res) => {
     try {
+      const task = await storage.getTaskById(req.params.id);
+      if (!task) return res.status(404).json({ error: "Task not found" });
+      if (task.tenantId !== req.tenant?.id) return res.status(403).json({ error: "Access denied" });
       await storage.deleteTask(req.params.id);
       res.json({ success: true });
     } catch (error) {
@@ -1595,10 +1648,16 @@ export async function registerRoutes(
       if (!client) {
         return res.status(404).json({ error: "Client not found" });
       }
+      if (client.tenantId !== req.tenant?.id) {
+        return res.status(403).json({ error: "Access denied" });
+      }
 
       const form = await storage.getFormTemplateById(formId);
       if (!form) {
         return res.status(404).json({ error: "Form not found" });
+      }
+      if (form.tenantId !== req.tenant?.id) {
+        return res.status(403).json({ error: "Access denied" });
       }
 
       // Generate form URL - use request host for correct URL

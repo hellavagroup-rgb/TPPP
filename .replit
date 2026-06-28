@@ -53,6 +53,9 @@ integrations = ["javascript_database:1.0.0"]
 FROM_EMAIL = "The Perinatal Psychology Practice <noreply@notifications.unboundly.io>"
 SUPER_ADMIN_KEY = "demo-admin-2024"
 
+[userenv.production]
+GOOGLE_REDIRECT_URI = "https://psychva.co.uk/api/auth/gmail/callback"
+
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 120000

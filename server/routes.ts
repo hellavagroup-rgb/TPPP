@@ -2959,21 +2959,10 @@ export async function registerRoutes(
     }
   });
 
-  // Logo upload for a tenant
+  // Logo upload for a tenant — stored as base64 data URL in the DB so it
+  // survives container restarts and redeploys with zero filesystem dependency.
   const logoUpload = multer({
-    storage: multer.diskStorage({
-      destination: (_req, _file, cb) => {
-        // Store logos outside dist/ so they survive redeploys. process.cwd()
-        // is the workspace root, which persists across builds.
-        const dir = path.join(process.cwd(), "uploads", "logos");
-        fs.mkdirSync(dir, { recursive: true });
-        cb(null, dir);
-      },
-      filename: (req, file, cb) => {
-        const ext = path.extname(file.originalname).toLowerCase() || ".png";
-        cb(null, `${req.params.id}${ext}`);
-      },
-    }),
+    storage: multer.memoryStorage(),
     limits: { fileSize: 2 * 1024 * 1024 },
     fileFilter: (_req, file, cb) => {
       const allowed = ["image/png", "image/jpeg", "image/svg+xml", "image/gif", "image/webp"];
@@ -2984,8 +2973,8 @@ export async function registerRoutes(
   app.post("/api/super-admin/tenants/:id/logo-upload", requireSuperAdmin, logoUpload.single("logo"), async (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ error: "No file uploaded or unsupported type" });
-      const ext = path.extname(req.file.originalname).toLowerCase() || ".png";
-      const logoUrl = `/logos/${req.params.id}${ext}`;
+      const b64 = req.file.buffer.toString("base64");
+      const logoUrl = `data:${req.file.mimetype};base64,${b64}`;
       const [updated] = await db.update(tenants).set({ logoUrl }).where(eq(tenants.id, req.params.id)).returning();
       if (!updated) return res.status(404).json({ error: "Tenant not found" });
       res.json({ logoUrl });

@@ -2473,9 +2473,17 @@ export async function registerRoutes(
       }
       if (!client.email) return res.status(400).json({ error: "Client has no email address" });
 
-      const amountPence = client.agreedRatePence ?? 0;
+      let amountPence = client.agreedRatePence ?? 0;
+      if (amountPence <= 0 && client.assignedClinicianId) {
+        const assignedClinician = await storage.getClinicianById(client.assignedClinicianId);
+        if (assignedClinician?.sessionRatePence && assignedClinician.sessionRatePence > 0) {
+          amountPence = assignedClinician.sessionRatePence;
+          await db.update(clients).set({ agreedRatePence: amountPence, updatedAt: new Date() })
+            .where(eq(clients.id, clientId));
+        }
+      }
       if (amountPence <= 0) {
-        return res.status(400).json({ error: "Client has no agreed rate set. Please set the agreed rate before creating a payment link." });
+        return res.status(400).json({ error: "No rate found. Set a session rate on the client or their assigned clinician first." });
       }
 
       const appBase = process.env.APP_BASE_URL || `${req.protocol}://${req.get("host")}`;

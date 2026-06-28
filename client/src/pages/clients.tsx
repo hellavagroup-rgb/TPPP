@@ -374,6 +374,7 @@ export default function Clients() {
   // Edit Client State
   const [isEditClientOpen, setIsEditClientOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<ClientType | null>(null);
+  const [editClientRateStr, setEditClientRateStr] = useState("");
   const [editClientData, setEditClientData] = useState({
     email: "",
     phone: "",
@@ -381,7 +382,8 @@ export default function Clients() {
     referralSource: "",
     presentingIssues: [] as string[],
     notes: "",
-    status: "New" as ClientType["status"]
+    status: "New" as ClientType["status"],
+    agreedRatePence: null as number | null,
   });
 
   // Edit Status State
@@ -754,6 +756,7 @@ export default function Clients() {
 
   const handleOpenEditClient = (client: ClientType) => {
     setEditingClient(client);
+    setEditClientRateStr(client.agreedRatePence != null ? String(client.agreedRatePence / 100) : "");
     setEditClientData({
       email: client.email,
       phone: client.phone || "",
@@ -761,34 +764,41 @@ export default function Clients() {
       referralSource: client.referralSource || "",
       presentingIssues: client.presentingIssues || [],
       notes: client.notes || "",
-      status: client.status
+      status: client.status,
+      agreedRatePence: client.agreedRatePence ?? null,
     });
     setIsEditClientOpen(true);
   };
 
-  const handleSaveEditClient = () => {
+  const handleSaveEditClient = async () => {
     if (!editingClient) return;
-    updateClientMutation.mutate({
-      id: editingClient.id,
-      updates: {
-        email: editClientData.email,
-        phone: editClientData.phone || null,
-        insurer: editClientData.insurer,
-        referralSource: editClientData.referralSource,
-        presentingIssues: editClientData.presentingIssues,
-        notes: editClientData.notes || null,
-        status: editClientData.status
+    try {
+      await new Promise<void>((resolve, reject) => {
+        updateClientMutation.mutate({
+          id: editingClient.id,
+          updates: {
+            email: editClientData.email,
+            phone: editClientData.phone || null,
+            insurer: editClientData.insurer,
+            referralSource: editClientData.referralSource,
+            presentingIssues: editClientData.presentingIssues,
+            notes: editClientData.notes || null,
+            status: editClientData.status
+          }
+        }, { onSuccess: () => resolve(), onError: (e) => reject(e) });
+      });
+      if (paymentsEnabled && editClientData.agreedRatePence !== (editingClient.agreedRatePence ?? null)) {
+        await apiRequest("PATCH", `/api/clients/${editingClient.id}/agreed-rate`, {
+          agreedRatePence: editClientData.agreedRatePence ?? 0
+        });
+        queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
       }
-    }, {
-      onSuccess: () => {
-        toast({ title: "Client Updated", description: "Changes saved successfully." });
-        setIsEditClientOpen(false);
-        setEditingClient(null);
-      },
-      onError: () => {
-        toast({ title: "Error", description: "Failed to update client.", variant: "destructive" });
-      }
-    });
+      toast({ title: "Client Updated", description: "Changes saved successfully." });
+      setIsEditClientOpen(false);
+      setEditingClient(null);
+    } catch {
+      toast({ title: "Error", description: "Failed to update client.", variant: "destructive" });
+    }
   };
 
   const hasVacationConflict = (clinician: typeof clinicians[0]) => {
@@ -2115,6 +2125,33 @@ export default function Clients() {
                 })}
               />
             </div>
+
+            {paymentsEnabled && (
+              <div className="grid gap-2">
+                <Label>Session Rate (£)</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">£</span>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="e.g. 150"
+                    className="pl-7"
+                    value={editClientRateStr}
+                    onChange={(e) => {
+                      setEditClientRateStr(e.target.value);
+                      const parsed = parseFloat(e.target.value);
+                      setEditClientData({
+                        ...editClientData,
+                        agreedRatePence: e.target.value && !isNaN(parsed) ? Math.round(parsed * 100) : null,
+                      });
+                    }}
+                    data-testid="input-edit-client-rate"
+                  />
+                </div>
+                <p className="text-[10px] text-muted-foreground">Used for Stripe payment collection.</p>
+              </div>
+            )}
 
             <div className="grid gap-2">
               <Label>Notes</Label>

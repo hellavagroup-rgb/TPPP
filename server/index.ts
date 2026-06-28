@@ -129,8 +129,9 @@ app.use((req, res, next) => {
     },
   );
 
-  // Background Gmail polling — every 5 minutes for all active connections
+  // Background Gmail polling — run immediately on startup, then every 5 minutes
   const GMAIL_POLL_INTERVAL_MS = 5 * 60 * 1000;
+  syncAllActiveConnections().catch(err => log(`[gmail] initial sync error: ${err}`));
   setInterval(async () => {
     try {
       await syncAllActiveConnections();

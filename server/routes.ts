@@ -17,6 +17,7 @@ import { sendEmail, generateFormInviteEmail, generatePasswordResetEmail, generat
 import { forceReseedDatabase } from "./seed";
 import { seedDemoData } from "./seedDemo";
 import { parseIntakeEmailBody } from "./intakeParser";
+import { syncAllActiveConnections } from "./gmailSync";
 import { requireTenant } from './middleware/tenant';
 import { requireSuperAdmin } from './middleware/superAdmin';
 import { db } from "./db";
@@ -2401,25 +2402,77 @@ export async function registerRoutes(
       if (message.status !== "new") {
         return res.status(400).json({ error: "Message has already been processed" });
       }
+
       const suffix = Math.random().toString(36).toUpperCase().slice(2, 8);
       const displayId = `PENDING-${suffix}`;
       const parsed = message.extractedData as Record<string, string> | null;
-      const clientEmail = (parsed && Object.entries(parsed).find(([k]) => k.toLowerCase().includes("email"))?.[1])
-        || message.fromAddress;
-      const clientPhone = message.extractedPhone
-        || (parsed && Object.entries(parsed).find(([k]) => ["phone","telephone","mobile"].some(p => k.toLowerCase().includes(p)))?.[1])
-        || "";
-      const clientName = message.extractedName
-        || (parsed && Object.entries(parsed).find(([k]) => ["your name","name"].some(p => k.toLowerCase() === p))?.[1])
-        || null;
+
+      // Helper: search extractedData by partial label match
+      const pick = (...keys: string[]): string | undefined => {
+        if (!parsed) return undefined;
+        for (const key of keys) {
+          const found = Object.entries(parsed).find(([k]) => k.toLowerCase().includes(key.toLowerCase()));
+          if (found?.[1]?.trim()) return found[1].trim();
+        }
+        return undefined;
+      };
+
+      // Email — prefer extracted field, fall back to the From address
+      const clientEmail = pick("email") || message.fromAddress;
+
+      // Phone
+      const clientPhone = message.extractedPhone || pick("phone", "mobile", "telephone", "contact number") || "";
+
+      // Name — look for dedicated first/last fields, then fall back to full name
+      const rawFirstName = pick("first name", "forename", "given name");
+      const rawLastName = pick("last name", "surname", "family name");
+      const rawFullName = message.extractedName || pick("full name", "your name", "name");
+      let firstName: string | undefined;
+      let lastName: string | undefined;
+      if (rawFirstName || rawLastName) {
+        firstName = rawFirstName;
+        lastName = rawLastName;
+      } else if (rawFullName) {
+        const parts = rawFullName.trim().split(/\s+/);
+        firstName = parts[0];
+        lastName = parts.length > 1 ? parts.slice(1).join(" ") : undefined;
+      }
+
+      // Other mapped fields
+      const referralSource = pick("referral source", "referred by", "how did you hear", "how did you find", "source");
+      const presentingRaw = pick("presenting issue", "presenting concern", "reason for referral", "reason for contact", "what brings", "difficulty", "concern");
+      const insurerRaw = pick("insurer", "insurance company", "insurance provider", "health insurer", "private health");
+      const dobRaw = pick("date of birth", "dob", "d.o.b", "birth date");
+
+      // Build notes from the full structured data so nothing is lost
+      const notesLines: string[] = [];
+      if (rawFullName && (firstName || lastName)) notesLines.push(`Full name from enquiry: ${rawFullName}`);
+      if (parsed && Object.keys(parsed).length > 0) {
+        notesLines.push("--- Original enquiry data ---");
+        for (const [label, value] of Object.entries(parsed)) {
+          notesLines.push(`${label}: ${value}`);
+        }
+      } else if (message.body) {
+        notesLines.push("--- Original enquiry body ---");
+        notesLines.push(message.body.slice(0, 2000));
+      }
+      const notes = notesLines.join("\n").slice(0, 4000) || undefined;
+
       const [newClient] = await db.insert(clients).values({
         displayId,
         email: clientEmail,
         phone: clientPhone,
+        firstName: firstName ?? null,
+        lastName: lastName ?? null,
+        referralSource: referralSource ?? null,
+        presentingIssues: presentingRaw ? [presentingRaw] : [],
+        insurer: insurerRaw ?? null,
+        dateOfBirth: dobRaw ?? null,
         status: "New",
         tenantId: req.tenant.id,
-        ...(clientName ? { notes: `Converted from intake email. Name extracted: ${clientName}` } : {}),
+        notes: notes ?? null,
       } as any).returning();
+
       await db
         .update(intakeMessages)
         .set({ status: "linked", linkedClientId: newClient.id })
@@ -2430,6 +2483,34 @@ export async function registerRoutes(
         return res.status(409).json({ error: "A client with this email address already exists" });
       }
       res.status(500).json({ error: "Failed to convert intake message to client" });
+    }
+  });
+
+  // Get the original intake message linked to a client (if any)
+  app.get("/api/clients/:id/intake-message", requireAdmin, async (req, res) => {
+    try {
+      const client = await storage.getClientById(req.params.id);
+      if (!client) return res.status(404).json({ error: "Client not found" });
+      if (client.tenantId !== req.tenant?.id) return res.status(403).json({ error: "Access denied" });
+      const [message] = await db
+        .select()
+        .from(intakeMessages)
+        .where(and(eq(intakeMessages.linkedClientId, req.params.id), eq(intakeMessages.tenantId, req.tenant.id)))
+        .limit(1);
+      if (!message) return res.status(404).json({ error: "No linked intake message" });
+      res.json(message);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch intake message" });
+    }
+  });
+
+  // Manual Gmail sync trigger (admin only)
+  app.post("/api/gmail/sync", requireAdmin, async (req, res) => {
+    try {
+      await syncAllActiveConnections();
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to sync" });
     }
   });
 

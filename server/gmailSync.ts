@@ -253,16 +253,26 @@ export async function syncConnection(connection: {
  * Called by the background poller in server/index.ts.
  */
 export async function syncAllActiveConnections(): Promise<void> {
-  if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) return;
+  if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+    log("[gmail] skipping sync — GOOGLE_CLIENT_ID/SECRET not set");
+    return;
+  }
 
   const connections = await db
     .select()
     .from(gmailConnections)
     .where(eq(gmailConnections.isActive, true));
 
+  if (connections.length === 0) {
+    log("[gmail] no active connections to sync");
+    return;
+  }
+
+  log(`[gmail] syncing ${connections.length} active connection(s)`);
   for (const conn of connections) {
     try {
-      await syncConnection(conn);
+      const created = await syncConnection(conn);
+      log(`[gmail] ${conn.gmailAddress}: sync complete, ${created} new message(s)`);
     } catch (err) {
       log(`[gmail] sync error for ${conn.gmailAddress}: ${err}`);
     }

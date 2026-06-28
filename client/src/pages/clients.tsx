@@ -438,6 +438,33 @@ export default function Clients() {
   const [submissions, setSubmissions] = useState<any[]>([]);
   const [loadingSubmissions, setLoadingSubmissions] = useState(false);
 
+  // View Original Enquiry State
+  const [viewEnquiryClient, setViewEnquiryClient] = useState<ClientType | null>(null);
+  const [enquiryMessage, setEnquiryMessage] = useState<any | null>(null);
+  const [enquiryLoading, setEnquiryLoading] = useState(false);
+  const [enquiryError, setEnquiryError] = useState<string | null>(null);
+
+  const handleViewEnquiry = async (client: ClientType) => {
+    setViewEnquiryClient(client);
+    setEnquiryMessage(null);
+    setEnquiryError(null);
+    setEnquiryLoading(true);
+    try {
+      const res = await apiRequest("GET", `/api/clients/${client.id}/intake-message`);
+      if (res.status === 404) {
+        setEnquiryError("No original enquiry found for this client.");
+      } else if (!res.ok) {
+        setEnquiryError("Failed to load original enquiry.");
+      } else {
+        setEnquiryMessage(await res.json());
+      }
+    } catch {
+      setEnquiryError("Failed to load original enquiry.");
+    } finally {
+      setEnquiryLoading(false);
+    }
+  };
+
   const handleOpenViewResponses = async (client: ClientType) => {
     setViewResponsesClient(client);
     setIsViewResponsesOpen(true);
@@ -1265,6 +1292,9 @@ export default function Clients() {
                           <DropdownMenuItem onClick={() => handleOpenEditClient(client)}>
                             <Edit className="h-4 w-4 mr-2" /> Edit Details
                           </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleViewEnquiry(client)}>
+                            <Mail className="h-4 w-4 mr-2" /> View Original Enquiry
+                          </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => handleOpenManualAllocate(client)}>
                             <CalendarCheck className="h-4 w-4 mr-2" /> Allocate to Clinician
                           </DropdownMenuItem>
@@ -1328,6 +1358,9 @@ export default function Clients() {
                         <DropdownMenuContent align="end">
                           <DropdownMenuItem onClick={() => handleOpenEditClient(client)}>
                             <Edit className="h-4 w-4 mr-2" /> Edit Details
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleViewEnquiry(client)}>
+                            <Mail className="h-4 w-4 mr-2" /> View Original Enquiry
                           </DropdownMenuItem>
                           {formsEnabled && (
                             <DropdownMenuItem onClick={() => handleOpenSendForms(client)}>
@@ -1396,6 +1429,9 @@ export default function Clients() {
                           <DropdownMenuItem onClick={() => handleOpenEditClient(client)}>
                             <Edit className="h-4 w-4 mr-2" /> Edit Details
                           </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleViewEnquiry(client)}>
+                            <Mail className="h-4 w-4 mr-2" /> View Original Enquiry
+                          </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => handleOpenViewResponses(client)}>
                             <Eye className="h-4 w-4 mr-2" /> View Responses
                           </DropdownMenuItem>
@@ -1455,6 +1491,9 @@ export default function Clients() {
                         <DropdownMenuContent align="end">
                           <DropdownMenuItem onClick={() => handleOpenEditClient(client)}>
                             <Edit className="h-4 w-4 mr-2" /> Edit Details
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleViewEnquiry(client)}>
+                            <Mail className="h-4 w-4 mr-2" /> View Original Enquiry
                           </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => handleOpenEditStatus(client)}>
                             <CalendarCheck className="h-4 w-4 mr-2" /> Edit Status
@@ -1538,6 +1577,9 @@ export default function Clients() {
                         <DropdownMenuContent align="end">
                           <DropdownMenuItem onClick={() => handleOpenEditClient(client)}>
                             <Edit className="h-4 w-4 mr-2" /> Edit Details
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleViewEnquiry(client)}>
+                            <Mail className="h-4 w-4 mr-2" /> View Original Enquiry
                           </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => handleOpenEditStatus(client)}>
                             <CalendarCheck className="h-4 w-4 mr-2" /> Edit Status
@@ -1644,6 +1686,9 @@ export default function Clients() {
                       <DropdownMenuContent align="end">
                         <DropdownMenuItem onClick={() => handleOpenEditClient(client)}>
                           <Edit className="h-4 w-4 mr-2" /> Edit Details
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => handleViewEnquiry(client)}>
+                          <Mail className="h-4 w-4 mr-2" /> View Original Enquiry
                         </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => handleOpenEditStatus(client)}>
                           <CalendarCheck className="h-4 w-4 mr-2" /> Edit Status
@@ -2937,6 +2982,72 @@ export default function Clients() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {/* View Original Enquiry Dialog */}
+      {viewEnquiryClient && (
+        <Dialog open={!!viewEnquiryClient} onOpenChange={(v) => { if (!v) setViewEnquiryClient(null); }}>
+          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Mail className="h-4 w-4" />
+                Original Enquiry — {viewEnquiryClient.displayId}
+              </DialogTitle>
+              <DialogDescription>
+                The original intake message this client was converted from.
+              </DialogDescription>
+            </DialogHeader>
+
+            {enquiryLoading && (
+              <div className="py-8 text-center text-muted-foreground">
+                <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2" />
+                Loading enquiry…
+              </div>
+            )}
+
+            {!enquiryLoading && enquiryError && (
+              <div className="py-6 text-center text-muted-foreground text-sm">{enquiryError}</div>
+            )}
+
+            {!enquiryLoading && enquiryMessage && (
+              <>
+                <div className="text-xs text-muted-foreground mb-3">
+                  From <span className="font-medium">{enquiryMessage.fromAddress}</span>
+                  {enquiryMessage.receivedAt && (
+                    <> · {format(new Date(enquiryMessage.receivedAt), "dd MMM yyyy HH:mm")}</>
+                  )}
+                  {enquiryMessage.subject && (
+                    <> · <span className="italic">{enquiryMessage.subject}</span></>
+                  )}
+                </div>
+
+                {enquiryMessage.extractedData && Object.keys(enquiryMessage.extractedData).length >= 3 ? (
+                  <>
+                    <div className="space-y-1">
+                      {Object.entries(enquiryMessage.extractedData as Record<string, string>).map(([label, value]) => (
+                        <div key={label} className="grid grid-cols-[180px_1fr] gap-2 py-1.5 border-b border-border/50 last:border-0">
+                          <span className="text-sm font-medium text-muted-foreground">{label}</span>
+                          <span className="text-sm break-words">{value}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <details className="mt-4">
+                      <summary className="text-xs text-muted-foreground cursor-pointer select-none hover:text-foreground transition-colors">
+                        View raw email body
+                      </summary>
+                      <div className="mt-2 p-4 bg-muted rounded-md text-sm whitespace-pre-wrap leading-relaxed">
+                        {enquiryMessage.body}
+                      </div>
+                    </details>
+                  </>
+                ) : (
+                  <div className="p-4 bg-muted/50 rounded-md text-sm whitespace-pre-wrap leading-relaxed max-h-[50vh] overflow-y-auto">
+                    {enquiryMessage.body || <span className="text-muted-foreground italic">No body content</span>}
+                  </div>
+                )}
+              </>
+            )}
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }

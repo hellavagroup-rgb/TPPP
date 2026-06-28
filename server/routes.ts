@@ -510,10 +510,12 @@ export async function registerRoutes(
   });
 
   // ============ ADMIN USERS ============
-  // Get all admin users
+  // Get all admin users (scoped to current tenant)
   app.get("/api/admin-users", requireAdmin, async (req, res) => {
     try {
-      const admins = await storage.getAdminUsers();
+      const tenantId = req.tenant?.id;
+      if (!tenantId) return res.status(400).json({ error: "Tenant not found" });
+      const admins = await storage.getAdminUsersByTenantId(tenantId);
       // Strip password hashes for security
       const safeAdmins = admins.map(({ password, ...admin }) => admin);
       res.json(safeAdmins);
@@ -544,6 +546,7 @@ export async function registerRoutes(
         name,
         password: placeholderPassword,
         role: "admin",
+        tenantId: req.tenant?.id ?? null,
       });
 
       // Generate invite token (valid for 7 days)
@@ -678,6 +681,11 @@ export async function registerRoutes(
         return res.status(404).json({ error: "Admin user not found" });
       }
 
+      // Ensure the target user belongs to the same tenant
+      if (user.tenantId !== req.tenant?.id) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
       await storage.deleteUser(req.params.id);
       res.json({ success: true });
     } catch (error) {
@@ -693,6 +701,11 @@ export async function registerRoutes(
       const user = await storage.getUserById(req.params.id);
       if (!user || user.role !== "admin") {
         return res.status(404).json({ error: "Admin user not found" });
+      }
+
+      // Ensure the target user belongs to the same tenant
+      if (user.tenantId !== req.tenant?.id) {
+        return res.status(403).json({ error: "Access denied" });
       }
 
       // Validate clinician exists if provided
@@ -957,7 +970,7 @@ export async function registerRoutes(
 
       // Send new referral notification to admins with newReferrals enabled
       try {
-        const adminUsers = await storage.getAdminUsers();
+        const adminUsers = req.tenant?.id ? await storage.getAdminUsersByTenantId(req.tenant.id) : [];
         const clientName = `${validated.firstName || ''} ${validated.lastName || ''}`.trim() || 'Unknown';
         for (const admin of adminUsers) {
           const prefs = admin.notificationPrefs as { newReferrals?: boolean } | null;
@@ -1108,7 +1121,7 @@ export async function registerRoutes(
       // Send waitlist update notification if status changed
       if (req.body.status && oldStatus && req.body.status !== oldStatus) {
         try {
-          const adminUsers = await storage.getAdminUsers();
+          const adminUsers = req.tenant?.id ? await storage.getAdminUsersByTenantId(req.tenant.id) : [];
           const clientName = `${updated.firstName || ''} ${updated.lastName || ''}`.trim() || 'Unknown';
           for (const admin of adminUsers) {
             const prefs = admin.notificationPrefs as { waitlistUpdates?: boolean } | null;

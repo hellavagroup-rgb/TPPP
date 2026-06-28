@@ -70,11 +70,23 @@ export default function Clinicians() {
   const { toast } = useToast();
   const { data: rawInsurerList = [] } = useInsurers();
   const insurerList = rawInsurerList.filter(i => i !== "Private");
-  
+  const { data: tenant } = useQuery({
+    queryKey: ["/api/tenant"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/tenant");
+      if (!res.ok) return null;
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+  const paymentsEnabled = tenant?.paymentsEnabled !== false;
+
   const [selectedClinician, setSelectedClinician] = useState<ClinicianWithName | null>(null);
   const [editedClinician, setEditedClinician] = useState<Partial<ClinicianWithName & { email?: string }>>({});
+  const [editRateStr, setEditRateStr] = useState("");
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [isAddOpen, setIsAddOpen] = useState(false);
+  const [newRateStr, setNewRateStr] = useState("");
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [clinicianToDelete, setClinicianToDelete] = useState<ClinicianWithName | null>(null);
   const [newClinician, setNewClinician] = useState({
@@ -90,6 +102,7 @@ export default function Clinicians() {
     allocateForBupa: false,
     insurers: [] as string[],
     contactMethods: [] as string[],
+    sessionRatePence: null as number | null,
   });
 
   const { data: clinicians = [] } = useQuery<ClinicianWithName[]>({
@@ -140,9 +153,11 @@ export default function Clinicians() {
       queryClient.invalidateQueries({ queryKey: ["/api/clinicians"] });
       toast({ title: "Clinician Added", description: "Profile created. Use 'Generate Login' to send them credentials." });
       setIsAddOpen(false);
+      setNewRateStr("");
       setNewClinician({
         name: "", email: "", tier: "Mid", bio: "", location: "", nhsTrust: "",
         capacity: 15, maxNewClients: 3, worksWithCouples: false, allocateForBupa: false, insurers: [], contactMethods: [],
+        sessionRatePence: null,
       });
     },
     onError: (error: Error) => {
@@ -182,7 +197,9 @@ export default function Clinicians() {
       contactMethods: clinician.contactMethods || [],
       isActive: clinician.isActive !== false,
       email: clinician.email || "",
+      sessionRatePence: clinician.sessionRatePence ?? null,
     });
+    setEditRateStr(clinician.sessionRatePence != null ? String(clinician.sessionRatePence / 100) : "");
     setIsEditOpen(true);
   };
 
@@ -567,15 +584,15 @@ export default function Clinicians() {
                       step="0.01"
                       placeholder="e.g. 150"
                       className="pl-7"
-                      value={editedClinician.sessionRatePence != null
-                        ? (editedClinician.sessionRatePence / 100).toFixed(2)
-                        : selectedClinician.sessionRatePence != null
-                        ? (selectedClinician.sessionRatePence / 100).toFixed(2)
-                        : ""}
-                      onChange={(e) => setEditedClinician({
-                        ...editedClinician,
-                        sessionRatePence: e.target.value ? Math.round(parseFloat(e.target.value) * 100) : null
-                      })}
+                      value={editRateStr}
+                      onChange={(e) => {
+                        setEditRateStr(e.target.value);
+                        const parsed = parseFloat(e.target.value);
+                        setEditedClinician({
+                          ...editedClinician,
+                          sessionRatePence: e.target.value && !isNaN(parsed) ? Math.round(parsed * 100) : null,
+                        });
+                      }}
                     />
                   </div>
                   <p className="text-[10px] text-muted-foreground pt-1">
@@ -779,6 +796,36 @@ export default function Clinicians() {
               />
               <Label htmlFor="new-bupa" className="font-medium cursor-pointer">Allocate for Bupa</Label>
             </div>
+
+            {paymentsEnabled && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label>Session Rate</Label>
+                  <span className="text-xs text-muted-foreground">£ / session</span>
+                </div>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">£</span>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="e.g. 150"
+                    className="pl-7"
+                    value={newRateStr}
+                    onChange={(e) => {
+                      setNewRateStr(e.target.value);
+                      const parsed = parseFloat(e.target.value);
+                      setNewClinician({
+                        ...newClinician,
+                        sessionRatePence: e.target.value && !isNaN(parsed) ? Math.round(parsed * 100) : null,
+                      });
+                    }}
+                    data-testid="input-new-clinician-rate"
+                  />
+                </div>
+                <p className="text-[10px] text-muted-foreground">Default rate copied to clients when allocated.</p>
+              </div>
+            )}
           </div>
 
           <DialogFooter>

@@ -2500,7 +2500,18 @@ export async function registerRoutes(
         updatedAt: new Date(),
       }).where(eq(clients.id, clientId));
 
-      res.json({ url: result.url, customerId: result.customerId });
+      // Email the payment link to the client
+      let emailSent = false;
+      try {
+        const amountPounds = (amountPence / 100).toFixed(2);
+        const emailOptions = await generatePaymentLinkEmail(result.url, amountPounds);
+        const emailResult = await sendEmail({ ...emailOptions, to: client.email });
+        emailSent = emailResult.success;
+      } catch (emailError) {
+        console.error("Failed to send payment link email:", emailError);
+      }
+
+      res.json({ url: result.url, customerId: result.customerId, emailSent });
     } catch (error: any) {
       console.error("Stripe checkout error:", error?.message);
       res.status(500).json({ error: error?.message || "Failed to create checkout session" });

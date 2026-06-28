@@ -605,7 +605,12 @@ export default function Clients() {
       if (!res.ok) throw new Error(data.error || "Failed to generate link");
       setGeneratedPaymentUrl(data.url);
       queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
-      toast({ title: "Payment link created", description: "Copy the link and send it to the client." });
+      toast({
+        title: "Payment link created",
+        description: data.emailSent
+          ? "Payment link emailed to the client. You can also copy it below."
+          : "Link created — copy it below to send to the client manually.",
+      });
     } catch (err: any) {
       toast({ title: "Error", description: err.message || "Failed to create payment link", variant: "destructive" });
     } finally {

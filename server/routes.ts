@@ -13,7 +13,7 @@ import {
   insertFormTemplateSchema, insertTaskSchema, insertUserSchema 
 } from "@shared/schema";
 import { z } from "zod";
-import { sendEmail, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail } from "./email";
+import { sendEmail, buildFromAddress, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail } from "./email";
 import { forceReseedDatabase } from "./seed";
 import { seedDemoData } from "./seedDemo";
 import { parseIntakeEmailBody } from "./intakeParser";
@@ -448,19 +448,21 @@ export async function registerRoutes(
       await storage.updateUser(clinician.userId, { password: hashedPassword });
 
       // Send welcome email with credentials
+      const practiceName = req.tenant?.name || 'The Perinatal Psychology Practice';
       const emailResult = await sendEmail({
         to: user.email,
-        subject: "Your Login Credentials - The Perinatal Psychology Practice",
+        subject: `Your Login Credentials - ${practiceName}`,
+        from: buildFromAddress(req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail } : undefined),
         html: `
-          <h1>Welcome to The Perinatal Psychology Practice</h1>
+          <h1>Welcome to ${practiceName}</h1>
           <p>Hello ${user.name},</p>
           <p>Your login credentials have been generated. Here are your details:</p>
           <p><strong>Email:</strong> ${user.email}</p>
           <p><strong>Temporary Password:</strong> ${tempPassword}</p>
           <p>Please log in and change your password as soon as possible.</p>
-          <p>Best regards,<br>The Perinatal Psychology Practice Team</p>
+          <p>Best regards,<br>${practiceName} Team</p>
         `,
-        text: `Welcome to The Perinatal Psychology Practice\n\nHello ${user.name},\n\nYour login credentials have been generated.\n\nEmail: ${user.email}\nTemporary Password: ${tempPassword}\n\nPlease log in and change your password as soon as possible.`,
+        text: `Welcome to ${practiceName}\n\nHello ${user.name},\n\nYour login credentials have been generated.\n\nEmail: ${user.email}\nTemporary Password: ${tempPassword}\n\nPlease log in and change your password as soon as possible.`,
       });
 
       if (!emailResult.success) {
@@ -571,11 +573,13 @@ export async function registerRoutes(
       const inviteUrl = `${baseUrl}/accept-invite?token=${token}`;
 
       // Send invite email
+      const invitePracticeName = req.tenant?.name || 'The Perinatal Psychology Practice';
       const emailResult = await sendEmail({
         to: email,
-        subject: "You've been invited as an Admin - The Perinatal Psychology Practice",
-        html: `<p>Hello ${name},</p><p>You have been invited to join The Perinatal Psychology Practice as an administrator.</p><p>Please click the link below to set up your password and activate your account:</p><p><a href="${inviteUrl}">${inviteUrl}</a></p><p>This link will expire in 7 days.</p><p>Best regards,<br>The Perinatal Psychology Practice</p>`,
-        text: `Hello ${name},\n\nYou have been invited to join The Perinatal Psychology Practice as an administrator.\n\nPlease click the link below to set up your password and activate your account:\n${inviteUrl}\n\nThis link will expire in 7 days.\n\nBest regards,\nThe Perinatal Psychology Practice`,
+        subject: `You've been invited as an Admin - ${invitePracticeName}`,
+        from: buildFromAddress(req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail } : undefined),
+        html: `<p>Hello ${name},</p><p>You have been invited to join ${invitePracticeName} as an administrator.</p><p>Please click the link below to set up your password and activate your account:</p><p><a href="${inviteUrl}">${inviteUrl}</a></p><p>This link will expire in 7 days.</p><p>Best regards,<br>${invitePracticeName}</p>`,
+        text: `Hello ${name},\n\nYou have been invited to join ${invitePracticeName} as an administrator.\n\nPlease click the link below to set up your password and activate your account:\n${inviteUrl}\n\nThis link will expire in 7 days.\n\nBest regards,\n${invitePracticeName}`,
       });
 
       if (!emailResult.success) {
@@ -997,11 +1001,9 @@ export async function registerRoutes(
         for (const admin of adminUsers) {
           const prefs = admin.notificationPrefs as { newReferrals?: boolean } | null;
           if (prefs?.newReferrals !== false) {
-            const emailOptions = await generateNewReferralEmail(client.displayId, clientName);
-            await sendEmail({
-              ...emailOptions,
-              to: admin.email
-            });
+            const tc = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail } : undefined;
+            const emailOptions = await generateNewReferralEmail(client.displayId, clientName, tc);
+            await sendEmail({ ...emailOptions, to: admin.email });
           }
         }
       } catch (emailError) {
@@ -1149,7 +1151,8 @@ export async function registerRoutes(
 
               // Email the payment link to the client
               const amountPounds = (amountPence / 100).toFixed(2);
-              const emailOptions = await generatePaymentLinkEmail(checkoutResult.url, amountPounds);
+              const tcAuto = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail } : undefined;
+              const emailOptions = await generatePaymentLinkEmail(checkoutResult.url, amountPounds, tcAuto);
               await sendEmail({ ...emailOptions, to: updated.email });
               console.log(`Auto-generated payment link and emailed to client ${updated.id}`);
             }
@@ -1167,16 +1170,15 @@ export async function registerRoutes(
           for (const admin of adminUsers) {
             const prefs = admin.notificationPrefs as { waitlistUpdates?: boolean } | null;
             if (prefs?.waitlistUpdates !== false) {
+              const tcW = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail } : undefined;
               const emailOptions = await generateWaitlistUpdateEmail(
                 updated.displayId,
                 clientName,
                 oldStatus,
-                req.body.status
+                req.body.status,
+                tcW
               );
-              await sendEmail({
-                ...emailOptions,
-                to: admin.email
-              });
+              await sendEmail({ ...emailOptions, to: admin.email });
             }
           }
         } catch (emailError) {
@@ -1351,7 +1353,9 @@ export async function registerRoutes(
       // Send confirmation email to client if they have an email address
       if (client.email) {
         try {
-          const emailOptions = await generateFormCompletionEmail();
+          const completionTenant = client.tenantId ? await storage.getTenantById(client.tenantId) : null;
+          const tcC = completionTenant ? { id: completionTenant.id, name: completionTenant.name, fromEmail: completionTenant.fromEmail } : undefined;
+          const emailOptions = await generateFormCompletionEmail(tcC);
           emailOptions.to = client.email;
           await sendEmail(emailOptions);
           console.log(`Form completion email sent to client ${clientId}`);
@@ -1586,11 +1590,13 @@ export async function registerRoutes(
               const dueDateStr = validated.dueDate ? 
                 new Date(validated.dueDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 
                 'Not specified';
+              const tcT = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail } : undefined;
               const emailOptions = await generateTaskReminderEmail(
                 assigneeUser.name,
                 validated.title,
                 validated.description || '',
-                dueDateStr
+                dueDateStr,
+                tcT
               );
               console.log(`Task notification: sending email to ${assigneeUser.email}`);
               const result = await sendEmail({
@@ -1681,7 +1687,8 @@ export async function registerRoutes(
       const formUrl = `${baseUrl}/fill/${client.id}/${formId}`;
 
       // Generate and send email
-      const emailOptions = await generateFormInviteEmail(form.title, formUrl);
+      const tcF = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail } : undefined;
+      const emailOptions = await generateFormInviteEmail(form.title, formUrl, tcF);
       emailOptions.to = client.email;
 
       const result = await sendEmail(emailOptions);
@@ -1714,11 +1721,13 @@ export async function registerRoutes(
         return res.status(404).json({ error: "Task not found" });
       }
 
+      const tcTR = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail } : undefined;
       const emailOptions = await generateTaskReminderEmail(
         task.assignee,
         task.title,
         task.description || '',
-        task.dueDate instanceof Date ? task.dueDate.toLocaleDateString() : task.dueDate
+        task.dueDate instanceof Date ? task.dueDate.toLocaleDateString() : task.dueDate,
+        tcTR
       );
       emailOptions.to = recipientEmail;
 
@@ -1764,7 +1773,8 @@ export async function registerRoutes(
           continue;
         }
 
-        const emailOptions = await generateAvailabilityReminderEmail(user.name, loginUrl);
+        const tcA = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail } : undefined;
+        const emailOptions = await generateAvailabilityReminderEmail(user.name, loginUrl, tcA);
         emailOptions.to = user.email;
 
         const result = await sendEmail(emailOptions);
@@ -1847,7 +1857,9 @@ export async function registerRoutes(
       const baseUrl = `${protocol}://${host}`;
       const resetUrl = `${baseUrl}/reset-password?token=${resetToken}`;
 
-      const emailOptions = await generatePasswordResetEmail(user.name, resetUrl);
+      const resetTenant = user.tenantId ? await storage.getTenantById(user.tenantId) : null;
+      const tcPR = resetTenant ? { id: resetTenant.id, name: resetTenant.name, fromEmail: resetTenant.fromEmail } : undefined;
+      const emailOptions = await generatePasswordResetEmail(user.name, resetUrl, tcPR);
       emailOptions.to = user.email;
 
       const result = await sendEmail(emailOptions);
@@ -2678,7 +2690,8 @@ export async function registerRoutes(
       let emailSent = false;
       try {
         const amountPounds = (amountPence / 100).toFixed(2);
-        const emailOptions = await generatePaymentLinkEmail(result.url, amountPounds);
+        const tcPL = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail } : undefined;
+        const emailOptions = await generatePaymentLinkEmail(result.url, amountPounds, tcPL);
         const emailResult = await sendEmail({ ...emailOptions, to: client.email });
         emailSent = emailResult.success;
       } catch (emailError) {
@@ -2863,7 +2876,9 @@ export async function registerRoutes(
                 if (adminUsers.length > 0) {
                   const clientName = `${client.firstName || ''} ${client.lastName || ''}`.trim() || 'Unknown';
                   const amountPounds = charge.amountPence ? (charge.amountPence / 100).toFixed(2) : '0.00';
-                  const emailOptions = generatePaymentFailureEmail(client.displayId, clientName, amountPounds, failureReason);
+                  const failTenant = await storage.getTenantById(client.tenantId).catch(() => null);
+                  const tcFail = failTenant ? { id: failTenant.id, name: failTenant.name, fromEmail: failTenant.fromEmail } : undefined;
+                  const emailOptions = generatePaymentFailureEmail(client.displayId, clientName, amountPounds, failureReason, tcFail);
                   for (const admin of adminUsers) {
                     await sendEmail({ ...emailOptions, to: admin.email });
                   }
@@ -2887,7 +2902,9 @@ export async function registerRoutes(
                 if (adminUsers.length > 0) {
                   const clientName = `${client.firstName || ''} ${client.lastName || ''}`.trim() || 'Unknown';
                   const amountPounds = pi.amount ? (pi.amount / 100).toFixed(2) : '0.00';
-                  const emailOptions = generatePaymentFailureEmail(client.displayId, clientName, amountPounds, failureReason);
+                  const failTenant2 = await storage.getTenantById(piTenantId).catch(() => null);
+                  const tcFail2 = failTenant2 ? { id: failTenant2.id, name: failTenant2.name, fromEmail: failTenant2.fromEmail } : undefined;
+                  const emailOptions = generatePaymentFailureEmail(client.displayId, clientName, amountPounds, failureReason, tcFail2);
                   for (const admin of adminUsers) {
                     await sendEmail({ ...emailOptions, to: admin.email });
                   }

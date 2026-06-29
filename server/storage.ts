@@ -99,8 +99,9 @@ export interface IStorage {
 
   // ============ EMAIL TEMPLATES ============
   getAllEmailTemplates(tenantId?: string | null): Promise<EmailTemplate[]>;
-  getEmailTemplateByKey(templateKey: string): Promise<EmailTemplate | undefined>;
+  getEmailTemplateByKey(templateKey: string, tenantId?: string | null): Promise<EmailTemplate | undefined>;
   upsertEmailTemplate(template: InsertEmailTemplate & { tenantId?: string | null }): Promise<EmailTemplate>;
+  getTenantById(id: string): Promise<Tenant | undefined>;
 
   // ============ NON-ENGAGEMENT CATEGORIES ============
   getAllNonEngagementCategories(tenantId?: string | null): Promise<NonEngagementCategory[]>;
@@ -818,9 +819,24 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(emailTemplates).where(tenantId ? eq(emailTemplates.tenantId, tenantId) : undefined);
   }
 
-  async getEmailTemplateByKey(templateKey: string): Promise<EmailTemplate | undefined> {
+  async getEmailTemplateByKey(templateKey: string, tenantId?: string | null): Promise<EmailTemplate | undefined> {
+    if (tenantId) {
+      // Try tenant-specific template first
+      const [tenantTemplate] = await db.select().from(emailTemplates)
+        .where(and(eq(emailTemplates.templateKey, templateKey), eq(emailTemplates.tenantId, tenantId)));
+      if (tenantTemplate) return tenantTemplate;
+      // Fall back to global (null tenantId)
+      const [globalTemplate] = await db.select().from(emailTemplates)
+        .where(and(eq(emailTemplates.templateKey, templateKey), isNull(emailTemplates.tenantId)));
+      return globalTemplate || undefined;
+    }
     const [template] = await db.select().from(emailTemplates).where(eq(emailTemplates.templateKey, templateKey));
     return template || undefined;
+  }
+
+  async getTenantById(id: string): Promise<Tenant | undefined> {
+    const [tenant] = await db.select().from(tenants).where(eq(tenants.id, id));
+    return tenant || undefined;
   }
 
   async upsertEmailTemplate(template: InsertEmailTemplate & { tenantId?: string | null }): Promise<EmailTemplate> {

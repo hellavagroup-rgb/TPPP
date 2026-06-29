@@ -12,11 +12,31 @@ function getResend(): Resend {
   return resend;
 }
 
-// From address - defaults to Resend sandbox for testing, should be set to verified domain in production
-const FROM_EMAIL = process.env.FROM_EMAIL || 'The Perinatal Psychology Practice <onboarding@resend.dev>';
+export interface TenantContext {
+  id: string;
+  name: string;
+  fromEmail?: string | null;
+}
 
-// Helper to wrap plain text in HTML email template
-function wrapInHtmlTemplate(text: string, headerTitle?: string): string {
+export interface EmailOptions {
+  to: string;
+  subject: string;
+  html: string;
+  text?: string;
+  from?: string;
+}
+
+export function buildFromAddress(tenant?: TenantContext): string {
+  if (tenant?.fromEmail) return tenant.fromEmail;
+  const envFrom = process.env.FROM_EMAIL || 'onboarding@resend.dev';
+  const emailMatch = envFrom.match(/<(.+)>/);
+  const emailAddress = emailMatch ? emailMatch[1] : envFrom;
+  const displayName = tenant?.name || 'The Perinatal Psychology Practice';
+  return `${displayName} <${emailAddress}>`;
+}
+
+function wrapInHtmlTemplate(text: string, headerTitle?: string, practiceName?: string): string {
+  const footer = practiceName || 'The Perinatal Psychology Practice';
   const lines = text.split('\n').map(line => line ? `<p>${line}</p>` : '<br>').join('\n');
   return `
     <!DOCTYPE html>
@@ -39,7 +59,7 @@ function wrapInHtmlTemplate(text: string, headerTitle?: string): string {
             ${lines}
           </div>
           <div class="footer">
-            <p>The Perinatal Psychology Practice</p>
+            <p>${footer}</p>
           </div>
         </div>
       </body>
@@ -47,7 +67,6 @@ function wrapInHtmlTemplate(text: string, headerTitle?: string): string {
   `;
 }
 
-// Helper to replace placeholders in template text
 function replacePlaceholders(text: string, placeholders: Record<string, string>): string {
   let result = text;
   for (const [key, value] of Object.entries(placeholders)) {
@@ -56,10 +75,9 @@ function replacePlaceholders(text: string, placeholders: Record<string, string>)
   return result;
 }
 
-// Async helper to get template from DB or return null
-async function getStoredTemplate(templateKey: string): Promise<{ subject: string; bodyText: string } | null> {
+async function getStoredTemplate(templateKey: string, tenantId?: string | null): Promise<{ subject: string; bodyText: string } | null> {
   try {
-    const template = await storage.getEmailTemplateByKey(templateKey);
+    const template = await storage.getEmailTemplateByKey(templateKey, tenantId);
     return template ? { subject: template.subject, bodyText: template.bodyText } : null;
   } catch (error) {
     console.error(`Error fetching email template ${templateKey}:`, error);
@@ -67,17 +85,11 @@ async function getStoredTemplate(templateKey: string): Promise<{ subject: string
   }
 }
 
-export interface EmailOptions {
-  to: string;
-  subject: string;
-  html: string;
-  text?: string;
-}
-
 export async function sendEmail(options: EmailOptions): Promise<{ success: boolean; error?: string }> {
   try {
+    const from = options.from || buildFromAddress();
     const { data, error } = await getResend().emails.send({
-      from: FROM_EMAIL,
+      from,
       to: options.to,
       subject: options.subject,
       html: options.html,
@@ -99,9 +111,10 @@ export async function sendEmail(options: EmailOptions): Promise<{ success: boole
 
 // ============ EMAIL TEMPLATES ============
 
-export async function generateFormInviteEmail(formName: string, formUrl: string): Promise<EmailOptions> {
-  const storedTemplate = await getStoredTemplate('form_invite');
-  
+export async function generateFormInviteEmail(formName: string, formUrl: string, tenant?: TenantContext): Promise<EmailOptions> {
+  const practiceName = tenant?.name || 'The Perinatal Psychology Practice';
+  const storedTemplate = await getStoredTemplate('form_invite', tenant?.id);
+
   if (storedTemplate) {
     const placeholders = { form_name: formName, form_link: formUrl };
     const bodyText = replacePlaceholders(storedTemplate.bodyText, placeholders);
@@ -109,14 +122,15 @@ export async function generateFormInviteEmail(formName: string, formUrl: string)
     return {
       to: '',
       subject,
-      html: wrapInHtmlTemplate(bodyText, 'The Perinatal Psychology Practice'),
+      html: wrapInHtmlTemplate(bodyText, practiceName, practiceName),
       text: bodyText,
+      from: buildFromAddress(tenant),
     };
   }
 
   return {
-    to: '', // Will be set by caller
-    subject: `Please Complete: ${formName} - The Perinatal Psychology Practice`,
+    to: '',
+    subject: `Please Complete: ${formName} - ${practiceName}`,
     html: `
       <!DOCTYPE html>
       <html>
@@ -134,7 +148,7 @@ export async function generateFormInviteEmail(formName: string, formUrl: string)
         <body>
           <div class="container">
             <div class="header">
-              <h1>The Perinatal Psychology Practice</h1>
+              <h1>${practiceName}</h1>
             </div>
             <div class="content">
               <p>Dear Client,</p>
@@ -147,22 +161,24 @@ export async function generateFormInviteEmail(formName: string, formUrl: string)
               <p>If the button doesn't work, copy and paste this link into your browser:</p>
               <p style="word-break: break-all; font-size: 12px; color: #666;">${formUrl}</p>
               <p>If you have any questions, please don't hesitate to contact us.</p>
-              <p>Best regards,<br>The Perinatal Psychology Practice Team</p>
+              <p>Best regards,<br>${practiceName} Team</p>
             </div>
             <div class="footer">
-              <p>This email was sent by The Perinatal Psychology Practice. Please do not reply directly to this email.</p>
+              <p>This email was sent by ${practiceName}. Please do not reply directly to this email.</p>
             </div>
           </div>
         </body>
       </html>
     `,
-    text: `Dear Client,\n\nPlease complete the following form: ${formName}\n\nAccess it here: ${formUrl}\n\nBest regards,\nThe Perinatal Psychology Practice Team`,
+    text: `Dear Client,\n\nPlease complete the following form: ${formName}\n\nAccess it here: ${formUrl}\n\nBest regards,\n${practiceName} Team`,
+    from: buildFromAddress(tenant),
   };
 }
 
-export async function generatePasswordResetEmail(userName: string, resetUrl: string): Promise<EmailOptions> {
-  const storedTemplate = await getStoredTemplate('password_reset');
-  
+export async function generatePasswordResetEmail(userName: string, resetUrl: string, tenant?: TenantContext): Promise<EmailOptions> {
+  const practiceName = tenant?.name || 'The Perinatal Psychology Practice';
+  const storedTemplate = await getStoredTemplate('password_reset', tenant?.id);
+
   if (storedTemplate) {
     const placeholders = { name: userName, reset_link: resetUrl };
     const bodyText = replacePlaceholders(storedTemplate.bodyText, placeholders);
@@ -170,14 +186,15 @@ export async function generatePasswordResetEmail(userName: string, resetUrl: str
     return {
       to: '',
       subject,
-      html: wrapInHtmlTemplate(bodyText, 'Password Reset'),
+      html: wrapInHtmlTemplate(bodyText, 'Password Reset', practiceName),
       text: bodyText,
+      from: buildFromAddress(tenant),
     };
   }
 
   return {
-    to: '', // Will be set by caller
-    subject: 'Password Reset - The Perinatal Psychology Practice',
+    to: '',
+    subject: `Password Reset - ${practiceName}`,
     html: `
       <!DOCTYPE html>
       <html>
@@ -211,38 +228,41 @@ export async function generatePasswordResetEmail(userName: string, resetUrl: str
               <p style="word-break: break-all; font-size: 12px; color: #666;">${resetUrl}</p>
             </div>
             <div class="footer">
-              <p>The Perinatal Psychology Practice</p>
+              <p>${practiceName}</p>
             </div>
           </div>
         </body>
       </html>
     `,
-    text: `Hello ${userName},\n\nWe received a request to reset your password.\n\nReset your password here: ${resetUrl}\n\nThis link will expire in 1 hour. If you didn't request this reset, please ignore this email.\n\nThe Perinatal Psychology Practice`,
+    text: `Hello ${userName},\n\nWe received a request to reset your password.\n\nReset your password here: ${resetUrl}\n\nThis link will expire in 1 hour. If you didn't request this reset, please ignore this email.\n\n${practiceName}`,
+    from: buildFromAddress(tenant),
   };
 }
 
-export async function generateTaskReminderEmail(assigneeName: string, taskTitle: string, taskDescription: string, dueDate: string): Promise<EmailOptions> {
-  const storedTemplate = await getStoredTemplate('task_reminder');
-  
+export async function generateTaskReminderEmail(assigneeName: string, taskTitle: string, taskDescription: string, dueDate: string, tenant?: TenantContext): Promise<EmailOptions> {
+  const practiceName = tenant?.name || 'The Perinatal Psychology Practice';
+  const storedTemplate = await getStoredTemplate('task_reminder', tenant?.id);
+
   if (storedTemplate) {
-    const placeholders = { 
-      name: assigneeName, 
-      task_title: taskTitle, 
-      task_description: taskDescription, 
-      due_date: dueDate 
+    const placeholders = {
+      name: assigneeName,
+      task_title: taskTitle,
+      task_description: taskDescription,
+      due_date: dueDate
     };
     const bodyText = replacePlaceholders(storedTemplate.bodyText, placeholders);
     const subject = replacePlaceholders(storedTemplate.subject, placeholders);
     return {
       to: '',
       subject,
-      html: wrapInHtmlTemplate(bodyText, 'Task Reminder'),
+      html: wrapInHtmlTemplate(bodyText, 'Task Reminder', practiceName),
       text: bodyText,
+      from: buildFromAddress(tenant),
     };
   }
 
   return {
-    to: '', // Will be set by caller
+    to: '',
     subject: `Task Reminder: ${taskTitle} - Due ${dueDate}`,
     html: `
       <!DOCTYPE html>
@@ -275,19 +295,21 @@ export async function generateTaskReminderEmail(assigneeName: string, taskTitle:
               <p>Please log in to the practice management system to view and complete this task.</p>
             </div>
             <div class="footer">
-              <p>The Perinatal Psychology Practice</p>
+              <p>${practiceName}</p>
             </div>
           </div>
         </body>
       </html>
     `,
-    text: `Hello ${assigneeName},\n\nThis is a reminder about an upcoming task:\n\nTask: ${taskTitle}\nDescription: ${taskDescription}\nDue: ${dueDate}\n\nPlease log in to complete this task.\n\nThe Perinatal Psychology Practice`,
+    text: `Hello ${assigneeName},\n\nThis is a reminder about an upcoming task:\n\nTask: ${taskTitle}\nDescription: ${taskDescription}\nDue: ${dueDate}\n\nPlease log in to complete this task.\n\n${practiceName}`,
+    from: buildFromAddress(tenant),
   };
 }
 
-export async function generateAvailabilityReminderEmail(clinicianName: string, loginUrl: string): Promise<EmailOptions> {
-  const storedTemplate = await getStoredTemplate('availability_reminder');
-  
+export async function generateAvailabilityReminderEmail(clinicianName: string, loginUrl: string, tenant?: TenantContext): Promise<EmailOptions> {
+  const practiceName = tenant?.name || 'The Perinatal Psychology Practice';
+  const storedTemplate = await getStoredTemplate('availability_reminder', tenant?.id);
+
   if (storedTemplate) {
     const placeholders = { name: clinicianName, login_link: loginUrl };
     const bodyText = replacePlaceholders(storedTemplate.bodyText, placeholders);
@@ -295,14 +317,15 @@ export async function generateAvailabilityReminderEmail(clinicianName: string, l
     return {
       to: '',
       subject,
-      html: wrapInHtmlTemplate(bodyText, 'Availability Update Request'),
+      html: wrapInHtmlTemplate(bodyText, 'Availability Update Request', practiceName),
       text: bodyText,
+      from: buildFromAddress(tenant),
     };
   }
 
   return {
     to: '',
-    subject: `Please Update Your Availability - The Perinatal Psychology Practice`,
+    subject: `Please Update Your Availability - ${practiceName}`,
     html: `
       <!DOCTYPE html>
       <html>
@@ -332,114 +355,57 @@ export async function generateAvailabilityReminderEmail(clinicianName: string, l
               <p>If the button doesn't work, copy and paste this link into your browser:</p>
               <p style="word-break: break-all; font-size: 12px; color: #666;">${loginUrl}</p>
               <p>Thank you for your cooperation!</p>
-              <p>Best regards,<br>The Perinatal Psychology Practice</p>
+              <p>Best regards,<br>${practiceName}</p>
             </div>
             <div class="footer">
-              <p>The Perinatal Psychology Practice</p>
+              <p>${practiceName}</p>
             </div>
           </div>
         </body>
       </html>
     `,
-    text: `Hello ${clinicianName},\n\nThis is a friendly reminder to update your availability in the practice management system.\n\nPlease log in at: ${loginUrl}\n\nKeeping your availability current helps us efficiently allocate new clients.\n\nThank you!\nThe Perinatal Psychology Practice`,
+    text: `Hello ${clinicianName},\n\nThis is a friendly reminder to update your availability in the practice management system.\n\nPlease log in at: ${loginUrl}\n\nKeeping your availability current helps us efficiently allocate new clients.\n\nThank you!\n${practiceName}`,
+    from: buildFromAddress(tenant),
   };
 }
 
-export async function generateFormCompletionEmail(): Promise<EmailOptions> {
-  const storedTemplate = await getStoredTemplate('form_completion');
-  
+export async function generateFormCompletionEmail(tenant?: TenantContext): Promise<EmailOptions> {
+  const practiceName = tenant?.name || 'The Perinatal Psychology Practice';
+  const storedTemplate = await getStoredTemplate('form_completion', tenant?.id);
+
   if (storedTemplate) {
     return {
       to: '',
       subject: storedTemplate.subject,
-      html: wrapInHtmlTemplate(storedTemplate.bodyText, 'Thank You'),
+      html: wrapInHtmlTemplate(storedTemplate.bodyText, 'Thank You', practiceName),
       text: storedTemplate.bodyText,
+      from: buildFromAddress(tenant),
     };
   }
 
   const defaultBodyText = `Thank you for completing our intake form. We know that sharing this information can sometimes feel difficult, and we really appreciate you taking the time to share it with us.
 
-One of our senior clinicians will carefully review the information you've shared within 2-3 working days. Your form helps us to:
-
-Better understand what you are experiencing and what support you might need
-
-Take into account any preferences or adjustments that would help you feel comfortable in therapy
-
-Recommend a Clinical or Counselling Psychologist whose experience and availability best fits what you're looking for
-
-All of our clinicians are HCPC registered Psychologists with specialist expertise in perinatal mental health, and we take care to make thoughtful, individualised recommendations.
+One of our senior clinicians will carefully review the information you've shared within 2-3 working days.
 
 Once your form has been reviewed, we'll be in touch with next steps.
 
-If you have any questions in the meantime, please don't hesitate to contact us at pa@perinatalpsychologypractice.co.uk.
-
 Warm regards,
 
-The Perinatal Psychology Practice Team
-
-
-If you need urgent support, please contact your GP or a trusted healthcare provider. In the UK, you can also receive immediate support from: the Samaritans (Call 116 123 lines open 24/7 365 days a year or email jo@samaritans.org); or contact CALM (https://www.thecalmzone.net/) on their national helpline 0800 585858 (5pm to midnight).`;
+${practiceName} Team`;
 
   return {
     to: '',
-    subject: 'Thank You for Completing Your Intake Form - The Perinatal Psychology Practice',
-    html: `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="utf-8">
-          <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }
-            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-            .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
-            .content { background: #f8f9fa; padding: 30px; border-radius: 0 0 8px 8px; }
-            .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
-            .urgent-support { background: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 6px; margin-top: 20px; font-size: 13px; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <div class="header">
-              <h1>Thank You</h1>
-            </div>
-            <div class="content">
-              <p>Thank you for completing our intake form. We know that sharing this information can sometimes feel difficult, and we really appreciate you taking the time to share it with us.</p>
-              
-              <p>One of our senior clinicians will carefully review the information you've shared within 2-3 working days. Your form helps us to:</p>
-              
-              <ul>
-                <li>Better understand what you are experiencing and what support you might need</li>
-                <li>Take into account any preferences or adjustments that would help you feel comfortable in therapy</li>
-                <li>Recommend a Clinical or Counselling Psychologist whose experience and availability best fits what you're looking for</li>
-              </ul>
-              
-              <p>All of our clinicians are HCPC registered Psychologists with specialist expertise in perinatal mental health, and we take care to make thoughtful, individualised recommendations.</p>
-              
-              <p>Once your form has been reviewed, we'll be in touch with next steps.</p>
-              
-              <p>If you have any questions in the meantime, please don't hesitate to contact us at <a href="mailto:pa@perinatalpsychologypractice.co.uk">pa@perinatalpsychologypractice.co.uk</a>.</p>
-              
-              <p>Warm regards,</p>
-              <p><strong>The Perinatal Psychology Practice Team</strong></p>
-              
-              <div class="urgent-support">
-                <strong>If you need urgent support</strong>, please contact your GP or a trusted healthcare provider. In the UK, you can also receive immediate support from: the Samaritans (Call 116 123, lines open 24/7 365 days a year, or email <a href="mailto:jo@samaritans.org">jo@samaritans.org</a>); or contact CALM (<a href="https://www.thecalmzone.net/">https://www.thecalmzone.net/</a>) on their national helpline 0800 585858 (5pm to midnight).
-              </div>
-            </div>
-            <div class="footer">
-              <p>The Perinatal Psychology Practice</p>
-            </div>
-          </div>
-        </body>
-      </html>
-    `,
+    subject: `Thank You for Completing Your Intake Form - ${practiceName}`,
+    html: wrapInHtmlTemplate(defaultBodyText, 'Thank You', practiceName),
     text: defaultBodyText,
+    from: buildFromAddress(tenant),
   };
 }
 
-export async function generateNewReferralEmail(clientDisplayId: string, clientName: string): Promise<EmailOptions> {
-  const storedTemplate = await getStoredTemplate('new_referral');
-  
+export async function generateNewReferralEmail(clientDisplayId: string, clientName: string, tenant?: TenantContext): Promise<EmailOptions> {
+  const practiceName = tenant?.name || 'The Perinatal Psychology Practice';
+  const storedTemplate = await getStoredTemplate('new_referral', tenant?.id);
+
   if (storedTemplate) {
     const bodyText = storedTemplate.bodyText
       .replace(/\{\{clientDisplayId\}\}/g, clientDisplayId)
@@ -447,24 +413,27 @@ export async function generateNewReferralEmail(clientDisplayId: string, clientNa
     return {
       to: '',
       subject: storedTemplate.subject.replace(/\{\{clientDisplayId\}\}/g, clientDisplayId),
-      html: wrapInHtmlTemplate(bodyText, 'New Referral'),
+      html: wrapInHtmlTemplate(bodyText, 'New Referral', practiceName),
       text: bodyText,
+      from: buildFromAddress(tenant),
     };
   }
 
-  const bodyText = `A new client referral has been received.\n\nClient ID: ${clientDisplayId}\nName: ${clientName}\n\nPlease log in to the practice management system to review and process this referral.\n\nThe Perinatal Psychology Practice`;
+  const bodyText = `A new client referral has been received.\n\nClient ID: ${clientDisplayId}\nName: ${clientName}\n\nPlease log in to the practice management system to review and process this referral.\n\n${practiceName}`;
 
   return {
     to: '',
     subject: `New Referral Received - ${clientDisplayId}`,
-    html: wrapInHtmlTemplate(bodyText, 'New Referral'),
+    html: wrapInHtmlTemplate(bodyText, 'New Referral', practiceName),
     text: bodyText,
+    from: buildFromAddress(tenant),
   };
 }
 
-export async function generateWaitlistUpdateEmail(clientDisplayId: string, clientName: string, oldStatus: string, newStatus: string): Promise<EmailOptions> {
-  const storedTemplate = await getStoredTemplate('waitlist_update');
-  
+export async function generateWaitlistUpdateEmail(clientDisplayId: string, clientName: string, oldStatus: string, newStatus: string, tenant?: TenantContext): Promise<EmailOptions> {
+  const practiceName = tenant?.name || 'The Perinatal Psychology Practice';
+  const storedTemplate = await getStoredTemplate('waitlist_update', tenant?.id);
+
   if (storedTemplate) {
     const bodyText = storedTemplate.bodyText
       .replace(/\{\{clientDisplayId\}\}/g, clientDisplayId)
@@ -474,27 +443,30 @@ export async function generateWaitlistUpdateEmail(clientDisplayId: string, clien
     return {
       to: '',
       subject: storedTemplate.subject.replace(/\{\{clientDisplayId\}\}/g, clientDisplayId),
-      html: wrapInHtmlTemplate(bodyText, 'Waitlist Update'),
+      html: wrapInHtmlTemplate(bodyText, 'Waitlist Update', practiceName),
       text: bodyText,
+      from: buildFromAddress(tenant),
     };
   }
 
-  const bodyText = `A client's status has been updated.\n\nClient ID: ${clientDisplayId}\nName: ${clientName}\nPrevious Status: ${oldStatus}\nNew Status: ${newStatus}\n\nPlease log in to the practice management system to review this update.\n\nThe Perinatal Psychology Practice`;
+  const bodyText = `A client's status has been updated.\n\nClient ID: ${clientDisplayId}\nName: ${clientName}\nPrevious Status: ${oldStatus}\nNew Status: ${newStatus}\n\nPlease log in to the practice management system to review this update.\n\n${practiceName}`;
 
   return {
     to: '',
     subject: `Client Status Updated - ${clientDisplayId}`,
-    html: wrapInHtmlTemplate(bodyText, 'Waitlist Update'),
+    html: wrapInHtmlTemplate(bodyText, 'Waitlist Update', practiceName),
     text: bodyText,
+    from: buildFromAddress(tenant),
   };
 }
 
-export async function generatePaymentLinkEmail(paymentUrl: string, amountPounds: string): Promise<EmailOptions> {
-  const storedTemplate = await getStoredTemplate('payment_link');
+export async function generatePaymentLinkEmail(paymentUrl: string, amountPounds: string, tenant?: TenantContext): Promise<EmailOptions> {
+  const practiceName = tenant?.name || 'The Perinatal Psychology Practice';
+  const storedTemplate = await getStoredTemplate('payment_link', tenant?.id);
 
   const subject = storedTemplate
     ? storedTemplate.subject
-    : 'Your Session Payment Link - The Perinatal Psychology Practice';
+    : `Your Session Payment Link - ${practiceName}`;
 
   const rawBody = storedTemplate
     ? storedTemplate.bodyText
@@ -509,7 +481,7 @@ Your card details will be saved securely so that future session payments can be 
 If you have any questions, please don't hesitate to contact us.
 
 Warm regards,
-The Perinatal Psychology Practice Team`;
+${practiceName} Team`;
 
   const bodyText = rawBody
     .replace(/\{\{amount\}\}/g, amountPounds)
@@ -535,17 +507,18 @@ The Perinatal Psychology Practice Team`;
         <p>${bodyText.replace(/\n/g, '<br>')}</p>
         <p style="text-align:center;"><a href="${paymentUrl}" class="pay-button">Pay Securely Now</a></p>
       </div>
-      <div class="footer">The Perinatal Psychology Practice</div>
+      <div class="footer">${practiceName}</div>
     </div>
   </body>
 </html>`;
 
-  return { to: '', subject, html, text: bodyText };
+  return { to: '', subject, html, text: bodyText, from: buildFromAddress(tenant) };
 }
 
-export function generatePaymentFailureEmail(clientDisplayId: string, clientName: string, amountPounds: string, failureReason: string): EmailOptions {
+export function generatePaymentFailureEmail(clientDisplayId: string, clientName: string, amountPounds: string, failureReason: string, tenant?: TenantContext): EmailOptions {
+  const practiceName = tenant?.name || 'The Perinatal Psychology Practice';
   const subject = `Payment Failed – ${clientDisplayId}`;
-  const bodyText = `A payment has failed for a client.\n\nClient ID: ${clientDisplayId}\nClient Name: ${clientName}\nAmount: £${amountPounds}\nReason: ${failureReason}\n\nPlease log in to the practice management system to review this client's payment status and take action if required.\n\nThe Perinatal Psychology Practice`;
+  const bodyText = `A payment has failed for a client.\n\nClient ID: ${clientDisplayId}\nClient Name: ${clientName}\nAmount: £${amountPounds}\nReason: ${failureReason}\n\nPlease log in to the practice management system to review this client's payment status and take action if required.\n\n${practiceName}`;
   const html = `<!DOCTYPE html>
 <html>
   <head>
@@ -571,9 +544,9 @@ export function generatePaymentFailureEmail(clientDisplayId: string, clientName:
         <div class="detail-row"><span class="label">Failure Reason:</span> ${failureReason}</div>
         <p>Please log in to the practice management system to review this client's payment status and take action if required.</p>
       </div>
-      <div class="footer">The Perinatal Psychology Practice</div>
+      <div class="footer">${practiceName}</div>
     </div>
   </body>
 </html>`;
-  return { to: '', subject, html, text: bodyText };
+  return { to: '', subject, html, text: bodyText, from: buildFromAddress(tenant) };
 }

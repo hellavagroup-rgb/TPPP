@@ -17,6 +17,7 @@ export const tenants = pgTable("tenants", {
   whatsappEnabled: boolean("whatsapp_enabled").default(false),
   gmailAddress: text("gmail_address"),
   gmailIntakeEnabled: boolean("gmail_intake_enabled").default(false),
+  fromEmail: text("from_email"),
   stripeSecretKey: text("stripe_secret_key"), // Stored per-tenant for in-app configuration
   stripeWebhookSecret: text("stripe_webhook_secret"),
   // Feature flags — all default true so existing tenants lose no functionality

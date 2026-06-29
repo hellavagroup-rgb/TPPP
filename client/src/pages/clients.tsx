@@ -3028,31 +3028,35 @@ export default function Clients() {
 
             {!enquiryLoading && enquiryMessage && (
               <>
-                <div className="text-xs text-muted-foreground mb-3">
-                  From <span className="font-medium">{enquiryMessage.fromAddress}</span>
+                <div className="text-xs text-muted-foreground mb-3 flex flex-wrap gap-x-2">
+                  <span>From <span className="font-medium">{enquiryMessage.fromAddress}</span></span>
                   {enquiryMessage.receivedAt && (
-                    <> · {format(new Date(enquiryMessage.receivedAt), "dd MMM yyyy HH:mm")}</>
+                    <span>· {format(new Date(enquiryMessage.receivedAt), "dd MMM yyyy HH:mm")}</span>
                   )}
                   {enquiryMessage.subject && (
-                    <> · <span className="italic">{enquiryMessage.subject}</span></>
+                    <span>· <span className="italic">{enquiryMessage.subject}</span></span>
                   )}
                 </div>
 
-                {enquiryMessage.extractedData && Object.keys(enquiryMessage.extractedData).length >= 3 ? (
+                {enquiryMessage.extractedData && Object.keys(enquiryMessage.extractedData).length >= 2 ? (
                   <>
-                    <div className="space-y-1">
-                      {Object.entries(enquiryMessage.extractedData as Record<string, string>).map(([label, value]) => (
-                        <div key={label} className="grid grid-cols-[180px_1fr] gap-2 py-1.5 border-b border-border/50 last:border-0">
-                          <span className="text-sm font-medium text-muted-foreground">{label}</span>
-                          <span className="text-sm break-words">{value}</span>
+                    <div className="rounded-md border border-border overflow-hidden">
+                      {Object.entries(enquiryMessage.extractedData as Record<string, string>).map(([label, value], idx) => (
+                        <div key={label} className={idx > 0 ? "border-t border-border/50" : ""}>
+                          <div className="px-3 py-2 bg-muted/60 text-sm font-semibold text-foreground">
+                            {label}
+                          </div>
+                          <div className="px-3 py-2 text-sm text-foreground whitespace-pre-wrap break-words">
+                            {value || <span className="text-muted-foreground italic">—</span>}
+                          </div>
                         </div>
                       ))}
                     </div>
-                    <details className="mt-4">
+                    <details className="mt-3">
                       <summary className="text-xs text-muted-foreground cursor-pointer select-none hover:text-foreground transition-colors">
                         View raw email body
                       </summary>
-                      <div className="mt-2 p-4 bg-muted rounded-md text-sm whitespace-pre-wrap leading-relaxed">
+                      <div className="mt-2 p-3 bg-muted rounded-md text-xs whitespace-pre-wrap leading-relaxed font-mono max-h-48 overflow-y-auto">
                         {enquiryMessage.body}
                       </div>
                     </details>

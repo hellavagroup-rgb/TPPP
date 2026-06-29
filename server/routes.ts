@@ -2523,6 +2523,17 @@ export async function registerRoutes(
         .where(and(eq(intakeMessages.linkedClientId, req.params.id), eq(intakeMessages.tenantId, req.tenant.id)))
         .limit(1);
       if (!message) return res.status(404).json({ error: "No linked intake message" });
+
+      // Re-parse the body on-the-fly if stored extractedData is sparse or empty
+      const storedFields = message.extractedData as Record<string, string> | null;
+      const storedCount = storedFields ? Object.values(storedFields).filter(Boolean).length : 0;
+      if (storedCount < 3 && message.body) {
+        const reparsed = parseIntakeEmailBody(message.body);
+        if (Object.keys(reparsed.fields).length > storedCount) {
+          return res.json({ ...message, extractedData: reparsed.fields });
+        }
+      }
+
       res.json(message);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch intake message" });

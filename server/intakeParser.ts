@@ -1,20 +1,20 @@
 /**
  * Parses structured label/value email bodies produced by web intake forms.
  *
- * Supports three formats:
+ * Supports three formats applied to the inner email body (after the forwarded
+ * wrapper is stripped):
  *
  * Format A – Tab-separated with asterisk-bold labels (Gmail HTML table → plaintext):
  *   *Your Name*\tClare Yassin
  *   *Email*\tclare@example.com
- *   Also handles forwarded email wrappers (strips preamble + forward headers).
  *
- * Format B – Alternating lines with asterisk-bold labels (forwarded plain-text form):
+ * Format B – Alternating lines with asterisk-bold labels:
  *   *Your Name*
  *   Clare Yassin
- *   *Our current fees are £200–250 per session (clinician dependant). Does this
+ *   *Our current fees… Does this
  *   feel manageable for you?*
  *   Yes
- *   Multi-line labels (opening * on one line, closing * on next) are joined.
+ *   Multi-line labels (opening * on one line, closing * on the next) are joined.
  *   Multi-line values (lines before next *label*) are joined with a space.
  *
  * Format C – Plain alternating lines (no asterisk wrapping):
@@ -76,9 +76,8 @@ function buildResult(fields: Record<string, string>): ParsedIntakeEmail {
 }
 
 /**
- * Strip forwarded email preamble and headers.
- * Returns the body of the forwarded message (after "Forwarded message" separator
- * and the From/Date/Subject/To header lines).
+ * Strip forwarded email preamble and headers, returning just the inner message body.
+ * Handles the standard Gmail "---------- Forwarded message ---------" separator.
  */
 function stripForwardedWrapper(body: string): string {
   const fwdMatch = body.match(/------+\s*Forwarded message\s*------+/i);
@@ -87,6 +86,7 @@ function stripForwardedWrapper(body: string): string {
   const afterSep = body.substring(fwdMatch.index + fwdMatch[0].length);
   const lines = afterSep.split('\n');
 
+  // Skip blank lines and standard email header lines after the separator
   let i = 0;
   while (i < lines.length) {
     const trimmed = lines[i].trim();
@@ -104,24 +104,33 @@ function stripForwardedWrapper(body: string): string {
 }
 
 /**
+ * Prepare the body for parsing:
+ * 1. Strip any forwarded-message wrapper.
+ * 2. Truncate at the RFC-3676 signature separator (-- on its own line), which
+ *    can appear both in the outer email (Clare's signature before the forwarded
+ *    block) and in the inner form email footer.
+ */
+function prepareBody(rawBody: string): string {
+  const inner = stripForwardedWrapper(rawBody);
+  // Remove anything from the standalone "-- " signature separator onwards
+  const sigIdx = inner.search(/^--\s*$/m);
+  return sigIdx !== -1 ? inner.substring(0, sigIdx) : inner;
+}
+
+/**
  * Format A: *Label*<TAB>Value on the same line.
- * Only attempted when the inner body actually contains "*...*\t" patterns.
+ * Only attempted when the body actually contains "*...*\t" patterns.
  * Returns null if not applicable.
  */
-function tryParseAsteriskTabFormat(rawBody: string): ParsedIntakeEmail | null {
-  const body = stripForwardedWrapper(rawBody);
-
+function tryParseAsteriskTabFormat(body: string): ParsedIntakeEmail | null {
   // Only use this format when there are actual *Label*<TAB>Value lines
   if (!/\*[^*\n]+\*\t/.test(body)) return null;
-
-  const sigIdx = body.search(/^--\s*$/m);
-  const toParse = sigIdx !== -1 ? body.substring(0, sigIdx) : body;
 
   const LABEL_RE = /\*([^*\n]{1,200})\*/g;
   const matches: Array<{ label: string; start: number; end: number }> = [];
 
   let m: RegExpExecArray | null;
-  while ((m = LABEL_RE.exec(toParse)) !== null) {
+  while ((m = LABEL_RE.exec(body)) !== null) {
     const rawLabel = m[1]
       .replace(/\t+/g, ' ')
       .replace(/\s+/g, ' ')
@@ -138,9 +147,9 @@ function tryParseAsteriskTabFormat(rawBody: string): ParsedIntakeEmail | null {
 
   for (let i = 0; i < matches.length; i++) {
     const { label, end } = matches[i];
-    const nextLabelStart = i + 1 < matches.length ? matches[i + 1].start : toParse.length;
+    const nextLabelStart = i + 1 < matches.length ? matches[i + 1].start : body.length;
 
-    let value = toParse
+    let value = body
       .substring(end, nextLabelStart)
       .replace(/\t+/g, ' ')
       .replace(/\n+/g, ' ')
@@ -167,12 +176,12 @@ function tryParseAsteriskTabFormat(rawBody: string): ParsedIntakeEmail | null {
 
 /**
  * Format B: Alternating lines where labels are wrapped in *...*
- * Labels may span multiple lines (opening * on one line, closing * on next).
+ * Also handles the mixed case where a single line has *Label*<TAB>Value.
+ * Labels may span multiple lines (opening * on one line, closing * on the next).
  * Values are all non-empty lines between labels (joined with a space).
  * Returns null if no asterisk-wrapped labels are found.
  */
-function parseAsteriskAlternatingFormat(rawBody: string): ParsedIntakeEmail | null {
-  const body = stripForwardedWrapper(rawBody);
+function parseAsteriskAlternatingFormat(body: string): ParsedIntakeEmail | null {
   const lines = body.split('\n').map(l => l.trim()).filter(l => l !== '');
 
   // Only use this format if there are lines starting with *
@@ -190,17 +199,25 @@ function parseAsteriskAlternatingFormat(rawBody: string): ParsedIntakeEmail | nu
       continue;
     }
 
+    // Check for single-line *Label*<TAB>Value (tab-separated format mixed in)
+    const tabMatch = line.match(/^\*([^*]+)\*\t+(.*)/);
+    if (tabMatch) {
+      const cleanLabel = tabMatch[1].replace(/\s+/g, ' ').trim();
+      const value = tabMatch[2].replace(/\s+/g, ' ').trim();
+      if (cleanLabel) fields[cleanLabel] = value;
+      i++;
+      continue;
+    }
+
     // Accumulate the full label, which may span multiple lines
     let label = line;
     i++;
 
     while (!label.endsWith('*') && i < lines.length) {
-      // Next line could continue the label or be a value — keep accumulating
-      // until we find the closing *
       label += ' ' + lines[i];
       i++;
       if (label.endsWith('*')) break;
-      // Safety: if we've accumulated more than 400 chars without finding *, give up
+      // Safety: give up on accumulating if the label grows too long
       if (label.length > 400) break;
     }
 
@@ -250,10 +267,15 @@ function parseAlternatingFormat(body: string): ParsedIntakeEmail {
   return buildResult(fields);
 }
 
-export function parseIntakeEmailBody(body: string): ParsedIntakeEmail {
-  if (!body || !body.trim()) {
+export function parseIntakeEmailBody(rawBody: string): ParsedIntakeEmail {
+  if (!rawBody || !rawBody.trim()) {
     return { fields: {}, name: null, email: null, phone: null };
   }
+
+  // Strip the forwarded wrapper and any trailing signature ONCE here.
+  // This removes Clare's preamble + "-- " signature that precede the forwarded
+  // separator, so every downstream parser sees only the inner form body.
+  const body = prepareBody(rawBody);
 
   // Format A: *Label*<TAB>Value (tab-separated, same line)
   const tabResult = tryParseAsteriskTabFormat(body);

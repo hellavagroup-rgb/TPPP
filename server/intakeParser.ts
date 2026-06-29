@@ -1,14 +1,23 @@
 /**
  * Parses structured label/value email bodies produced by web intake forms.
  *
- * Supports two formats:
+ * Supports three formats:
  *
  * Format A – Tab-separated with asterisk-bold labels (Gmail HTML table → plaintext):
  *   *Your Name*\tClare Yassin
  *   *Email*\tclare@example.com
  *   Also handles forwarded email wrappers (strips preamble + forward headers).
  *
- * Format B – Alternating lines (plain-text forms):
+ * Format B – Alternating lines with asterisk-bold labels (forwarded plain-text form):
+ *   *Your Name*
+ *   Clare Yassin
+ *   *Our current fees are £200–250 per session (clinician dependant). Does this
+ *   feel manageable for you?*
+ *   Yes
+ *   Multi-line labels (opening * on one line, closing * on next) are joined.
+ *   Multi-line values (lines before next *label*) are joined with a space.
+ *
+ * Format C – Plain alternating lines (no asterisk wrapping):
  *   Your Name
  *   Clare Yassin
  *   Email
@@ -78,7 +87,6 @@ function stripForwardedWrapper(body: string): string {
   const afterSep = body.substring(fwdMatch.index + fwdMatch[0].length);
   const lines = afterSep.split('\n');
 
-  // Skip blank lines and standard email header lines after the separator
   let i = 0;
   while (i < lines.length) {
     const trimmed = lines[i].trim();
@@ -96,25 +104,26 @@ function stripForwardedWrapper(body: string): string {
 }
 
 /**
- * Try to parse Format A: *Label*<TAB>Value lines.
- * Returns null if the body doesn't appear to use this format.
+ * Format A: *Label*<TAB>Value on the same line.
+ * Only attempted when the inner body actually contains "*...*\t" patterns.
+ * Returns null if not applicable.
  */
 function tryParseAsteriskTabFormat(rawBody: string): ParsedIntakeEmail | null {
-  // Extract forwarded message body if present
   const body = stripForwardedWrapper(rawBody);
 
-  // Stop at standard email signature separator (-- on its own line)
+  // Only use this format when there are actual *Label*<TAB>Value lines
+  if (!/\*[^*\n]+\*\t/.test(body)) return null;
+
   const sigIdx = body.search(/^--\s*$/m);
   const toParse = sigIdx !== -1 ? body.substring(0, sigIdx) : body;
 
-  // Find all *Label* occurrences (label text may contain tabs if cell wraps)
   const LABEL_RE = /\*([^*\n]{1,200})\*/g;
   const matches: Array<{ label: string; start: number; end: number }> = [];
 
   let m: RegExpExecArray | null;
   while ((m = LABEL_RE.exec(toParse)) !== null) {
     const rawLabel = m[1]
-      .replace(/\t+/g, ' ')  // collapse tabs in label (cell-wrap artifact)
+      .replace(/\t+/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
     if (rawLabel) {
@@ -129,24 +138,20 @@ function tryParseAsteriskTabFormat(rawBody: string): ParsedIntakeEmail | null {
 
   for (let i = 0; i < matches.length; i++) {
     const { label, end } = matches[i];
-    // Value: everything between end of this *Label* and start of next *Label*
     const nextLabelStart = i + 1 < matches.length ? matches[i + 1].start : toParse.length;
 
     let value = toParse
       .substring(end, nextLabelStart)
-      .replace(/\t+/g, ' ')   // tabs → spaces
-      .replace(/\n+/g, ' ')   // newlines → spaces
+      .replace(/\t+/g, ' ')
+      .replace(/\n+/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
 
-    // Remove leading bullet / dash characters
     value = value.replace(/^[-–•]\s*/, '');
 
     if (!value) {
       emptyRun++;
-      // If we've seen 3+ consecutive empty values, this is likely the signature block
       if (emptyRun >= 3) break;
-      // Still include the field so optional blank answers appear
       fields[label] = '';
     } else {
       emptyRun = 0;
@@ -154,7 +159,6 @@ function tryParseAsteriskTabFormat(rawBody: string): ParsedIntakeEmail | null {
     }
   }
 
-  // Require at least 3 non-empty fields to consider this format valid
   const nonEmpty = Object.values(fields).filter(Boolean).length;
   if (nonEmpty < 2) return null;
 
@@ -162,7 +166,66 @@ function tryParseAsteriskTabFormat(rawBody: string): ParsedIntakeEmail | null {
 }
 
 /**
- * Format B: alternating label / value lines.
+ * Format B: Alternating lines where labels are wrapped in *...*
+ * Labels may span multiple lines (opening * on one line, closing * on next).
+ * Values are all non-empty lines between labels (joined with a space).
+ * Returns null if no asterisk-wrapped labels are found.
+ */
+function parseAsteriskAlternatingFormat(rawBody: string): ParsedIntakeEmail | null {
+  const body = stripForwardedWrapper(rawBody);
+  const lines = body.split('\n').map(l => l.trim()).filter(l => l !== '');
+
+  // Only use this format if there are lines starting with *
+  if (!lines.some(l => l.startsWith('*'))) return null;
+
+  const fields: Record<string, string> = {};
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    if (!line.startsWith('*')) {
+      // Non-label line before any label — skip (preamble remnants)
+      i++;
+      continue;
+    }
+
+    // Accumulate the full label, which may span multiple lines
+    let label = line;
+    i++;
+
+    while (!label.endsWith('*') && i < lines.length) {
+      // Next line could continue the label or be a value — keep accumulating
+      // until we find the closing *
+      label += ' ' + lines[i];
+      i++;
+      if (label.endsWith('*')) break;
+      // Safety: if we've accumulated more than 400 chars without finding *, give up
+      if (label.length > 400) break;
+    }
+
+    // Strip surrounding asterisks
+    const cleanLabel = label.replace(/^\*+/, '').replace(/\*+$/, '').replace(/\s+/g, ' ').trim();
+    if (!cleanLabel) continue;
+
+    // Collect value lines: everything until the next line starting with *
+    const valueLines: string[] = [];
+    while (i < lines.length && !lines[i].startsWith('*')) {
+      valueLines.push(lines[i]);
+      i++;
+    }
+
+    fields[cleanLabel] = valueLines.join(' ').replace(/\s+/g, ' ').trim();
+  }
+
+  const nonEmpty = Object.values(fields).filter(Boolean).length;
+  if (nonEmpty < 2) return null;
+
+  return buildResult(fields);
+}
+
+/**
+ * Format C: Plain alternating label / value lines (no asterisk wrapping).
  */
 function parseAlternatingFormat(body: string): ParsedIntakeEmail {
   const lines = body
@@ -176,7 +239,6 @@ function parseAlternatingFormat(body: string): ParsedIntakeEmail {
     const label = lines[i];
     if (!label) { i++; continue; }
 
-    // Look ahead for value on the next non-blank line
     let j = i + 1;
     while (j < lines.length && !lines[j]) j++;
     if (j >= lines.length) break;
@@ -193,12 +255,18 @@ export function parseIntakeEmailBody(body: string): ParsedIntakeEmail {
     return { fields: {}, name: null, email: null, phone: null };
   }
 
-  // Try the asterisk-tab format first (covers forwarded HTML emails)
-  const asteriskResult = tryParseAsteriskTabFormat(body);
-  if (asteriskResult && Object.keys(asteriskResult.fields).length >= 2) {
-    return asteriskResult;
+  // Format A: *Label*<TAB>Value (tab-separated, same line)
+  const tabResult = tryParseAsteriskTabFormat(body);
+  if (tabResult && Object.keys(tabResult.fields).length >= 2) {
+    return tabResult;
   }
 
-  // Fall back to plain alternating label/value lines
+  // Format B: *Label* on one line, value on next line(s) — may have multi-line labels
+  const asteriskAltResult = parseAsteriskAlternatingFormat(body);
+  if (asteriskAltResult && Object.keys(asteriskAltResult.fields).length >= 2) {
+    return asteriskAltResult;
+  }
+
+  // Format C: plain alternating label/value lines
   return parseAlternatingFormat(body);
 }

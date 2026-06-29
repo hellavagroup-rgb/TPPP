@@ -2524,12 +2524,11 @@ export async function registerRoutes(
         .limit(1);
       if (!message) return res.status(404).json({ error: "No linked intake message" });
 
-      // Re-parse the body on-the-fly if stored extractedData is sparse or empty
-      const storedFields = message.extractedData as Record<string, string> | null;
-      const storedCount = storedFields ? Object.values(storedFields).filter(Boolean).length : 0;
-      if (storedCount < 3 && message.body) {
+      // Always re-parse the body — the new parser handles forwarded emails and
+      // asterisk-tab format that the original parser may have misread as preamble text.
+      if (message.body) {
         const reparsed = parseIntakeEmailBody(message.body);
-        if (Object.keys(reparsed.fields).length > storedCount) {
+        if (Object.keys(reparsed.fields).length >= 2) {
           return res.json({ ...message, extractedData: reparsed.fields });
         }
       }

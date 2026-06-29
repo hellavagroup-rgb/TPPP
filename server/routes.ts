@@ -1028,6 +1028,19 @@ export async function registerRoutes(
         return res.status(403).json({ error: "Access denied" });
       }
       const oldStatus = currentClient?.status;
+
+      // Validate displayId change if provided
+      if (req.body.displayId && req.body.displayId !== currentClient.displayId) {
+        const newId = String(req.body.displayId).trim().toUpperCase();
+        if (!/^W\d+$/.test(newId)) {
+          return res.status(400).json({ error: "Client ID must start with W followed by numbers (e.g. W12345678)" });
+        }
+        const existing = await storage.getClientByDisplayId(newId);
+        if (existing && existing.id !== currentClient.id) {
+          return res.status(409).json({ error: `Client ID ${newId} is already in use` });
+        }
+        req.body.displayId = newId;
+      }
       
       // Add workflow timestamps based on status change
       const updateData = { ...req.body };

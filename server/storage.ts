@@ -1,5 +1,5 @@
 import { 
-  users, clients, clinicians, timeSlots, formTemplates, formSubmissions, tasks, auditLogs, emailTemplates, inviteTokens, passwordResetTokens, nonEngagementCategories, customInsurers, paymentCharges,
+  users, clients, clinicians, timeSlots, formTemplates, formSubmissions, tasks, auditLogs, emailTemplates, inviteTokens, passwordResetTokens, nonEngagementCategories, customInsurers, paymentCharges, intakeMessages,
   type User, type InsertUser, type SafeUser,
   type Client, type InsertClient,
   type Clinician, type InsertClinician,
@@ -355,13 +355,26 @@ export class DatabaseStorage implements IStorage {
     if (!existing) return false;
 
     await db.transaction(async (tx) => {
+      // Release any booked time slot
       if (existing.assignedSlotId) {
         await tx.update(timeSlots)
           .set({ isBooked: false, bookedByClientId: null })
           .where(eq(timeSlots.id, existing.assignedSlotId));
       }
 
+      // Delete child records that belong to the client
       await tx.delete(formSubmissions).where(eq(formSubmissions.clientId, id));
+      await tx.delete(tasks).where(eq(tasks.clientId, id));
+      await tx.delete(paymentCharges).where(eq(paymentCharges.clientId, id));
+
+      // Nullify soft references (keep the row but remove the client pointer)
+      await tx.update(auditLogs)
+        .set({ relatedClientId: null })
+        .where(eq(auditLogs.relatedClientId, id));
+      await tx.update(intakeMessages)
+        .set({ linkedClientId: null })
+        .where(eq(intakeMessages.linkedClientId, id));
+
       await tx.delete(clients).where(eq(clients.id, id));
     });
     return true;

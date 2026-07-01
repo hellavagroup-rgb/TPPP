@@ -564,7 +564,7 @@ export default function Clinicians() {
                   </div>
                   <Input 
                     type="number" 
-                    value={editedClinician.maxNewClients ?? 0}
+                    value={editedClinician.maxNewClients || ""}
                     onChange={(e) => setEditedClinician({...editedClinician, maxNewClients: parseInt(e.target.value) || 0})}
                   />
                   <p className="text-[10px] text-muted-foreground pt-1">
@@ -766,15 +766,15 @@ export default function Clinicians() {
                 <Label>Client Capacity</Label>
                 <Input 
                   type="number" 
-                  value={newClinician.capacity}
-                  onChange={(e) => setNewClinician({...newClinician, capacity: parseInt(e.target.value) || 15})}
+                  value={newClinician.capacity || ""}
+                  onChange={(e) => setNewClinician({...newClinician, capacity: parseInt(e.target.value) || 0})}
                 />
               </div>
               <div className="space-y-2">
                 <Label>Max New Clients</Label>
                 <Input 
                   type="number" 
-                  value={newClinician.maxNewClients}
+                  value={newClinician.maxNewClients || ""}
                   onChange={(e) => setNewClinician({...newClinician, maxNewClients: parseInt(e.target.value) || 0})}
                 />
               </div>

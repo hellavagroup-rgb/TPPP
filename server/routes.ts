@@ -2481,19 +2481,17 @@ export async function registerRoutes(
       const insurerRaw = pick("insurer", "insurance company", "insurance provider", "health insurer", "private health");
       const dobRaw = pick("date of birth", "dob", "d.o.b", "birth date");
 
-      // Build notes from the full structured data so nothing is lost
+      // Build a concise summary in notes — full structured data is accessible via the linked intake message
       const notesLines: string[] = [];
       if (isReferrerEmail && message.fromAddress) {
         notesLines.push(`Referred by: ${message.fromAddress}`);
       }
-      if (rawFullName && (firstName || lastName)) notesLines.push(`Full name from enquiry: ${rawFullName}`);
-      if (parsed && Object.keys(parsed).length > 0) {
-        notesLines.push("--- Original enquiry data ---");
-        for (const [label, value] of Object.entries(parsed)) {
-          notesLines.push(`${label}: ${value}`);
-        }
-      } else if (message.body) {
-        notesLines.push("--- Original enquiry body ---");
+      const nameForNote = rawFullName || [firstName, lastName].filter(Boolean).join(" ");
+      if (nameForNote) notesLines.push(`Client name: ${nameForNote}`);
+      if (dobRaw) notesLines.push(`Date of birth: ${dobRaw}`);
+      // Fall back to raw body only when parser produced no structured fields at all
+      if (notesLines.length === 0 && !parsed && message.body) {
+        notesLines.push("--- Original enquiry (unparsed) ---");
         notesLines.push(message.body.slice(0, 2000));
       }
       const notes = notesLines.join("\n").slice(0, 4000) || undefined;
@@ -2502,7 +2500,7 @@ export async function registerRoutes(
         displayId,
         email: clientEmail,
         phone: clientPhone || null,
-        referralSource: referralSource ?? null,
+        referralSource: "Online Intake Form",
         presentingIssues: presentingRaw ? [presentingRaw] : [],
         insurer: insurerRaw ?? null,
         status: "New",

@@ -52,6 +52,8 @@ import {
   ExternalLink,
   History,
   AlertCircle,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { useState } from "react";
 import { useLocation } from "wouter";
@@ -435,11 +437,16 @@ export default function Clients() {
   const [submissions, setSubmissions] = useState<any[]>([]);
   const [loadingSubmissions, setLoadingSubmissions] = useState(false);
 
-  // View Original Enquiry State
+  // View Original Enquiry State (standalone dialog from Kanban dropdown)
   const [viewEnquiryClient, setViewEnquiryClient] = useState<ClientType | null>(null);
   const [enquiryMessage, setEnquiryMessage] = useState<any | null>(null);
   const [enquiryLoading, setEnquiryLoading] = useState(false);
   const [enquiryError, setEnquiryError] = useState<string | null>(null);
+
+  // Enquiry Details within Edit Client dialog
+  const [editEnquiryMessage, setEditEnquiryMessage] = useState<any | null>(null);
+  const [editEnquiryLoading, setEditEnquiryLoading] = useState(false);
+  const [editEnquiryOpen, setEditEnquiryOpen] = useState(false);
 
   const handleViewEnquiry = async (client: ClientType) => {
     setViewEnquiryClient(client);
@@ -797,6 +804,14 @@ export default function Clients() {
       status: client.status,
       agreedRatePence: client.agreedRatePence ?? null,
     });
+    // Fetch linked intake message in background for Enquiry Details section
+    setEditEnquiryMessage(null);
+    setEditEnquiryOpen(false);
+    setEditEnquiryLoading(true);
+    apiRequest("GET", `/api/clients/${client.id}/intake-message`)
+      .then(async (res) => { if (res.ok) setEditEnquiryMessage(await res.json()); })
+      .catch(() => {})
+      .finally(() => setEditEnquiryLoading(false));
     setIsEditClientOpen(true);
   };
 
@@ -1199,6 +1214,7 @@ export default function Clients() {
                             </SelectTrigger>
                             <SelectContent>
                                 <SelectItem value="Web Form">Web Form</SelectItem>
+                                <SelectItem value="Online Intake Form">Online Intake Form</SelectItem>
                                 <SelectItem value="Direct Email">Direct Email</SelectItem>
                                 <SelectItem value="Psychiatrist Referral">Psychiatrist Referral</SelectItem>
                                 <SelectItem value="Other">Other</SelectItem>
@@ -2227,6 +2243,44 @@ export default function Clients() {
                 rows={3}
               />
             </div>
+
+            {(editEnquiryLoading || editEnquiryMessage) && (
+              <div className="grid gap-1.5">
+                <button
+                  type="button"
+                  className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors text-left"
+                  onClick={() => setEditEnquiryOpen(v => !v)}
+                >
+                  {editEnquiryOpen ? <ChevronDown className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0" />}
+                  Enquiry Details
+                  {editEnquiryLoading && <Loader2 className="h-3 w-3 animate-spin ml-1" />}
+                </button>
+                {editEnquiryOpen && editEnquiryMessage && (
+                  <div className="rounded-md border border-border overflow-hidden max-h-60 overflow-y-auto text-xs">
+                    <div className="px-3 py-1.5 bg-muted/50 text-muted-foreground flex flex-wrap gap-x-2 border-b border-border/50">
+                      <span>From <span className="font-medium">{editEnquiryMessage.fromAddress}</span></span>
+                      {editEnquiryMessage.receivedAt && (
+                        <span>· {format(new Date(editEnquiryMessage.receivedAt), "dd MMM yyyy HH:mm")}</span>
+                      )}
+                    </div>
+                    {editEnquiryMessage.extractedData && Object.keys(editEnquiryMessage.extractedData).length >= 2 ? (
+                      Object.entries(editEnquiryMessage.extractedData as Record<string, string>).map(([label, value], idx) => (
+                        <div key={label} className={`grid grid-cols-[2fr_3fr] divide-x divide-border/50${idx > 0 ? " border-t border-border/50" : ""}`}>
+                          <div className="px-3 py-2 bg-slate-50 text-slate-500 font-medium leading-snug">{label}</div>
+                          <div className="px-3 py-2 text-foreground whitespace-pre-wrap break-words leading-snug">
+                            {value || <span className="text-muted-foreground italic">—</span>}
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="p-3 text-muted-foreground whitespace-pre-wrap leading-relaxed">
+                        {editEnquiryMessage.body || <span className="italic">No body content</span>}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsEditClientOpen(false)}>Cancel</Button>

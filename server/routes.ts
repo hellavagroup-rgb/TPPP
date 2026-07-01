@@ -2447,8 +2447,14 @@ export async function registerRoutes(
         return undefined;
       };
 
-      // Email — prefer extracted field, fall back to the From address
-      const clientEmail = pick("email") || message.fromAddress;
+      // Email — only use the extracted field if it differs from the sender's address.
+      // When they're the same the form was filled in by a referrer (not the client),
+      // so we generate a unique placeholder to avoid duplicate-email conflicts.
+      const extractedEmail = pick("email");
+      const isReferrerEmail = !extractedEmail || extractedEmail.toLowerCase() === message.fromAddress.toLowerCase();
+      const clientEmail = isReferrerEmail
+        ? `intake-${displayId.toLowerCase()}@noemail.placeholder`
+        : extractedEmail;
 
       // Phone
       const clientPhone = message.extractedPhone || pick("phone", "mobile", "telephone", "contact number") || "";
@@ -2476,6 +2482,9 @@ export async function registerRoutes(
 
       // Build notes from the full structured data so nothing is lost
       const notesLines: string[] = [];
+      if (isReferrerEmail && message.fromAddress) {
+        notesLines.push(`Referred by: ${message.fromAddress}`);
+      }
       if (rawFullName && (firstName || lastName)) notesLines.push(`Full name from enquiry: ${rawFullName}`);
       if (parsed && Object.keys(parsed).length > 0) {
         notesLines.push("--- Original enquiry data ---");

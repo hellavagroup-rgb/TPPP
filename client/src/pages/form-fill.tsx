@@ -143,6 +143,13 @@ export default function FormFill() {
     enabled: !!params?.clientId,
   });
 
+  const { data: branding } = useQuery<{ name: string; logoUrl: string | null }>({
+    queryKey: [`/api/tenant/branding?clientId=${params?.clientId}`],
+    enabled: !!params?.clientId,
+  });
+  const brandLogo = branding?.logoUrl || logo;
+  const brandName = branding?.name || "Perinatal Psychology Practice";
+
   // Check for existing draft
   const { data: draftData, isLoading: draftLoading } = useQuery<{
     hasDraft: boolean;
@@ -359,7 +366,7 @@ export default function FormFill() {
       return (
           <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
               <div className="flex flex-col items-center mb-8">
-                  <img src={logo} alt="Logo" className="h-12 object-contain mb-4 opacity-80 grayscale" />
+                  <img src={brandLogo} alt="Logo" className="h-12 object-contain mb-4 opacity-80 grayscale" />
                   <div className="flex items-center gap-2 text-slate-500 text-sm font-medium">
                       <Lock className="h-4 w-4" />
                       Secure Client Portal
@@ -393,7 +400,7 @@ export default function FormFill() {
     <div className="min-h-screen bg-slate-50 py-12 px-4 sm:px-6">
       <div className="max-w-3xl mx-auto space-y-8">
         <div className="flex flex-col items-center text-center space-y-4">
-            <img src={logo} alt="Logo" className="h-16 object-contain" />
+            <img src={brandLogo} alt="Logo" className="h-16 object-contain" />
             <div className="space-y-1">
                 <h1 className="text-3xl font-serif font-bold text-slate-900">{form.title}</h1>
                 <p className="text-slate-600 max-w-lg mx-auto">{form.description}</p>
@@ -574,7 +581,7 @@ export default function FormFill() {
                 )}
                 
                 <div className="w-full flex flex-col sm:flex-row justify-between items-center gap-4">
-                    <p className="text-sm text-muted-foreground">Securely powered by Perinatal Psychology Practice</p>
+                    <p className="text-sm text-muted-foreground">Securely powered by {brandName}</p>
                     <div className="flex gap-3">
                         <Button 
                             variant="outline" 

@@ -2186,15 +2186,33 @@ export async function registerRoutes(
     }
   });
 
-  // Public endpoint — returns only branding fields, no auth required
+  // Public endpoint — returns only branding fields, no auth required.
+  // Pass ?clientId=<id> to resolve the tenant from a specific client record.
   app.get("/api/tenant/branding", async (req, res) => {
     try {
-      const [tenant] = await db.select({
+      let tenantId: string | undefined;
+
+      const clientId = req.query.clientId as string | undefined;
+      if (clientId) {
+        const [row] = await db
+          .select({ tenantId: clients.tenantId })
+          .from(clients)
+          .where(eq(clients.id, clientId))
+          .limit(1);
+        tenantId = row?.tenantId ?? undefined;
+      }
+
+      const query = db.select({
         name: tenants.name,
         logoUrl: tenants.logoUrl,
         primaryColor: tenants.primaryColor,
         accentColor: tenants.accentColor,
-      }).from(tenants).limit(1);
+      }).from(tenants);
+
+      const [tenant] = tenantId
+        ? await query.where(eq(tenants.id, tenantId)).limit(1)
+        : await query.limit(1);
+
       if (!tenant) return res.status(404).json({ error: "No tenant configured" });
       res.json(tenant);
     } catch (error) {

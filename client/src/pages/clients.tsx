@@ -1252,6 +1252,7 @@ export default function Clients() {
             className="pl-9 font-mono"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
+            autoComplete="off"
           />
         </div>
         <div className="flex items-center gap-4">
@@ -2613,6 +2614,7 @@ export default function Clients() {
                 value={deletePassword}
                 onChange={(e) => { setDeletePassword(e.target.value); setDeleteError(""); }}
                 data-testid="input-delete-password"
+                autoComplete="new-password"
               />
               {deleteError && (
                 <p className="text-sm text-destructive" data-testid="text-delete-error">{deleteError}</p>

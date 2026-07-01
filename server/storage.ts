@@ -364,16 +364,16 @@ export class DatabaseStorage implements IStorage {
 
       // Delete child records that belong to the client
       await tx.delete(formSubmissions).where(eq(formSubmissions.clientId, id));
-      await tx.delete(tasks).where(eq(tasks.clientId, id));
       await tx.delete(paymentCharges).where(eq(paymentCharges.clientId, id));
 
       // Nullify soft references (keep the row but remove the client pointer)
-      await tx.update(auditLogs)
+      await tx.update(tasks)
         .set({ relatedClientId: null })
-        .where(eq(auditLogs.relatedClientId, id));
+        .where(eq(tasks.relatedClientId, id));
       await tx.update(intakeMessages)
         .set({ linkedClientId: null })
         .where(eq(intakeMessages.linkedClientId, id));
+      // auditLogs has no FK to clients — resourceId is plain text, no constraint
 
       await tx.delete(clients).where(eq(clients.id, id));
     });

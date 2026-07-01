@@ -966,11 +966,12 @@ export async function registerRoutes(
 
       const deleted = await storage.deleteClientPermanently(req.params.id);
       if (!deleted) {
-        return res.status(500).json({ error: "Failed to delete client" });
+        return res.status(404).json({ error: "Client not found" });
       }
       res.json({ success: true });
-    } catch (error) {
-      res.status(500).json({ error: "Failed to permanently delete client" });
+    } catch (error: any) {
+      console.error("[delete-permanently] error:", error?.code, error?.message, error);
+      res.status(500).json({ error: error?.message || "Failed to permanently delete client" });
     }
   });
 
@@ -2500,17 +2501,14 @@ export async function registerRoutes(
       const [newClient] = await db.insert(clients).values({
         displayId,
         email: clientEmail,
-        phone: clientPhone,
-        firstName: firstName ?? null,
-        lastName: lastName ?? null,
+        phone: clientPhone || null,
         referralSource: referralSource ?? null,
         presentingIssues: presentingRaw ? [presentingRaw] : [],
         insurer: insurerRaw ?? null,
-        dateOfBirth: dobRaw ?? null,
         status: "New",
         tenantId: req.tenant.id,
         notes: notes ?? null,
-      } as any).returning();
+      }).returning();
 
       await db
         .update(intakeMessages)

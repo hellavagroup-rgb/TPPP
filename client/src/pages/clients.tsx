@@ -336,7 +336,9 @@ export default function Clients() {
   const permanentDeleteMutation = useMutation({
     mutationFn: async ({ clientId, password }: { clientId: string; password: string }) => {
       const response = await apiRequest("POST", `/api/clients/${clientId}/delete-permanently`, { password });
-      return response.json();
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || "Failed to delete client");
+      return data;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
@@ -347,14 +349,8 @@ export default function Clients() {
       setDeleteError("");
     },
     onError: (error: any) => {
-      const message = error?.message || "";
-      if (message.includes("Incorrect password")) {
-        setDeleteError("Incorrect password. Please try again.");
-      } else if (message.includes("Only archived")) {
-        setDeleteError("Only archived clients can be permanently deleted.");
-      } else {
-        setDeleteError("Failed to delete client. Please try again.");
-      }
+      const message = error?.message || "Failed to delete client. Please try again.";
+      setDeleteError(message);
     },
   });
 

@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { format } from "date-fns";
 import { useRoute, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { FormTemplate, FormField } from "@/lib/mockData";
@@ -192,6 +193,9 @@ export default function FormBuilder() {
   const [fields, setFields] = useState<FormField[]>([]);
   const [selectedFieldId, setSelectedFieldId] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
+  const [draftSavedAt, setDraftSavedAt] = useState<Date | null>(null);
+
+  const DRAFT_KEY = "form-builder-new-draft";
 
   // Fetch existing form data from API
   const { data: existingForm } = useQuery<FormTemplate>({
@@ -206,12 +210,13 @@ export default function FormBuilder() {
       return response.json();
     },
     onSuccess: () => {
+      localStorage.removeItem(DRAFT_KEY);
       queryClient.invalidateQueries({ queryKey: ["/api/forms"] });
       toast({ title: "Form Created", description: "New form template saved successfully." });
       setLocation("/forms");
     },
     onError: () => {
-      toast({ title: "Error", description: "Failed to create form.", variant: "destructive" });
+      toast({ title: "Error", description: "Failed to create form. Your draft is still saved locally — log back in and try again.", variant: "destructive" });
     },
   });
 
@@ -250,6 +255,36 @@ export default function FormBuilder() {
       });
     }
   };
+
+  // Restore draft from localStorage when opening a new form
+  useEffect(() => {
+    if (!isNew) return;
+    try {
+      const saved = localStorage.getItem(DRAFT_KEY);
+      if (saved) {
+        const { title: t, description: d, fields: f, savedAt } = JSON.parse(saved);
+        if (t || (f && f.length > 0)) {
+          setTitle(t || "");
+          setDescription(d || "");
+          setFields(f || []);
+          if (savedAt) setDraftSavedAt(new Date(savedAt));
+          toast({ title: "Draft restored", description: "Your unsaved work has been recovered." });
+        }
+      }
+    } catch {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Autosave to localStorage whenever content changes (new forms only)
+  useEffect(() => {
+    if (!isNew) return;
+    if (!title && fields.length === 0) return;
+    try {
+      const savedAt = new Date();
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({ title, description, fields, savedAt: savedAt.toISOString() }));
+      setDraftSavedAt(savedAt);
+    } catch {}
+  }, [title, description, fields, isNew]);
 
   // Load existing form data (only on initial load, not after saves)
   useEffect(() => {
@@ -325,6 +360,11 @@ export default function FormBuilder() {
                 <TabsTrigger value="preview" className="gap-2"><Eye className="h-4 w-4" /> Preview</TabsTrigger>
             </TabsList>
            </Tabs>
+          {isNew && draftSavedAt && (
+            <span className="text-xs text-muted-foreground">
+              Draft saved {format(draftSavedAt, "HH:mm:ss")}
+            </span>
+          )}
           <Button onClick={handleSave} className="gap-2">
             <Save className="h-4 w-4" />
             Save Form

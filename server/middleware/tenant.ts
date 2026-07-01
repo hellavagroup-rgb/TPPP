@@ -20,7 +20,7 @@ export async function requireTenant(req: any, res: any, next: any) {
     req.path === '/super-admin' ||
     req.path.startsWith('/admin-users/invite/') ||
     req.path.startsWith('/clients/public/') ||
-    req.path.startsWith('/forms/') ||
+    (req.path.startsWith('/forms/') && !req.user?.id) ||
     req.path.startsWith('/form-submissions') ||
     req.path.startsWith('/form-drafts') ||
     req.path === '/stripe/webhook'

@@ -323,17 +323,17 @@ export default function IntakeInbox() {
                                 size="sm"
                                 data-testid={`button-convert-${msg.id}`}
                                 onClick={() => convertMutation.mutate(msg.id)}
-                                disabled={convertMutation.isPending}
+                                disabled={convertMutation.isPending && convertMutation.variables === msg.id}
                               >
                                 <UserPlus className="h-3.5 w-3.5 mr-1" />
-                                Convert
+                                {convertMutation.isPending && convertMutation.variables === msg.id ? "Converting…" : "Convert"}
                               </Button>
                               <Button
                                 size="sm"
                                 variant="ghost"
                                 data-testid={`button-ignore-${msg.id}`}
                                 onClick={() => ignoreMutation.mutate(msg.id)}
-                                disabled={ignoreMutation.isPending}
+                                disabled={ignoreMutation.isPending && ignoreMutation.variables === msg.id}
                               >
                                 <EyeOff className="h-3.5 w-3.5 mr-1" />
                                 Ignore

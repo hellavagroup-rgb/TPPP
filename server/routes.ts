@@ -25,7 +25,7 @@ import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissi
 import { isStripeConfigured, getStripeInstance, createCheckoutSession, chargeOffSession, constructWebhookEvent } from "./stripe";
 import { encryptSecret, decryptSecret, isEncryptionConfigured } from "./encryption";
 import { getAuthUrl, exchangeCodeForTokens, syncConnection, buildRedirectUri } from "./gmailSync";
-import { isNull, eq, and, inArray } from "drizzle-orm";
+import { isNull, eq, and, inArray, desc } from "drizzle-orm";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -2404,7 +2404,7 @@ export async function registerRoutes(
         .select()
         .from(intakeMessages)
         .where(eq(intakeMessages.tenantId, req.tenant.id))
-        .orderBy(intakeMessages.receivedAt);
+        .orderBy(desc(intakeMessages.receivedAt));
       res.json(messages);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch intake messages" });
@@ -2430,7 +2430,12 @@ export async function registerRoutes(
 
       const suffix = Math.random().toString(36).toUpperCase().slice(2, 8);
       const displayId = `PENDING-${suffix}`;
-      const parsed = message.extractedData as Record<string, string> | null;
+      // Always re-parse from the raw body so we use the latest parser logic
+      const reparsed = parseIntakeEmailBody(message.body || "");
+      const parsed: Record<string, string> | null =
+        reparsed.fields && Object.keys(reparsed.fields).length >= 2
+          ? reparsed.fields
+          : (message.extractedData as Record<string, string> | null);
 
       // Helper: search extractedData by partial label match
       const pick = (...keys: string[]): string | undefined => {
@@ -2504,6 +2509,7 @@ export async function registerRoutes(
         .where(eq(intakeMessages.id, message.id));
       res.json({ success: true, client: newClient });
     } catch (error: any) {
+      console.error("[convert-to-client] error:", error?.code, error?.message, error);
       if (error?.code === "23505") {
         return res.status(409).json({ error: "A client with this email address already exists" });
       }

@@ -2094,7 +2094,7 @@ export default function Clients() {
 
       {/* Edit Client Dialog */}
       <Dialog open={isEditClientOpen} onOpenChange={setIsEditClientOpen}>
-        <DialogContent className="sm:max-w-[500px]">
+        <DialogContent className="sm:max-w-[500px] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Edit Client: {editingClient?.displayId}</DialogTitle>
             <DialogDescription>

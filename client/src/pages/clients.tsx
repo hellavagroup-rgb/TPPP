@@ -3004,7 +3004,7 @@ export default function Clients() {
       {/* View Original Enquiry Dialog */}
       {viewEnquiryClient && (
         <Dialog open={!!viewEnquiryClient} onOpenChange={(v) => { if (!v) setViewEnquiryClient(null); }}>
-          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <Mail className="h-4 w-4" />
@@ -3042,11 +3042,11 @@ export default function Clients() {
                   <>
                     <div className="rounded-md border border-border overflow-hidden">
                       {Object.entries(enquiryMessage.extractedData as Record<string, string>).map(([label, value], idx) => (
-                        <div key={label} className={idx > 0 ? "border-t border-border/50" : ""}>
-                          <div className="px-3 py-2 bg-muted/60 text-sm font-semibold text-foreground">
+                        <div key={label} className={`grid grid-cols-[2fr_3fr] divide-x divide-border/50${idx > 0 ? " border-t border-border/50" : ""}`}>
+                          <div className="px-4 py-3 bg-slate-50 text-sm text-slate-500 font-medium leading-snug">
                             {label}
                           </div>
-                          <div className="px-3 py-2 text-sm text-foreground whitespace-pre-wrap break-words">
+                          <div className="px-4 py-3 text-sm text-foreground whitespace-pre-wrap break-words leading-snug">
                             {value || <span className="text-muted-foreground italic">—</span>}
                           </div>
                         </div>

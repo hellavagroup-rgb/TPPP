@@ -3237,6 +3237,10 @@ export async function registerRoutes(
         dataExportEnabled: z.boolean().optional(),
         nonEngagementEnabled: z.boolean().optional(),
         gmailIntakeEnabled: z.boolean().optional(),
+        clinicianProfileConfig: z.object({
+          showTier: z.boolean().optional(),
+          showTherapyMode: z.boolean().optional(),
+        }).optional(),
       });
       const body = schema.parse(req.body);
       const [updated] = await db.update(tenants).set(body).where(eq(tenants.id, req.params.id)).returning();

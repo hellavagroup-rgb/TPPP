@@ -28,6 +28,10 @@ export const tenants = pgTable("tenants", {
   formsEnabled: boolean("forms_enabled").default(true),
   dataExportEnabled: boolean("data_export_enabled").default(true),
   nonEngagementEnabled: boolean("non_engagement_enabled").default(true),
+  clinicianProfileConfig: json("clinician_profile_config").$type<{
+    showTier?: boolean;
+    showTherapyMode?: boolean;
+  }>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -74,6 +78,7 @@ export const clinicians = pgTable("clinicians", {
   worksWithCouples: boolean("works_with_couples").default(false),
   allocateForBupa: boolean("allocate_for_bupa").default(false),
   tier: text("tier", { enum: ["High", "Mid", "Low"] }),
+  therapyMode: text("therapy_mode"),
   isActive: boolean("is_active").default(true).notNull(),
   lastUpdatedAvailability: timestamp("last_updated_availability"),
   sessionRatePence: integer("session_rate_pence"), // Session rate in pence (e.g. 15000 = £150)

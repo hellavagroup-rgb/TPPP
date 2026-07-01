@@ -133,6 +133,7 @@ interface TenantSummary {
   dataExportEnabled: boolean;
   nonEngagementEnabled: boolean;
   gmailIntakeEnabled: boolean;
+  clinicianProfileConfig: { showTier?: boolean; showTherapyMode?: boolean } | null;
   createdAt: string;
 }
 
@@ -446,9 +447,24 @@ const FEATURE_FLAGS: { key: keyof TenantDetail; label: string; description: stri
   { key: "gmailIntakeEnabled", label: "Intake Inbox / Gmail", description: "Gmail integration for intake email processing" },
 ];
 
+const CLINICIAN_PROFILE_FIELDS: { key: keyof NonNullable<TenantSummary["clinicianProfileConfig"]>; label: string; description: string; defaultOn: boolean }[] = [
+  { key: "showTier", label: "Show Tier Field", description: "High / Mid / Low tier selector on clinician profiles", defaultOn: true },
+  { key: "showTherapyMode", label: "Show Therapy Mode Field", description: "Online / In-person / Both mode selector on clinician profiles", defaultOn: false },
+];
+
 function FeaturesTab({ tenant, adminKey, onSaved }: { tenant: TenantDetail; adminKey: string; onSaved: () => void }) {
   const [flags, setFlags] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(FEATURE_FLAGS.map(f => [f.key, Boolean((tenant as any)[f.key])]))
+  );
+  const [profileConfig, setProfileConfig] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(
+      CLINICIAN_PROFILE_FIELDS.map(f => [
+        f.key,
+        tenant.clinicianProfileConfig != null
+          ? Boolean((tenant.clinicianProfileConfig as any)[f.key] ?? f.defaultOn)
+          : f.defaultOn,
+      ])
+    )
   );
   const [saving, setSaving] = useState(false);
 
@@ -457,7 +473,7 @@ function FeaturesTab({ tenant, adminKey, onSaved }: { tenant: TenantDetail; admi
     try {
       const res = await superAdminFetch(`/api/super-admin/tenants/${tenant.id}/features`, {
         method: "PATCH",
-        body: JSON.stringify(flags),
+        body: JSON.stringify({ ...flags, clinicianProfileConfig: profileConfig }),
       }, adminKey);
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
@@ -491,6 +507,28 @@ function FeaturesTab({ tenant, adminKey, onSaved }: { tenant: TenantDetail; admi
           ))}
         </CardContent>
       </Card>
+
+      <div>
+        <h3 className="text-sm font-semibold mb-2">Clinician Profile Fields</h3>
+        <Card>
+          <CardContent className="divide-y pt-4">
+            {CLINICIAN_PROFILE_FIELDS.map(f => (
+              <div key={f.key} className="flex items-center justify-between py-3" data-testid={`profile-config-${f.key}`}>
+                <div>
+                  <p className="font-medium text-sm">{f.label}</p>
+                  <p className="text-xs text-muted-foreground">{f.description}</p>
+                </div>
+                <Switch
+                  checked={profileConfig[f.key] ?? f.defaultOn}
+                  onCheckedChange={v => setProfileConfig(prev => ({ ...prev, [f.key]: v }))}
+                  data-testid={`switch-profile-${f.key}`}
+                />
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      </div>
+
       <Button onClick={handleSave} disabled={saving} data-testid="button-save-features">
         {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
         <Save className="h-4 w-4 mr-2" />

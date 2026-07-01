@@ -80,6 +80,9 @@ export default function Clinicians() {
     staleTime: 60_000,
   });
   const paymentsEnabled = tenant?.paymentsEnabled !== false;
+  const clinicianProfileConfig = tenant?.clinicianProfileConfig as { showTier?: boolean; showTherapyMode?: boolean } | undefined;
+  const showTier = clinicianProfileConfig?.showTier !== false;
+  const showTherapyMode = clinicianProfileConfig?.showTherapyMode === true;
 
   const [selectedClinician, setSelectedClinician] = useState<ClinicianWithName | null>(null);
   const [editedClinician, setEditedClinician] = useState<Partial<ClinicianWithName & { email?: string }>>({});
@@ -155,7 +158,7 @@ export default function Clinicians() {
       setIsAddOpen(false);
       setNewRateStr("");
       setNewClinician({
-        name: "", email: "", tier: "Mid", bio: "", location: "", nhsTrust: "",
+        name: "", email: "", tier: "Mid", therapyMode: "", bio: "", location: "", nhsTrust: "",
         capacity: 15, maxNewClients: 3, worksWithCouples: false, allocateForBupa: false, insurers: [], contactMethods: [],
         sessionRatePence: null,
       });
@@ -187,6 +190,7 @@ export default function Clinicians() {
     setEditedClinician({
       name: clinician.name,
       tier: clinician.tier || "Mid",
+      therapyMode: clinician.therapyMode || "",
       bio: clinician.bio || "",
       location: clinician.location || "",
       nhsTrust: clinician.nhsTrust || "",
@@ -221,6 +225,7 @@ export default function Clinicians() {
     const updates: Record<string, unknown> = {};
     if (editedClinician.name !== undefined) updates.name = editedClinician.name;
     if (editedClinician.tier !== undefined) updates.tier = editedClinician.tier;
+    if (editedClinician.therapyMode !== undefined) updates.therapyMode = editedClinician.therapyMode;
     if (editedClinician.bio !== undefined) updates.bio = editedClinician.bio;
     if (editedClinician.location !== undefined) updates.location = editedClinician.location;
     if (editedClinician.nhsTrust !== undefined) updates.nhsTrust = editedClinician.nhsTrust;
@@ -285,9 +290,11 @@ export default function Clinicians() {
                   <div>
                     <CardTitle className="text-lg font-serif">{clinician.name}</CardTitle>
                     <div className="flex items-center gap-2 mt-1">
-                      <Badge variant="outline" className="text-[10px] font-normal border-slate-200">
-                        {clinician.tier || "Mid"}
-                      </Badge>
+                      {showTier && (
+                        <Badge variant="outline" className="text-[10px] font-normal border-slate-200">
+                          {clinician.tier || "Mid"}
+                        </Badge>
+                      )}
                       {clinician.worksWithCouples && (
                         <Badge variant="secondary" className="text-[10px] font-normal bg-indigo-50 text-indigo-700 hover:bg-indigo-100">
                           Couples
@@ -470,19 +477,37 @@ export default function Clinicians() {
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <Label>Tier</Label>
-                <Select value={editedClinician.tier || "Mid"} onValueChange={(v) => setEditedClinician({...editedClinician, tier: v as any})}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="High">High</SelectItem>
-                    <SelectItem value="Mid">Mid</SelectItem>
-                    <SelectItem value="Low">Low</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              {showTier && (
+                <div className="space-y-2">
+                  <Label>Tier</Label>
+                  <Select value={editedClinician.tier || "Mid"} onValueChange={(v) => setEditedClinician({...editedClinician, tier: v as any})}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="High">High</SelectItem>
+                      <SelectItem value="Mid">Mid</SelectItem>
+                      <SelectItem value="Low">Low</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {showTherapyMode && (
+                <div className="space-y-2">
+                  <Label>Therapy Mode</Label>
+                  <Select value={editedClinician.therapyMode || ""} onValueChange={(v) => setEditedClinician({...editedClinician, therapyMode: v})}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select mode" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Online">Online</SelectItem>
+                      <SelectItem value="In-person">In-person</SelectItem>
+                      <SelectItem value="Both">Both</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
 
               <div className="space-y-2">
                 <Label>Bio</Label>
@@ -696,19 +721,37 @@ export default function Clinicians() {
               </div>
             </div>
 
-            <div className="space-y-2">
-              <Label>Tier</Label>
-              <Select value={newClinician.tier} onValueChange={(v: "High" | "Mid" | "Low") => setNewClinician({...newClinician, tier: v})}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="High">High</SelectItem>
-                  <SelectItem value="Mid">Mid</SelectItem>
-                  <SelectItem value="Low">Low</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+            {showTier && (
+              <div className="space-y-2">
+                <Label>Tier</Label>
+                <Select value={newClinician.tier} onValueChange={(v: "High" | "Mid" | "Low") => setNewClinician({...newClinician, tier: v})}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="High">High</SelectItem>
+                    <SelectItem value="Mid">Mid</SelectItem>
+                    <SelectItem value="Low">Low</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {showTherapyMode && (
+              <div className="space-y-2">
+                <Label>Therapy Mode</Label>
+                <Select value={newClinician.therapyMode} onValueChange={(v) => setNewClinician({...newClinician, therapyMode: v})}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select mode" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Online">Online</SelectItem>
+                    <SelectItem value="In-person">In-person</SelectItem>
+                    <SelectItem value="Both">Both</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             <div className="space-y-2">
               <Label>Bio</Label>

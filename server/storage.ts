@@ -224,6 +224,7 @@ export class DatabaseStorage implements IStorage {
         worksWithCouples: clinicians.worksWithCouples,
         allocateForBupa: clinicians.allocateForBupa,
         tier: clinicians.tier,
+        therapyMode: clinicians.therapyMode,
         isActive: clinicians.isActive,
         sessionRatePence: clinicians.sessionRatePence,
         lastUpdatedAvailability: clinicians.lastUpdatedAvailability,

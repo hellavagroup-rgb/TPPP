@@ -226,7 +226,8 @@ export default function FormBuilder() {
       const response = await apiRequest("PATCH", `/api/forms/${id}`, formData);
       return response.json();
     },
-    onSuccess: () => {
+    onSuccess: (data, variables) => {
+      queryClient.setQueryData([`/api/forms/${variables.id}`], data);
       queryClient.invalidateQueries({ queryKey: ["/api/forms"] });
       toast({ title: "Form Updated", description: "Form template changes saved." });
     },

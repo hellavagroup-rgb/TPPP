@@ -229,6 +229,7 @@ export default function FormBuilder() {
     onSuccess: (data, variables) => {
       queryClient.setQueryData([`/api/forms/${variables.id}`], data);
       queryClient.invalidateQueries({ queryKey: ["/api/forms"] });
+      queryClient.invalidateQueries({ queryKey: ["forms"] });
       toast({ title: "Form Updated", description: "Form template changes saved." });
     },
     onError: () => {

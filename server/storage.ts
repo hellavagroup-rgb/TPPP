@@ -1,6 +1,7 @@
 import { 
-  users, clients, clinicians, timeSlots, formTemplates, formSubmissions, tasks, auditLogs, emailTemplates, inviteTokens, passwordResetTokens, nonEngagementCategories, customInsurers, paymentCharges, intakeMessages,
+  users, clients, clinicians, timeSlots, formTemplates, formSubmissions, tasks, auditLogs, emailTemplates, inviteTokens, passwordResetTokens, nonEngagementCategories, customInsurers, paymentCharges, intakeMessages, tenants,
   type User, type InsertUser, type SafeUser,
+  type Tenant,
   type Client, type InsertClient,
   type Clinician, type InsertClinician,
   type TimeSlot, type InsertTimeSlot,

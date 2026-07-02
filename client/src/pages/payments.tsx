@@ -79,6 +79,17 @@ export default function Payments() {
   const [toDate, setToDate] = useState<string>("");
   const [search, setSearch] = useState<string>("");
 
+  const { data: tenant } = useQuery<{ paymentsEnabled?: boolean }>({
+    queryKey: ["/api/tenant"],
+    queryFn: async () => {
+      const res = await fetch("/api/tenant", { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+  const paymentsEnabled = tenant?.paymentsEnabled !== false;
+
   const { data: charges = [], isLoading } = useQuery<ChargeWithClient[]>({
     queryKey: ["/api/stripe/charges"],
     queryFn: async () => {
@@ -191,6 +202,19 @@ export default function Payments() {
     setFromDate("");
     setToDate("");
     setSearch("");
+  }
+
+  if (!paymentsEnabled) {
+    return (
+      <div className="p-6 max-w-7xl mx-auto" data-testid="payments-disabled">
+        <Alert>
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription>
+            The Payments dashboard is not enabled for this practice.
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
   }
 
   return (

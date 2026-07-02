@@ -129,7 +129,6 @@ export default function Clients() {
     },
     staleTime: 60_000,
   });
-  const paymentsEnabled = tenant?.paymentsEnabled !== false;
   const formsEnabled = tenant?.formsEnabled !== false;
   const nonEngagementEnabled = tenant?.nonEngagementEnabled !== false;
   const [searchTerm, setSearchTerm] = useState("");
@@ -696,7 +695,7 @@ export default function Clients() {
   };
 
   const paymentStatusBadge = (client: ClientType) => {
-    if (!paymentsEnabled || !stripeEnabled) return null;
+    if (!stripeEnabled) return null;
     if ((client as any).hasFailedPayment) {
       const reason = (client as any).latestFailureReason;
       return (
@@ -837,7 +836,7 @@ export default function Clients() {
             updates,
           }, { onSuccess: () => resolve(), onError: (e) => reject(e) });
       });
-      if (paymentsEnabled && editClientData.agreedRatePence !== (editingClient.agreedRatePence ?? null)) {
+      if (stripeEnabled && editClientData.agreedRatePence !== (editingClient.agreedRatePence ?? null)) {
         await apiRequest("PATCH", `/api/clients/${editingClient.id}/agreed-rate`, {
           agreedRatePence: editClientData.agreedRatePence ?? 0
         });
@@ -1607,7 +1606,7 @@ export default function Clients() {
                           <DropdownMenuItem onClick={() => handleOpenViewResponses(client)}>
                             <Eye className="h-4 w-4 mr-2" /> View Responses
                           </DropdownMenuItem>
-                          {paymentsEnabled && stripeEnabled && (
+                          {stripeEnabled && (
                             <>
                               <DropdownMenuSeparator />
                               <DropdownMenuItem onClick={() => handleOpenPaymentLink(client)}>
@@ -1716,7 +1715,7 @@ export default function Clients() {
                         <DropdownMenuItem onClick={() => handleOpenViewResponses(client)}>
                           <Eye className="h-4 w-4 mr-2" /> View Responses
                         </DropdownMenuItem>
-                        {paymentsEnabled && stripeEnabled && !client.isArchived && (
+                        {stripeEnabled && !client.isArchived && (
                           <>
                             <DropdownMenuSeparator />
                             {client.paymentStatus === "active" ? (
@@ -2208,7 +2207,7 @@ export default function Clients() {
               />
             </div>
 
-            {paymentsEnabled && (
+            {stripeEnabled && (
               <div className="grid gap-2">
                 <Label>Session Rate (£)</Label>
                 <div className="relative">

@@ -79,7 +79,10 @@ export default function Clinicians() {
     },
     staleTime: 60_000,
   });
-  const paymentsEnabled = tenant?.paymentsEnabled !== false;
+  const { data: stripeStatus } = useQuery<{ configured: boolean }>({
+    queryKey: ["/api/stripe/status"],
+  });
+  const stripeEnabled = stripeStatus?.configured ?? false;
   const clinicianProfileConfig = tenant?.clinicianProfileConfig as { showTier?: boolean; showTherapyMode?: boolean } | undefined;
   const showTier = clinicianProfileConfig?.showTier !== false;
   const showTherapyMode = clinicianProfileConfig?.showTherapyMode === true;
@@ -840,7 +843,7 @@ export default function Clinicians() {
               <Label htmlFor="new-bupa" className="font-medium cursor-pointer">Allocate for Bupa</Label>
             </div>
 
-            {paymentsEnabled && (
+            {stripeEnabled && (
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <Label>Session Rate</Label>

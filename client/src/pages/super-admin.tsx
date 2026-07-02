@@ -437,7 +437,7 @@ function BrandingTab({ tenant, adminKey, onSaved }: { tenant: TenantDetail; admi
 // ─── Features Tab ─────────────────────────────────────────────────────────────
 
 const FEATURE_FLAGS: { key: keyof TenantDetail; label: string; description: string }[] = [
-  { key: "paymentsEnabled", label: "Payments", description: "Stripe payment collection and session charges" },
+  { key: "paymentsEnabled", label: "Payments", description: "Payments dashboard/nav link (revenue & charge history). Payment-link generation on client records works independently, whenever a Stripe key is configured on the Stripe tab." },
   { key: "tasksEnabled", label: "Tasks", description: "Administrative task management" },
   { key: "analyticsEnabled", label: "Analytics", description: "Practice analytics dashboard" },
   { key: "waitlistEnabled", label: "Waitlist", description: "Waitlist management view" },

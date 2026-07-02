@@ -64,96 +64,15 @@ export async function registerRoutes(
     }
   });
 
-  // ONE-TIME migration: create default tenant and assign all users to it
-  app.post("/api/admin/seed-tenant", requireAdmin, async (req, res) => {
-    try {
-      const existing = await db.select().from(tenants).limit(1);
-      let tenant = existing[0];
-      if (!tenant) {
-        const [created] = await db.insert(tenants).values({
-          name: "The Perinatal Psychology Practice",
-        }).returning();
-        tenant = created;
-        console.log("Created tenant:", tenant.id);
-      } else {
-        console.log("Tenant already exists:", tenant.id);
-      }
-      const tables = [
-        { name: "users", table: users },
-        { name: "clients", table: clients },
-        { name: "clinicians", table: clinicians },
-        { name: "tasks", table: tasks },
-        { name: "formTemplates", table: formTemplates },
-        { name: "formSubmissions", table: formSubmissions },
-        { name: "timeSlots", table: timeSlots },
-        { name: "emailTemplates", table: emailTemplates },
-        { name: "nonEngagementCategories", table: nonEngagementCategories },
-        { name: "customInsurers", table: customInsurers },
-      ];
-      const counts: Record<string, number> = {};
-      for (const { name, table } of tables) {
-        const updated = await (db.update(table) as any).set({ tenantId: tenant.id }).where(isNull((table as any).tenantId)).returning();
-        counts[name] = updated.length;
-      }
-
-      // Audit log backfill: stamp null-tenantId logs whose userId belongs to this tenant's users.
-      // Scoped by userId to avoid incorrectly stamping another tenant's orphaned logs.
-      const tenantUserIds = await db.select({ id: users.id }).from(users).where(eq(users.tenantId, tenant.id));
-      const userIdList = tenantUserIds.map(u => u.id);
-      let auditLogsFixed = 0;
-      if (userIdList.length > 0) {
-        const updatedLogs = await db.update(auditLogs)
-          .set({ tenantId: tenant.id })
-          .where(and(isNull(auditLogs.tenantId), inArray(auditLogs.userId, userIdList)))
-          .returning();
-        auditLogsFixed = updatedLogs.length;
-      }
-      counts["auditLogsBackfilled"] = auditLogsFixed;
-      // Fix stuck legacy assignments: clear assignedSlot/assignedClinicianId for any client
-      // where assignedSlotId is null but text fields remain. This covers:
-      //   - Confirmed (Scheduled) clients: slot was deleted on confirm but text fields not cleared
-      //   - De-allocated clients: status rolled back but text fields not cleared
-      const stuckClients = await db.select().from(clients).where(isNull(clients.assignedSlotId));
-      let stuckFixed = 0;
-      for (const c of stuckClients) {
-        if (c.assignedSlot || c.assignedClinicianId) {
-          await db.update(clients).set({ assignedSlot: null, assignedClinicianId: null }).where(eq(clients.id, c.id));
-          stuckFixed++;
-        }
-      }
-      counts["stuckLegacyAssignmentsFixed"] = stuckFixed;
-
-      // Deduplicate recurring slots: for each clinician+day+startTime with multiple
-      // unbooked copies, keep the oldest and delete the rest
-      const allRecurring = await db.select().from(timeSlots)
-        .where(eq(timeSlots.type, "Recurring"));
-      const slotGroups = new Map<string, typeof allRecurring>();
-      for (const slot of allRecurring) {
-        const key = `${slot.clinicianId}|${slot.day}|${slot.startTime}`;
-        if (!slotGroups.has(key)) slotGroups.set(key, []);
-        slotGroups.get(key)!.push(slot);
-      }
-      let dupsDeleted = 0;
-      for (const [, group] of slotGroups) {
-        const unbookedCopies = group.filter(s => !s.isBooked);
-        if (unbookedCopies.length <= 1) continue;
-        // Keep the oldest (lowest timestamp in ID), delete the rest
-        unbookedCopies.sort((a, b) => a.id.localeCompare(b.id));
-        const toDelete = unbookedCopies.slice(1);
-        for (const slot of toDelete) {
-          await db.delete(timeSlots).where(eq(timeSlots.id, slot.id));
-          dupsDeleted++;
-        }
-      }
-      counts["duplicateSlotsRemoved"] = dupsDeleted;
-
-      res.json({ success: true, tenantId: tenant.id, updated: counts });
-    } catch (error) {
-      console.error("Seed tenant error:", error);
-      res.status(500).json({ error: "Failed to seed tenant" });
-    }
-  });
-
+  // NOTE: the former "/api/admin/seed-tenant" one-time migration endpoint has been
+  // removed. It auto-assigned ANY row with a null tenantId (across every tenant) to
+  // "whichever tenant was created first", and was reachable by any regular tenant
+  // admin (not just a super-admin). This is what caused a clinician's user account to
+  // be silently reassigned from her real tenant to the first-created tenant, which in
+  // turn leaked that tenant's branding into her password-reset email. Null-tenantId
+  // rows are now only ever reported (never auto-assigned) via fixNullTenantIds() in
+  // server/seed.ts, and cross-tenant fixes must go through the deliberate, audited
+  // "/api/super-admin/users/reassign-tenant" endpoint below.
 
   // ============ AUTH ROUTES ============
   app.post("/api/auth/login", (req, res, next) => {
@@ -3195,6 +3114,42 @@ export async function registerRoutes(
       res.json({ success: true });
     } catch (error) {
       res.status(400).json({ error: "Failed to reset password" });
+    }
+  });
+
+  // Reassign a user (and their linked clinician profile, if any) to a different
+  // tenant. This is the ONLY supported way to move a user/clinician between
+  // tenants — it is deliberate, audited, and scoped to a single account, unlike
+  // the removed bulk "seed-tenant" migration.
+  app.post("/api/super-admin/users/reassign-tenant", requireSuperAdmin, async (req, res) => {
+    try {
+      const { email, newTenantId } = z.object({
+        email: z.string().email(),
+        newTenantId: z.string().uuid(),
+      }).parse(req.body);
+
+      const [tenant] = await db.select().from(tenants).where(eq(tenants.id, newTenantId));
+      if (!tenant) return res.status(404).json({ error: "Target tenant not found" });
+
+      const user = await storage.getUserByEmail(email.toLowerCase());
+      if (!user) return res.status(404).json({ error: "User not found" });
+
+      const previousTenantId = user.tenantId;
+      await storage.updateUser(user.id, { tenantId: newTenantId } as any);
+
+      let clinicianUpdated = false;
+      const clinician = await storage.getClinicianByUserId(user.id);
+      if (clinician && clinician.tenantId !== newTenantId) {
+        await db.update(clinicians).set({ tenantId: newTenantId }).where(eq(clinicians.id, clinician.id));
+        clinicianUpdated = true;
+      }
+
+      console.log(`[super-admin] Reassigned user ${user.id} (${user.email}) from tenant ${previousTenantId} to ${newTenantId} (${tenant.name}). Clinician profile updated: ${clinicianUpdated}`);
+
+      res.json({ success: true, previousTenantId, newTenantId, tenantName: tenant.name, clinicianUpdated });
+    } catch (error) {
+      console.error("Reassign tenant error:", error);
+      res.status(400).json({ error: "Failed to reassign tenant" });
     }
   });
 

@@ -864,51 +864,143 @@ function UsersTab({ adminKey }: { adminKey: string }) {
   };
 
   return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Reset User Password</CardTitle>
+          <CardDescription>Override a user's password directly. Use when the user cannot receive a password-reset email.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleReset} className="space-y-4 max-w-sm">
+            <div className="space-y-1.5">
+              <Label htmlFor="reset-email">User email</Label>
+              <Input
+                id="reset-email"
+                data-testid="input-reset-email"
+                type="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                placeholder="admin@example.com"
+                required
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="reset-pw">New password</Label>
+              <div className="relative">
+                <Input
+                  id="reset-pw"
+                  data-testid="input-reset-password"
+                  type={showPw ? "text" : "password"}
+                  value={newPassword}
+                  onChange={e => setNewPassword(e.target.value)}
+                  placeholder="Min 8 characters"
+                  required
+                  minLength={8}
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPw(v => !v)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+            <Button type="submit" disabled={loading} data-testid="button-reset-password">
+              {loading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Reset Password
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
+      <ReassignTenantCard adminKey={adminKey} />
+    </div>
+  );
+}
+
+function ReassignTenantCard({ adminKey }: { adminKey: string }) {
+  const [email, setEmail] = useState("");
+  const [newTenantId, setNewTenantId] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const { data: tenantList } = useQuery<{ id: string; name: string }[]>({
+    queryKey: ["super-admin-tenants"],
+    queryFn: async () => {
+      const res = await superAdminFetch("/api/super-admin/tenants", {}, adminKey);
+      if (!res.ok) throw new Error("Failed to load tenants");
+      return res.json();
+    },
+  });
+
+  const handleReassign = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email || !newTenantId) return;
+    setLoading(true);
+    try {
+      const res = await superAdminFetch("/api/super-admin/users/reassign-tenant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, newTenantId }),
+      }, adminKey);
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(`Moved ${email} to ${data.tenantName}${data.clinicianUpdated ? " (clinician profile updated too)" : ""}`);
+        setEmail("");
+        setNewTenantId("");
+      } else {
+        toast.error(data.error || "Failed to reassign tenant");
+      }
+    } catch {
+      toast.error("Network error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Reset User Password</CardTitle>
-        <CardDescription>Override a user's password directly. Use when the user cannot receive a password-reset email.</CardDescription>
+        <CardTitle className="text-base">Reassign User to a Different Tenant</CardTitle>
+        <CardDescription>
+          Moves a user account (and their clinician profile, if any) to another tenant. Use this for
+          data-entry corrections — e.g. an account accidentally created under the wrong practice.
+        </CardDescription>
       </CardHeader>
       <CardContent>
-        <form onSubmit={handleReset} className="space-y-4 max-w-sm">
+        <form onSubmit={handleReassign} className="space-y-4 max-w-sm">
           <div className="space-y-1.5">
-            <Label htmlFor="reset-email">User email</Label>
+            <Label htmlFor="reassign-email">User email</Label>
             <Input
-              id="reset-email"
-              data-testid="input-reset-email"
+              id="reassign-email"
+              data-testid="input-reassign-email"
               type="email"
               value={email}
               onChange={e => setEmail(e.target.value)}
-              placeholder="admin@example.com"
+              placeholder="clinician@example.com"
               required
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="reset-pw">New password</Label>
-            <div className="relative">
-              <Input
-                id="reset-pw"
-                data-testid="input-reset-password"
-                type={showPw ? "text" : "password"}
-                value={newPassword}
-                onChange={e => setNewPassword(e.target.value)}
-                placeholder="Min 8 characters"
-                required
-                minLength={8}
-                className="pr-10"
-              />
-              <button
-                type="button"
-                onClick={() => setShowPw(v => !v)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              >
-                {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </button>
-            </div>
+            <Label htmlFor="reassign-tenant">New tenant</Label>
+            <select
+              id="reassign-tenant"
+              data-testid="select-reassign-tenant"
+              className="w-full border rounded-md h-9 px-3 text-sm bg-background"
+              value={newTenantId}
+              onChange={e => setNewTenantId(e.target.value)}
+              required
+            >
+              <option value="" disabled>Select a tenant</option>
+              {tenantList?.map(t => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
           </div>
-          <Button type="submit" disabled={loading} data-testid="button-reset-password">
+          <Button type="submit" disabled={loading} data-testid="button-reassign-tenant">
             {loading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-            Reset Password
+            Reassign Tenant
           </Button>
         </form>
       </CardContent>

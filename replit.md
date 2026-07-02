@@ -1,5 +1,10 @@
 # The Perinatal Psychology Practice - Client Management System
 
+## Recent Changes (July 2026)
+- **Cross-tenant branding leak fix**: Audited and fixed all email templates and UI fallbacks that could leak one tenant's name/logo into another tenant's emails or public pages. Replaced hardcoded "The Perinatal Psychology Practice" fallbacks with a generic "PsychPortal" default across `server/email.ts`, `server/routes.ts`, `server/stripe.ts`, and client-side pages (form-fill, accept-invite, index.html meta tags). Admin-editable email template defaults now use a `{{practice_name}}` placeholder instead of a hardcoded name.
+- **Root cause found and removed**: A legacy one-time migration endpoint (`/api/admin/seed-tenant`), reachable by any regular tenant admin, silently reassigned any row with a null `tenantId` to whichever tenant was created first. This caused a real incident where a clinician's user account got flipped to the wrong tenant while her clinician profile stayed correctly tenant-scoped, so her password-reset email carried the wrong practice's branding. The endpoint has been deleted; `server/seed.ts`'s startup check now only warns about orphaned rows instead of auto-assigning them.
+- **New safe tenant-reassignment tool**: Super Admin panel > Users tab now has a "Reassign User to a Different Tenant" action that moves a single user (and their linked clinician profile, if any) to a chosen tenant. This is the only supported way to correct a mis-tenanted account going forward.
+
 ## Recent Changes (January 2026)
 - **Security hardening**: Added rate limiting (5 login attempts/15min, 100 API requests/15min), helmet security headers, SESSION_SECRET production enforcement
 - **Secure token storage**: Password reset tokens now stored in database with 7-day expiry (never logged)

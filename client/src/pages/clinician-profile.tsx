@@ -23,7 +23,20 @@ export default function ClinicianProfile() {
   const queryClient = useQueryClient();
   const { data: rawInsurerList = [] } = useInsurers();
   const insurerList = rawInsurerList.filter(i => i !== "Private");
-  
+
+  const { data: tenant } = useQuery({
+    queryKey: ["/api/tenant"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/tenant");
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: !!user,
+    staleTime: 60_000,
+  });
+  const clinicianProfileConfig = tenant?.clinicianProfileConfig as { showTier?: boolean; showTherapyMode?: boolean } | undefined;
+  const showTier = clinicianProfileConfig?.showTier !== false;
+
   const { data: clinicianData, isLoading, error } = useQuery<ClinicianWithAvailability>({
     queryKey: ["/api/clinicians/me"],
     enabled: !!user,
@@ -106,9 +119,11 @@ export default function ClinicianProfile() {
                 {formData.avatar}
               </div>
               <CardTitle>{user?.name}</CardTitle>
-              <div className="flex justify-center gap-2 mt-2">
-                <Badge variant="outline">{formData.tier || "Mid"}</Badge>
-              </div>
+              {showTier && (
+                <div className="flex justify-center gap-2 mt-2">
+                  <Badge variant="outline">{formData.tier || "Mid"}</Badge>
+                </div>
+              )}
             </CardHeader>
             <CardContent className="space-y-4 text-sm">
               <div className="flex items-center gap-2 text-muted-foreground">
@@ -169,19 +184,21 @@ export default function ClinicianProfile() {
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <Label>Practice Tier</Label>
-                <Select value={formData.tier || "Mid"} onValueChange={(v) => setFormData({...formData, tier: v})}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="High">High</SelectItem>
-                    <SelectItem value="Mid">Mid</SelectItem>
-                    <SelectItem value="Low">Low</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              {showTier && (
+                <div className="space-y-2">
+                  <Label>Practice Tier</Label>
+                  <Select value={formData.tier || "Mid"} onValueChange={(v) => setFormData({...formData, tier: v})}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="High">High</SelectItem>
+                      <SelectItem value="Mid">Mid</SelectItem>
+                      <SelectItem value="Low">Low</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
 
               <div className="space-y-2">
                 <Label>Insurers Accepted</Label>

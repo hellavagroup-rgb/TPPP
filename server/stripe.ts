@@ -25,6 +25,7 @@ export async function createCheckoutSession(opts: {
   cancelUrl: string;
   tenantId?: string | null;
   tenantStripeKey?: string | null;
+  practiceName?: string | null;
 }): Promise<{ url: string; customerId: string; sessionId: string } | null> {
   const stripe = getStripeInstance(opts.tenantStripeKey);
   if (!stripe) return null;
@@ -45,7 +46,7 @@ export async function createCheckoutSession(opts: {
           unit_amount: opts.amountPence,
           product_data: {
             name: "Initial Therapy Session",
-            description: "The Perinatal Psychology Practice",
+            description: opts.practiceName || "PsychPortal",
           },
         },
         quantity: 1,

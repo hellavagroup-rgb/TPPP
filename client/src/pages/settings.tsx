@@ -28,10 +28,10 @@ const DEFAULT_TEMPLATES: Omit<EmailTemplate, "id" | "updatedAt">[] = [
   {
     templateKey: "form_invite",
     name: "Form Invitation",
-    subject: "Please Complete Your Intake Form - The Perinatal Psychology Practice",
+    subject: "Please Complete Your Intake Form - {{practice_name}}",
     bodyText: `Dear Client,
 
-Thank you for reaching out to The Perinatal Psychology Practice.
+Thank you for reaching out to {{practice_name}}.
 
 Please click the link below to complete your intake form:
 {{form_link}}
@@ -39,12 +39,12 @@ Please click the link below to complete your intake form:
 If you have any questions, please don't hesitate to contact us.
 
 Best regards,
-The Perinatal Psychology Practice`,
+{{practice_name}}`,
   },
   {
     templateKey: "password_reset",
     name: "Password Reset",
-    subject: "Password Reset Request - The Perinatal Psychology Practice",
+    subject: "Password Reset Request - {{practice_name}}",
     bodyText: `Hello {{name}},
 
 You have requested to reset your password.
@@ -55,7 +55,7 @@ Please click the link below to set a new password:
 If you did not request this, please ignore this email.
 
 Best regards,
-The Perinatal Psychology Practice`,
+{{practice_name}}`,
   },
   {
     templateKey: "task_reminder",
@@ -72,12 +72,12 @@ Due: {{due_date}}
 Please log in to complete this task.
 
 Best regards,
-The Perinatal Psychology Practice`,
+{{practice_name}}`,
   },
   {
     templateKey: "availability_reminder",
     name: "Availability Reminder",
-    subject: "Please Update Your Availability - The Perinatal Psychology Practice",
+    subject: "Please Update Your Availability - {{practice_name}}",
     bodyText: `Hello {{name}},
 
 This is a reminder to update your availability for the coming weeks.
@@ -88,12 +88,12 @@ Please log in to your account and update your available time slots:
 This helps us efficiently match clients with your schedule.
 
 Best regards,
-The Perinatal Psychology Practice`,
+{{practice_name}}`,
   },
   {
     templateKey: "form_completion",
     name: "Form Completion Confirmation",
-    subject: "Thank You for Completing Your Intake Form - The Perinatal Psychology Practice",
+    subject: "Thank You for Completing Your Intake Form - {{practice_name}}",
     bodyText: `Thank you for completing our intake form. We know that sharing this information can sometimes feel difficult, and we really appreciate you taking the time to share it with us.
 
 One of our senior clinicians will carefully review the information you've shared within 2-3 working days. Your form helps us to:
@@ -112,7 +112,7 @@ If you have any questions in the meantime, please don't hesitate to contact us a
 
 Warm regards,
 
-The Perinatal Psychology Practice Team
+{{practice_name}} Team
 
 
 If you need urgent support, please contact your GP or a trusted healthcare provider. In the UK, you can also receive immediate support from: the Samaritans (Call 116 123 lines open 24/7 365 days a year or email jo@samaritans.org); or contact CALM (https://www.thecalmzone.net/) on their national helpline 0800 585858 (5pm to midnight).`,
@@ -128,7 +128,7 @@ Name: {{clientName}}
 
 Please log in to the practice management system to review and process this referral.
 
-The Perinatal Psychology Practice`,
+{{practice_name}}`,
   },
   {
     templateKey: "waitlist_update",
@@ -143,12 +143,12 @@ New Status: {{newStatus}}
 
 Please log in to the practice management system to review this update.
 
-The Perinatal Psychology Practice`,
+{{practice_name}}`,
   },
   {
     templateKey: "payment_link",
     name: "Payment Link",
-    subject: "Your Session Payment Link - The Perinatal Psychology Practice",
+    subject: "Your Session Payment Link - {{practice_name}}",
     bodyText: `Thank you for completing your intake process. To confirm your first therapy session, please complete your initial session payment using the secure link below.
 
 Payment amount: £{{amount}}
@@ -160,7 +160,7 @@ Your card details will be saved securely so that future session payments can be 
 If you have any questions, please don't hesitate to contact us.
 
 Warm regards,
-The Perinatal Psychology Practice Team`,
+{{practice_name}} Team`,
   },
 ];
 
@@ -296,7 +296,7 @@ function EmailTemplatesTab() {
         <CardHeader>
           <CardTitle>Email Templates</CardTitle>
           <CardDescription>
-            Customize the content of emails sent to clients and clinicians. Use placeholders like {"{{name}}"} which will be replaced with actual values.
+            Customize the content of emails sent to clients and clinicians. Use placeholders like {"{{name}}"} or {"{{practice_name}}"} which will be replaced with actual values.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">

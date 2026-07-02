@@ -18,6 +18,11 @@ export interface TenantContext {
   fromEmail?: string | null;
 }
 
+// Used whenever there is no tenant context (or a tenant lookup fails). Must never be a
+// specific tenant's name — that would leak one practice's identity into another's emails,
+// or into emails that are not scoped to any practice at all.
+export const GENERIC_PRACTICE_NAME = 'PsychPortal';
+
 export interface EmailOptions {
   to: string;
   subject: string;
@@ -31,12 +36,12 @@ export function buildFromAddress(tenant?: TenantContext): string {
   const envFrom = process.env.FROM_EMAIL || 'onboarding@resend.dev';
   const emailMatch = envFrom.match(/<(.+)>/);
   const emailAddress = emailMatch ? emailMatch[1] : envFrom;
-  const displayName = tenant?.name || 'The Perinatal Psychology Practice';
+  const displayName = tenant?.name || GENERIC_PRACTICE_NAME;
   return `${displayName} <${emailAddress}>`;
 }
 
 function wrapInHtmlTemplate(text: string, headerTitle?: string, practiceName?: string): string {
-  const footer = practiceName || 'The Perinatal Psychology Practice';
+  const footer = practiceName || GENERIC_PRACTICE_NAME;
   const lines = text.split('\n').map(line => line ? `<p>${line}</p>` : '<br>').join('\n');
   return `
     <!DOCTYPE html>
@@ -112,11 +117,11 @@ export async function sendEmail(options: EmailOptions): Promise<{ success: boole
 // ============ EMAIL TEMPLATES ============
 
 export async function generateFormInviteEmail(formName: string, formUrl: string, tenant?: TenantContext): Promise<EmailOptions> {
-  const practiceName = tenant?.name || 'The Perinatal Psychology Practice';
+  const practiceName = tenant?.name || GENERIC_PRACTICE_NAME;
   const storedTemplate = await getStoredTemplate('form_invite', tenant?.id);
 
   if (storedTemplate) {
-    const placeholders = { form_name: formName, form_link: formUrl };
+    const placeholders = { form_name: formName, form_link: formUrl, practice_name: practiceName };
     const bodyText = replacePlaceholders(storedTemplate.bodyText, placeholders);
     const subject = replacePlaceholders(storedTemplate.subject, placeholders);
     return {
@@ -176,11 +181,11 @@ export async function generateFormInviteEmail(formName: string, formUrl: string,
 }
 
 export async function generatePasswordResetEmail(userName: string, resetUrl: string, tenant?: TenantContext): Promise<EmailOptions> {
-  const practiceName = tenant?.name || 'The Perinatal Psychology Practice';
+  const practiceName = tenant?.name || GENERIC_PRACTICE_NAME;
   const storedTemplate = await getStoredTemplate('password_reset', tenant?.id);
 
   if (storedTemplate) {
-    const placeholders = { name: userName, reset_link: resetUrl };
+    const placeholders = { name: userName, reset_link: resetUrl, practice_name: practiceName };
     const bodyText = replacePlaceholders(storedTemplate.bodyText, placeholders);
     const subject = replacePlaceholders(storedTemplate.subject, placeholders);
     return {
@@ -240,7 +245,7 @@ export async function generatePasswordResetEmail(userName: string, resetUrl: str
 }
 
 export async function generateTaskReminderEmail(assigneeName: string, taskTitle: string, taskDescription: string, dueDate: string, tenant?: TenantContext): Promise<EmailOptions> {
-  const practiceName = tenant?.name || 'The Perinatal Psychology Practice';
+  const practiceName = tenant?.name || GENERIC_PRACTICE_NAME;
   const storedTemplate = await getStoredTemplate('task_reminder', tenant?.id);
 
   if (storedTemplate) {
@@ -248,7 +253,8 @@ export async function generateTaskReminderEmail(assigneeName: string, taskTitle:
       name: assigneeName,
       task_title: taskTitle,
       task_description: taskDescription,
-      due_date: dueDate
+      due_date: dueDate,
+      practice_name: practiceName
     };
     const bodyText = replacePlaceholders(storedTemplate.bodyText, placeholders);
     const subject = replacePlaceholders(storedTemplate.subject, placeholders);
@@ -307,11 +313,11 @@ export async function generateTaskReminderEmail(assigneeName: string, taskTitle:
 }
 
 export async function generateAvailabilityReminderEmail(clinicianName: string, loginUrl: string, tenant?: TenantContext): Promise<EmailOptions> {
-  const practiceName = tenant?.name || 'The Perinatal Psychology Practice';
+  const practiceName = tenant?.name || GENERIC_PRACTICE_NAME;
   const storedTemplate = await getStoredTemplate('availability_reminder', tenant?.id);
 
   if (storedTemplate) {
-    const placeholders = { name: clinicianName, login_link: loginUrl };
+    const placeholders = { name: clinicianName, login_link: loginUrl, practice_name: practiceName };
     const bodyText = replacePlaceholders(storedTemplate.bodyText, placeholders);
     const subject = replacePlaceholders(storedTemplate.subject, placeholders);
     return {
@@ -370,15 +376,17 @@ export async function generateAvailabilityReminderEmail(clinicianName: string, l
 }
 
 export async function generateFormCompletionEmail(tenant?: TenantContext): Promise<EmailOptions> {
-  const practiceName = tenant?.name || 'The Perinatal Psychology Practice';
+  const practiceName = tenant?.name || GENERIC_PRACTICE_NAME;
   const storedTemplate = await getStoredTemplate('form_completion', tenant?.id);
 
   if (storedTemplate) {
+    const bodyText = replacePlaceholders(storedTemplate.bodyText, { practice_name: practiceName });
+    const subject = replacePlaceholders(storedTemplate.subject, { practice_name: practiceName });
     return {
       to: '',
-      subject: storedTemplate.subject,
-      html: wrapInHtmlTemplate(storedTemplate.bodyText, 'Thank You', practiceName),
-      text: storedTemplate.bodyText,
+      subject,
+      html: wrapInHtmlTemplate(bodyText, 'Thank You', practiceName),
+      text: bodyText,
       from: buildFromAddress(tenant),
     };
   }
@@ -403,16 +411,19 @@ ${practiceName} Team`;
 }
 
 export async function generateNewReferralEmail(clientDisplayId: string, clientName: string, tenant?: TenantContext): Promise<EmailOptions> {
-  const practiceName = tenant?.name || 'The Perinatal Psychology Practice';
+  const practiceName = tenant?.name || GENERIC_PRACTICE_NAME;
   const storedTemplate = await getStoredTemplate('new_referral', tenant?.id);
 
   if (storedTemplate) {
     const bodyText = storedTemplate.bodyText
       .replace(/\{\{clientDisplayId\}\}/g, clientDisplayId)
-      .replace(/\{\{clientName\}\}/g, clientName);
+      .replace(/\{\{clientName\}\}/g, clientName)
+      .replace(/\{\{practice_name\}\}/g, practiceName);
     return {
       to: '',
-      subject: storedTemplate.subject.replace(/\{\{clientDisplayId\}\}/g, clientDisplayId),
+      subject: storedTemplate.subject
+        .replace(/\{\{clientDisplayId\}\}/g, clientDisplayId)
+        .replace(/\{\{practice_name\}\}/g, practiceName),
       html: wrapInHtmlTemplate(bodyText, 'New Referral', practiceName),
       text: bodyText,
       from: buildFromAddress(tenant),
@@ -431,7 +442,7 @@ export async function generateNewReferralEmail(clientDisplayId: string, clientNa
 }
 
 export async function generateWaitlistUpdateEmail(clientDisplayId: string, clientName: string, oldStatus: string, newStatus: string, tenant?: TenantContext): Promise<EmailOptions> {
-  const practiceName = tenant?.name || 'The Perinatal Psychology Practice';
+  const practiceName = tenant?.name || GENERIC_PRACTICE_NAME;
   const storedTemplate = await getStoredTemplate('waitlist_update', tenant?.id);
 
   if (storedTemplate) {
@@ -439,10 +450,13 @@ export async function generateWaitlistUpdateEmail(clientDisplayId: string, clien
       .replace(/\{\{clientDisplayId\}\}/g, clientDisplayId)
       .replace(/\{\{clientName\}\}/g, clientName)
       .replace(/\{\{oldStatus\}\}/g, oldStatus)
-      .replace(/\{\{newStatus\}\}/g, newStatus);
+      .replace(/\{\{newStatus\}\}/g, newStatus)
+      .replace(/\{\{practice_name\}\}/g, practiceName);
     return {
       to: '',
-      subject: storedTemplate.subject.replace(/\{\{clientDisplayId\}\}/g, clientDisplayId),
+      subject: storedTemplate.subject
+        .replace(/\{\{clientDisplayId\}\}/g, clientDisplayId)
+        .replace(/\{\{practice_name\}\}/g, practiceName),
       html: wrapInHtmlTemplate(bodyText, 'Waitlist Update', practiceName),
       text: bodyText,
       from: buildFromAddress(tenant),
@@ -461,7 +475,7 @@ export async function generateWaitlistUpdateEmail(clientDisplayId: string, clien
 }
 
 export async function generatePaymentLinkEmail(paymentUrl: string, amountPounds: string, tenant?: TenantContext): Promise<EmailOptions> {
-  const practiceName = tenant?.name || 'The Perinatal Psychology Practice';
+  const practiceName = tenant?.name || GENERIC_PRACTICE_NAME;
   const storedTemplate = await getStoredTemplate('payment_link', tenant?.id);
 
   const subject = storedTemplate
@@ -485,7 +499,10 @@ ${practiceName} Team`;
 
   const bodyText = rawBody
     .replace(/\{\{amount\}\}/g, amountPounds)
-    .replace(/\{\{payment_url\}\}/g, paymentUrl);
+    .replace(/\{\{payment_url\}\}/g, paymentUrl)
+    .replace(/\{\{practice_name\}\}/g, practiceName);
+
+  const finalSubject = subject.replace(/\{\{practice_name\}\}/g, practiceName);
 
   const html = `<!DOCTYPE html>
 <html>
@@ -512,11 +529,11 @@ ${practiceName} Team`;
   </body>
 </html>`;
 
-  return { to: '', subject, html, text: bodyText, from: buildFromAddress(tenant) };
+  return { to: '', subject: finalSubject, html, text: bodyText, from: buildFromAddress(tenant) };
 }
 
 export function generatePaymentFailureEmail(clientDisplayId: string, clientName: string, amountPounds: string, failureReason: string, tenant?: TenantContext): EmailOptions {
-  const practiceName = tenant?.name || 'The Perinatal Psychology Practice';
+  const practiceName = tenant?.name || GENERIC_PRACTICE_NAME;
   const subject = `Payment Failed – ${clientDisplayId}`;
   const bodyText = `A payment has failed for a client.\n\nClient ID: ${clientDisplayId}\nClient Name: ${clientName}\nAmount: £${amountPounds}\nReason: ${failureReason}\n\nPlease log in to the practice management system to review this client's payment status and take action if required.\n\n${practiceName}`;
   const html = `<!DOCTYPE html>

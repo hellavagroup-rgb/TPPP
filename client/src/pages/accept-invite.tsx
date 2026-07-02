@@ -6,12 +6,15 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
 import { Loader2, CheckCircle, AlertCircle, Eye, EyeOff } from "lucide-react";
-import logo from "@assets/xPerinatalPP-logo-large-digital.png.pagespeed.ic.wAjk_RUOnf_1766008188694.png";
+
+const GENERIC_APP_NAME = "PsychPortal";
 
 interface InviteInfo {
   valid: boolean;
   name?: string;
   email?: string;
+  tenantName?: string | null;
+  tenantLogoUrl?: string | null;
   error?: string;
 }
 
@@ -118,7 +121,7 @@ export default function AcceptInvite() {
       <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 p-4">
         <Card className="w-full max-w-md shadow-lg border-slate-200">
           <CardHeader className="space-y-4 items-center text-center pb-2">
-            <img src={logo} alt="The Perinatal Psychology Practice" className="w-48 object-contain mb-2" />
+            <CardTitle className="text-2xl font-serif">{GENERIC_APP_NAME}</CardTitle>
           </CardHeader>
           <CardContent className="py-8 text-center">
             <AlertCircle className="h-12 w-12 mx-auto text-destructive mb-4" />
@@ -135,12 +138,18 @@ export default function AcceptInvite() {
     );
   }
 
+  const brandName = inviteInfo.tenantName || GENERIC_APP_NAME;
+
   if (isComplete) {
     return (
       <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 p-4">
         <Card className="w-full max-w-md shadow-lg border-slate-200">
           <CardHeader className="space-y-4 items-center text-center pb-2">
-            <img src={logo} alt="The Perinatal Psychology Practice" className="w-48 object-contain mb-2" />
+            {inviteInfo.tenantLogoUrl ? (
+              <img src={inviteInfo.tenantLogoUrl} alt={brandName} className="w-48 object-contain mb-2" />
+            ) : (
+              <CardTitle className="text-2xl font-serif">{brandName}</CardTitle>
+            )}
           </CardHeader>
           <CardContent className="py-8 text-center">
             <CheckCircle className="h-12 w-12 mx-auto text-green-600 mb-4" />
@@ -156,7 +165,11 @@ export default function AcceptInvite() {
     <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 p-4">
       <Card className="w-full max-w-md shadow-lg border-slate-200">
         <CardHeader className="space-y-4 items-center text-center pb-2">
-          <img src={logo} alt="The Perinatal Psychology Practice" className="w-48 object-contain mb-2" />
+          {inviteInfo.tenantLogoUrl ? (
+            <img src={inviteInfo.tenantLogoUrl} alt={brandName} className="w-48 object-contain mb-2" />
+          ) : (
+            <CardTitle className="text-2xl font-serif">{brandName}</CardTitle>
+          )}
           <div className="space-y-1">
             <CardTitle className="text-2xl font-serif">Set Up Your Account</CardTitle>
             <CardDescription>
@@ -241,7 +254,7 @@ export default function AcceptInvite() {
           </form>
         </CardContent>
         <CardFooter className="flex justify-center text-xs text-muted-foreground">
-          The Perinatal Psychology Practice
+          {brandName}
         </CardFooter>
       </Card>
     </div>

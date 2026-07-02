@@ -13,7 +13,7 @@ import {
   insertFormTemplateSchema, insertTaskSchema, insertUserSchema 
 } from "@shared/schema";
 import { z } from "zod";
-import { sendEmail, buildFromAddress, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail } from "./email";
+import { sendEmail, buildFromAddress, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail, GENERIC_PRACTICE_NAME } from "./email";
 import { forceReseedDatabase } from "./seed";
 import { seedDemoData } from "./seedDemo";
 import { parseIntakeEmailBody } from "./intakeParser";
@@ -448,7 +448,7 @@ export async function registerRoutes(
       await storage.updateUser(clinician.userId, { password: hashedPassword });
 
       // Send welcome email with credentials
-      const practiceName = req.tenant?.name || 'The Perinatal Psychology Practice';
+      const practiceName = req.tenant?.name || GENERIC_PRACTICE_NAME;
       const emailResult = await sendEmail({
         to: user.email,
         subject: `Your Login Credentials - ${practiceName}`,
@@ -573,7 +573,7 @@ export async function registerRoutes(
       const inviteUrl = `${baseUrl}/accept-invite?token=${token}`;
 
       // Send invite email
-      const invitePracticeName = req.tenant?.name || 'The Perinatal Psychology Practice';
+      const invitePracticeName = req.tenant?.name || GENERIC_PRACTICE_NAME;
       const emailResult = await sendEmail({
         to: email,
         subject: `You've been invited as an Admin - ${invitePracticeName}`,
@@ -675,7 +675,18 @@ export async function registerRoutes(
         return res.status(400).json({ error: "User not found", valid: false });
       }
 
-      res.json({ valid: true, name: user.name, email: user.email });
+      let tenantName: string | null = null;
+      let tenantLogoUrl: string | null = null;
+      if (user.tenantId) {
+        const [tenant] = await db.select({ name: tenants.name, logoUrl: tenants.logoUrl })
+          .from(tenants).where(eq(tenants.id, user.tenantId)).limit(1);
+        if (tenant) {
+          tenantName = tenant.name;
+          tenantLogoUrl = tenant.logoUrl;
+        }
+      }
+
+      res.json({ valid: true, name: user.name, email: user.email, tenantName, tenantLogoUrl });
     } catch (error) {
       console.error("Failed to validate invite:", error);
       res.status(500).json({ error: "Failed to validate invite", valid: false });
@@ -1141,6 +1152,7 @@ export async function registerRoutes(
               cancelUrl: `${appBase}/payment-cancel`,
               tenantId: req.tenant?.id,
               tenantStripeKey: req.tenant?.stripeSecretKey,
+              practiceName: req.tenant?.name,
             });
             if (checkoutResult) {
               await db.update(clients).set({
@@ -2204,16 +2216,19 @@ export async function registerRoutes(
         tenantId = row?.tenantId ?? undefined;
       }
 
-      const query = db.select({
+      if (!tenantId) {
+        // No client (or a client with no resolvable tenant) was specified — never fall back to
+        // "the first tenant" here, as that would leak one practice's branding into a context
+        // that isn't scoped to any tenant at all.
+        return res.status(404).json({ error: "No tenant configured" });
+      }
+
+      const [tenant] = await db.select({
         name: tenants.name,
         logoUrl: tenants.logoUrl,
         primaryColor: tenants.primaryColor,
         accentColor: tenants.accentColor,
-      }).from(tenants);
-
-      const [tenant] = tenantId
-        ? await query.where(eq(tenants.id, tenantId)).limit(1)
-        : await query.limit(1);
+      }).from(tenants).where(eq(tenants.id, tenantId)).limit(1);
 
       if (!tenant) return res.status(404).json({ error: "No tenant configured" });
       res.json(tenant);
@@ -2715,6 +2730,7 @@ export async function registerRoutes(
         cancelUrl: `${appBase}/payment-cancel`,
         tenantId: req.tenant?.id,
         tenantStripeKey: req.tenant?.stripeSecretKey,
+        practiceName: req.tenant?.name,
       });
 
       if (!result) return res.status(500).json({ error: "Failed to create checkout session" });

@@ -2,18 +2,29 @@ import { db } from "./db";
 import { users, clinicians, formTemplates, clients, tasks, formSubmissions, timeSlots, auditLogs, tenants } from "../shared/schema";
 import { eq, isNull } from "drizzle-orm";
 
-/** Assign any null-tenantId rows to the first existing tenant (idempotent). */
+/**
+ * Warn (but do not guess) about any rows with a null tenantId. In a multi-tenant system,
+ * silently assigning orphaned rows to "whichever tenant happens to be first" risks attaching
+ * one practice's data (and later, one practice's branding) to a different tenant. If this ever
+ * logs a non-zero count in production, those rows need a human decision, not an auto-assignment.
+ */
 async function fixNullTenantIds() {
-  const [tenant] = await db.select().from(tenants).limit(1);
-  if (!tenant) return; // No tenants exist yet — nothing to fix
-  const tenantId = tenant.id;
-  await db.update(users).set({ tenantId }).where(isNull(users.tenantId));
-  await db.update(clinicians).set({ tenantId }).where(isNull(clinicians.tenantId));
-  await db.update(clients).set({ tenantId }).where(isNull(clients.tenantId));
-  await db.update(tasks).set({ tenantId }).where(isNull(tasks.tenantId));
-  await db.update(timeSlots).set({ tenantId }).where(isNull(timeSlots.tenantId));
-  await db.update(formTemplates).set({ tenantId }).where(isNull(formTemplates.tenantId));
-  await db.update(formSubmissions).set({ tenantId }).where(isNull(formSubmissions.tenantId));
+  const tables: Array<{ label: string; table: typeof users | typeof clinicians | typeof clients | typeof tasks | typeof timeSlots | typeof formTemplates | typeof formSubmissions; column: any }> = [
+    { label: "users", table: users, column: users.tenantId },
+    { label: "clinicians", table: clinicians, column: clinicians.tenantId },
+    { label: "clients", table: clients, column: clients.tenantId },
+    { label: "tasks", table: tasks, column: tasks.tenantId },
+    { label: "timeSlots", table: timeSlots, column: timeSlots.tenantId },
+    { label: "formTemplates", table: formTemplates, column: formTemplates.tenantId },
+    { label: "formSubmissions", table: formSubmissions, column: formSubmissions.tenantId },
+  ];
+
+  for (const { label, table, column } of tables) {
+    const orphans = await db.select().from(table as any).where(isNull(column));
+    if (orphans.length > 0) {
+      console.warn(`[tenant-integrity] ${orphans.length} row(s) in "${label}" have no tenantId. These will NOT be auto-assigned — review and set tenantId manually to avoid cross-tenant data/branding leaks.`);
+    }
+  }
 }
 
 const seedData = {
@@ -134,9 +145,8 @@ export async function seedDatabaseIfEmpty() {
     
     // Tenant logo is configured via the super-admin panel — do not hardcode here
 
-    // Always fix any null tenantId rows so legacy data is always visible
+    // Check for any null tenantId rows and warn (never auto-assign to a guessed tenant)
     await fixNullTenantIds();
-    console.log("Ensured all null-tenantId records assigned to Perinatal tenant");
 
     // Always update form templates if they're outdated
     if (formNeedsUpdate) {

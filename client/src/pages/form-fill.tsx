@@ -21,7 +21,6 @@ import { CalendarIcon, CheckCircle2, Lock, Loader2, Save, Clock } from "lucide-r
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import logo from "@assets/xPerinatalPP-logo-large-digital.png.pagespeed.ic.wAjk_RUOnf_1766008188694.png";
 import type { FormTemplate, Client } from "@shared/schema";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
@@ -147,8 +146,8 @@ export default function FormFill() {
     queryKey: [`/api/tenant/branding?clientId=${params?.clientId}`],
     enabled: !!params?.clientId,
   });
-  const brandLogo = branding?.logoUrl || logo;
-  const brandName = branding?.name || "Perinatal Psychology Practice";
+  const brandLogo = branding?.logoUrl || null;
+  const brandName = branding?.name || "PsychPortal";
 
   // Check for existing draft
   const { data: draftData, isLoading: draftLoading } = useQuery<{
@@ -311,10 +310,7 @@ export default function FormFill() {
                           We will be in touch soon with next steps.
                       </p>
                       <p>
-                          If you have any questions in the meantime, you can contact us at{" "}
-                          <a href="mailto:pa@perinatalpsychologypractice.co.uk" className="text-primary hover:underline">
-                              pa@perinatalpsychologypractice.co.uk
-                          </a>.
+                          If you have any questions in the meantime, please get in touch with us directly using the contact details we've previously provided you.
                       </p>
                       <p>
                           If you need urgent support, please contact your GP or a trusted healthcare provider. In the UK, you can also receive immediate support from: the Samaritans (Call 116 123 lines open 24/7 365 days a year or email{" "}
@@ -324,7 +320,7 @@ export default function FormFill() {
                           Warm regards,
                       </p>
                       <p className="font-medium">
-                          The Perinatal Psychology Practice Team
+                          {brandName} Team
                       </p>
                   </div>
                   <Button variant="outline" onClick={() => window.close()}>
@@ -366,7 +362,11 @@ export default function FormFill() {
       return (
           <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
               <div className="flex flex-col items-center mb-8">
-                  <img src={brandLogo} alt="Logo" className="h-12 object-contain mb-4 opacity-80 grayscale" />
+                  {brandLogo ? (
+                      <img src={brandLogo} alt={brandName} className="h-12 object-contain mb-4 opacity-80 grayscale" />
+                  ) : (
+                      <p className="text-slate-700 font-serif font-bold text-lg mb-4">{brandName}</p>
+                  )}
                   <div className="flex items-center gap-2 text-slate-500 text-sm font-medium">
                       <Lock className="h-4 w-4" />
                       Secure Client Portal
@@ -400,7 +400,11 @@ export default function FormFill() {
     <div className="min-h-screen bg-slate-50 py-12 px-4 sm:px-6">
       <div className="max-w-3xl mx-auto space-y-8">
         <div className="flex flex-col items-center text-center space-y-4">
-            <img src={brandLogo} alt="Logo" className="h-16 object-contain" />
+            {brandLogo ? (
+                <img src={brandLogo} alt={brandName} className="h-16 object-contain" />
+            ) : (
+                <p className="text-slate-800 font-serif font-bold text-2xl">{brandName}</p>
+            )}
             <div className="space-y-1">
                 <h1 className="text-3xl font-serif font-bold text-slate-900">{form.title}</h1>
                 <p className="text-slate-600 max-w-lg mx-auto">{form.description}</p>

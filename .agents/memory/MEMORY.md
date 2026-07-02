@@ -5,3 +5,4 @@
 - [require() throws in ESM projects at runtime](esm-require-runtime-error.md) — stray require() compiles fine under tsx but throws ReferenceError only when that code path actually runs.
 - [HTML emails do not auto-linkify plain-text URLs](email-html-autolinkify.md) — a shared plain-text-to-HTML email wrapper must explicitly wrap URLs in `<a href>`, or links render as inert text.
 - [Per-tenant feature flags must be checked on every page](tenant-feature-flags-per-page.md) — gating a field in the admin view doesn't gate it elsewhere; each page rendering that data needs its own check.
+- [Production demo tenant](production-demo-tenant.md) — "Wellness Demo Practice" is a real, intentional third prod tenant seeded with fake data for video recording; don't treat as a leak or delete it.

@@ -347,8 +347,8 @@ export async function registerRoutes(
 
       // Handle email update separately (stored on user record)
       const { email, ...clinicianUpdates } = req.body;
-      if (email && email !== req.user!.email) {
-        await storage.updateUser(req.user!.id, { email });
+      if (email && email.toLowerCase() !== req.user!.email.toLowerCase()) {
+        await storage.updateUser(req.user!.id, { email: email.toLowerCase() });
       }
 
       const updated = await storage.updateClinician(clinician.id, clinicianUpdates);
@@ -390,7 +390,7 @@ export async function registerRoutes(
       // Using a random unguessable hash that can't be used for login
       const placeholderPassword = `DISABLED_${crypto.randomBytes(32).toString('hex')}`;
       const user = await storage.createUser({
-        email,
+        email: email.toLowerCase(),
         name,
         password: placeholderPassword,
         role: "clinician",
@@ -491,7 +491,7 @@ export async function registerRoutes(
       const { email, name, ...clinicianUpdates } = req.body;
       if (clinician.userId) {
         const userUpdates: { email?: string; name?: string } = {};
-        if (email) userUpdates.email = email;
+        if (email) userUpdates.email = email.toLowerCase();
         if (name) userUpdates.name = name;
         if (Object.keys(userUpdates).length > 0) {
           await storage.updateUser(clinician.userId, userUpdates);
@@ -554,7 +554,7 @@ export async function registerRoutes(
       // Create admin user with placeholder password (can't login until they set password)
       const placeholderPassword = `PENDING_INVITE_${crypto.randomBytes(32).toString('hex')}`;
       const user = await storage.createUser({
-        email,
+        email: email.toLowerCase(),
         name,
         password: placeholderPassword,
         role: "admin",

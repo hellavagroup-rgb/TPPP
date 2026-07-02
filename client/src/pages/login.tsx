@@ -1,9 +1,18 @@
 import { useState } from "react";
 import { useAuth } from "@/lib/auth";
+import { requestPasswordReset } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2 } from "lucide-react";
 
@@ -12,6 +21,10 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const { login, isLoading } = useAuth();
   const { toast } = useToast();
+
+  const [forgotPasswordOpen, setForgotPasswordOpen] = useState(false);
+  const [resetEmail, setResetEmail] = useState("");
+  const [isSendingReset, setIsSendingReset] = useState(false);
 
   const handleLogin = async (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -28,12 +41,38 @@ export default function Login() {
         toast({ title: "Login Failed", description: "Invalid email or password", variant: "destructive" });
     }
   };
-  
-  const handleForgotPassword = () => {
-    toast({
-        title: "Recovery Instructions Sent",
-        description: "If an account exists for this email, you will receive password reset instructions.",
-    });
+
+  const handleOpenForgotPassword = () => {
+    setResetEmail(email);
+    setForgotPasswordOpen(true);
+  };
+
+  const handleSendResetLink = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+
+    if (!resetEmail) {
+        toast({ title: "Email required", description: "Please enter your email address", variant: "destructive" });
+        return;
+    }
+
+    setIsSendingReset(true);
+    try {
+        await requestPasswordReset(resetEmail);
+        toast({
+            title: "Recovery Instructions Sent",
+            description: "If an account exists for this email, you will receive password reset instructions.",
+        });
+        setForgotPasswordOpen(false);
+        setResetEmail("");
+    } catch (error) {
+        toast({
+            title: "Something went wrong",
+            description: "Could not send reset instructions. Please try again.",
+            variant: "destructive",
+        });
+    } finally {
+        setIsSendingReset(false);
+    }
   };
 
   return (
@@ -64,7 +103,8 @@ export default function Login() {
                             variant="link" 
                             className="p-0 h-auto text-xs text-muted-foreground font-normal" 
                             type="button"
-                            onClick={handleForgotPassword}
+                            data-testid="button-forgot-password"
+                            onClick={handleOpenForgotPassword}
                         >
                             Forgot password?
                         </Button>
@@ -87,6 +127,45 @@ export default function Login() {
             Protected Client Management System
         </CardFooter>
       </Card>
+
+      <Dialog open={forgotPasswordOpen} onOpenChange={setForgotPasswordOpen}>
+        <DialogContent>
+          <form onSubmit={handleSendResetLink}>
+            <DialogHeader>
+              <DialogTitle>Reset your password</DialogTitle>
+              <DialogDescription>
+                Enter your email address and we'll send you a link to reset your password.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2 py-4">
+              <Label htmlFor="reset-email">Email Address</Label>
+              <Input
+                id="reset-email"
+                type="email"
+                placeholder="name@example.com"
+                value={resetEmail}
+                onChange={(e) => setResetEmail(e.target.value)}
+                data-testid="input-reset-email"
+                autoFocus
+              />
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setForgotPasswordOpen(false)}
+                data-testid="button-cancel-reset"
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isSendingReset} data-testid="button-send-reset">
+                {isSendingReset ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Send Reset Link
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

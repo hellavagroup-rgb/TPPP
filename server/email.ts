@@ -40,9 +40,13 @@ export function buildFromAddress(tenant?: TenantContext): string {
   return `${displayName} <${emailAddress}>`;
 }
 
+function linkifyUrls(text: string): string {
+  return text.replace(/(https?:\/\/[^\s<]+[^\s<.,;:'")\]])/g, url => `<a href="${url}" style="color:#667eea;word-break:break-all;">${url}</a>`);
+}
+
 function wrapInHtmlTemplate(text: string, headerTitle?: string, practiceName?: string): string {
   const footer = practiceName || GENERIC_PRACTICE_NAME;
-  const lines = text.split('\n').map(line => line ? `<p>${line}</p>` : '<br>').join('\n');
+  const lines = text.split('\n').map(line => line ? `<p>${linkifyUrls(line)}</p>` : '<br>').join('\n');
   return `
     <!DOCTYPE html>
     <html>

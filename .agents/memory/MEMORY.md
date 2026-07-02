@@ -3,3 +3,4 @@
 - [tsx dev mode does not type-check](tsx-dev-no-typecheck.md) — missing imports (unimported tables/types) only surface as runtime ReferenceErrors on rarely-exercised code paths.
 - [Never auto-assign orphaned rows to "the first tenant"](tenant-null-fk-autoassign.md) — null-tenantId repair must warn, never guess; guessing caused a real cross-tenant branding leak.
 - [require() throws in ESM projects at runtime](esm-require-runtime-error.md) — stray require() compiles fine under tsx but throws ReferenceError only when that code path actually runs.
+- [HTML emails do not auto-linkify plain-text URLs](email-html-autolinkify.md) — a shared plain-text-to-HTML email wrapper must explicitly wrap URLs in `<a href>`, or links render as inert text.

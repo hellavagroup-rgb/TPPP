@@ -43,6 +43,7 @@ const authLimiter = rateLimit({
 // Apply rate limiters
 app.use("/api/auth/login", authLimiter);
 app.use("/api/auth/forgot-password", authLimiter);
+app.use("/api/auth/reset-password", authLimiter);
 app.use("/api", generalLimiter);
 
 const httpServer = createServer(app);

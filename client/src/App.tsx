@@ -20,6 +20,7 @@ import { AuthProvider, useAuth } from "@/lib/auth";
 import Login from "@/pages/login";
 import ClinicianProfile from "@/pages/clinician-profile";
 import AcceptInvite from "@/pages/accept-invite";
+import ResetPassword from "@/pages/reset-password";
 import PaymentSuccess from "@/pages/payment-success";
 import PaymentCancel from "@/pages/payment-cancel";
 import Payments from "@/pages/payments";
@@ -78,6 +79,10 @@ function Router() {
 
   if (location.startsWith("/accept-invite")) {
       return <AcceptInvite />;
+  }
+
+  if (location.startsWith("/reset-password")) {
+      return <ResetPassword />;
   }
 
   if (location.startsWith("/payment-success")) {

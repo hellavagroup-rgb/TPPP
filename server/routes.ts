@@ -1780,7 +1780,7 @@ export async function registerRoutes(
       }
 
       // Generate reset token and store with expiry (7 days)
-      const resetToken = require('crypto').randomBytes(32).toString('hex');
+      const resetToken = crypto.randomBytes(32).toString('hex');
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
       
       // Store token securely in database (do not log tokens)
@@ -1806,6 +1806,84 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Forgot password error:", error);
       res.status(500).json({ error: "Failed to process request" });
+    }
+  });
+
+  // Validate a password reset token (public endpoint for the reset-password page)
+  app.get("/api/auth/reset-password/:token", async (req, res) => {
+    try {
+      const { token } = req.params;
+
+      const resetToken = await storage.getPasswordResetTokenByToken(token);
+      if (!resetToken) {
+        return res.status(400).json({ error: "Invalid or expired reset link", valid: false });
+      }
+      if (resetToken.usedAt) {
+        return res.status(400).json({ error: "This reset link has already been used", valid: false });
+      }
+      if (new Date() > resetToken.expiresAt) {
+        return res.status(400).json({ error: "This reset link has expired", valid: false });
+      }
+
+      const user = await storage.getUserById(resetToken.userId);
+      if (!user) {
+        return res.status(400).json({ error: "User not found", valid: false });
+      }
+
+      let tenantName: string | null = null;
+      let tenantLogoUrl: string | null = null;
+      if (user.tenantId) {
+        const [tenant] = await db.select({ name: tenants.name, logoUrl: tenants.logoUrl })
+          .from(tenants).where(eq(tenants.id, user.tenantId)).limit(1);
+        if (tenant) {
+          tenantName = tenant.name;
+          tenantLogoUrl = tenant.logoUrl;
+        }
+      }
+
+      res.json({ valid: true, email: user.email, tenantName, tenantLogoUrl });
+    } catch (error) {
+      console.error("Failed to validate reset token:", error);
+      res.status(500).json({ error: "Failed to validate reset link", valid: false });
+    }
+  });
+
+  // Complete a password reset using a valid token
+  app.post("/api/auth/reset-password", async (req, res) => {
+    try {
+      const { token, newPassword } = req.body;
+      if (!token || !newPassword) {
+        return res.status(400).json({ error: "Token and new password are required" });
+      }
+      if (newPassword.length < 8) {
+        return res.status(400).json({ error: "Password must be at least 8 characters" });
+      }
+
+      const resetToken = await storage.getPasswordResetTokenByToken(token);
+      if (!resetToken) {
+        return res.status(400).json({ error: "Invalid or expired reset link" });
+      }
+      if (resetToken.usedAt) {
+        return res.status(400).json({ error: "This reset link has already been used" });
+      }
+      if (new Date() > resetToken.expiresAt) {
+        return res.status(400).json({ error: "This reset link has expired" });
+      }
+
+      const user = await storage.getUserById(resetToken.userId);
+      if (!user) {
+        return res.status(400).json({ error: "User not found" });
+      }
+
+      const hashedPassword = await hashPassword(newPassword);
+      await storage.updateUser(user.id, { password: hashedPassword });
+      await storage.markPasswordResetTokenUsed(resetToken.id);
+      await auditLog(req, "password_reset_completed", "user", user.id);
+
+      res.json({ success: true, message: "Password reset successfully" });
+    } catch (error) {
+      console.error("Reset password error:", error);
+      res.status(500).json({ error: "Failed to reset password" });
     }
   });
 

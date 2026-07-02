@@ -2,3 +2,4 @@
 - [Multi-tenant email isolation pattern](multi-tenant-email.md) — all email sends must pass TenantContext; template lookup, FROM address, and body copy all derived from tenant.
 - [tsx dev mode does not type-check](tsx-dev-no-typecheck.md) — missing imports (unimported tables/types) only surface as runtime ReferenceErrors on rarely-exercised code paths.
 - [Never auto-assign orphaned rows to "the first tenant"](tenant-null-fk-autoassign.md) — null-tenantId repair must warn, never guess; guessing caused a real cross-tenant branding leak.
+- [require() throws in ESM projects at runtime](esm-require-runtime-error.md) — stray require() compiles fine under tsx but throws ReferenceError only when that code path actually runs.

@@ -8,6 +8,7 @@ export async function requireTenant(req: any, res: any, next: any) {
     '/auth/login',
     '/auth/logout',
     '/auth/forgot-password',
+    '/auth/reset-password',
     '/admin-users/accept-invite',
     '/auth/me',
     '/tenant/branding',
@@ -17,6 +18,7 @@ export async function requireTenant(req: any, res: any, next: any) {
     openPaths.some(path => req.path === path) ||
     req.path.startsWith('/super-admin/') ||
     req.path === '/super-admin' ||
+    req.path.startsWith('/auth/reset-password/') ||
     req.path.startsWith('/admin-users/invite/') ||
     req.path.startsWith('/clients/public/') ||
     (req.path.startsWith('/forms/') && !req.user?.id) ||

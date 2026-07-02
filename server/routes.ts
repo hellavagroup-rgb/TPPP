@@ -25,7 +25,7 @@ import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissi
 import { isStripeConfigured, getStripeInstance, createCheckoutSession, chargeOffSession, constructWebhookEvent } from "./stripe";
 import { encryptSecret, decryptSecret, isEncryptionConfigured } from "./encryption";
 import { getAuthUrl, exchangeCodeForTokens, syncConnection, buildRedirectUri } from "./gmailSync";
-import { isNull, eq, and, inArray, desc } from "drizzle-orm";
+import { isNull, isNotNull, eq, and, inArray, desc } from "drizzle-orm";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -2769,74 +2769,61 @@ export async function registerRoutes(
       return res.status(400).json({ error: "Missing stripe-signature header or raw body" });
     }
 
-    // Step 1: Parse raw body to extract tenantId from metadata (before verifying)
-    // This lets us look up the tenant's webhook secret for multi-tenant verification
-    let parsedBody: any;
-    try {
-      parsedBody = JSON.parse(rawBody.toString("utf8"));
-    } catch {
-      return res.status(400).json({ error: "Invalid JSON body" });
-    }
-
-    // Extract tenantId from metadata (we store it there at checkout session creation)
-    const metaTenantId: string | null =
-      parsedBody?.data?.object?.metadata?.tenantId ?? null;
-
-    // Step 2: Look up tenant to get their stored webhook secret and Stripe key
-    // STRIPE_WEBHOOK_SECRET env var is a dev-only escape hatch; it must NOT be used in production.
+    // Step 1: Identify the tenant by trying each configured tenant's webhook secret
+    // against the signature, rather than trusting event metadata for tenant lookup.
+    // This is necessary because many Stripe event types (customer.*, invoice.*,
+    // payment_method.*, etc.) never carry the tenantId metadata we only set on the
+    // checkout sessions / payment intents we create ourselves — relying on metadata
+    // to pick a tenant before verifying meant those events always failed with a
+    // generic "webhook secret not configured" error even when the tenant genuinely
+    // had one configured. Only a tenant's real secret can produce a valid signature,
+    // so trying each is both correct and safe.
     const isDev = process.env.NODE_ENV !== "production";
-    let webhookSecret: string | null = null;
+    let event: any = null;
+    let metaTenantId: string | null = null;
     let tenantStripeKey: string | null = null;
 
-    if (metaTenantId) {
-      try {
-        const [tenant] = await db.select().from(tenants).where(eq(tenants.id, metaTenantId));
-        if (tenant) {
-          // Decrypt at-rest encrypted credentials before use
-          if (tenant.stripeWebhookSecret) {
-            try {
-              webhookSecret = decryptSecret(tenant.stripeWebhookSecret);
-            } catch (e) {
-              console.error("Webhook: failed to decrypt webhook secret for tenant", metaTenantId, e);
-              return res.status(400).json({ error: "Unable to decrypt webhook secret for this tenant" });
-            }
-          }
-          if (tenant.stripeSecretKey) {
-            try {
-              tenantStripeKey = decryptSecret(tenant.stripeSecretKey);
-            } catch (e) {
-              console.error("Webhook: failed to decrypt Stripe key for tenant", metaTenantId, e);
-              return res.status(400).json({ error: "Unable to decrypt Stripe key for this tenant" });
-            }
-          }
-        }
-      } catch (e) {
-        console.error("Webhook: failed to look up tenant:", e);
-      }
-    }
-
-    // Fall back to env vars only in development to ease local testing
-    if (!webhookSecret) {
-      if (isDev && process.env.STRIPE_WEBHOOK_SECRET) {
-        console.warn(
-          "[DEV ONLY] Using global STRIPE_WEBHOOK_SECRET env var as webhook secret fallback. " +
-          "In production every tenant must have their own webhook secret stored in the database."
-        );
-        webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-      } else {
-        return res.status(400).json({ error: "Webhook secret not configured for this tenant" });
-      }
-    }
-    if (!tenantStripeKey && isDev && process.env.STRIPE_SECRET_KEY) {
-      tenantStripeKey = process.env.STRIPE_SECRET_KEY;
-    }
-
-    // Step 3: Verify signature with the tenant's webhook secret
-    let event: any;
     try {
-      event = constructWebhookEvent(rawBody, sig, webhookSecret, tenantStripeKey);
-    } catch (err: any) {
-      console.error("Webhook signature verification failed:", err?.message);
+      const candidateTenants = await db.select().from(tenants).where(isNotNull(tenants.stripeWebhookSecret));
+      for (const t of candidateTenants) {
+        let secret: string;
+        try {
+          secret = decryptSecret(t.stripeWebhookSecret!);
+        } catch (e) {
+          console.error("Webhook: failed to decrypt webhook secret for tenant", t.id, e);
+          continue;
+        }
+        let key: string | null = null;
+        if (t.stripeSecretKey) {
+          try { key = decryptSecret(t.stripeSecretKey); } catch { /* key only needed to call Stripe API, not for verification */ }
+        }
+        try {
+          event = constructWebhookEvent(rawBody, sig, secret, key);
+          metaTenantId = t.id;
+          tenantStripeKey = key;
+          break;
+        } catch {
+          // Signature didn't match this tenant's secret — try the next one
+        }
+      }
+    } catch (e) {
+      console.error("Webhook: failed to look up tenants:", e);
+    }
+
+    // Dev-only escape hatch for local testing with the Stripe CLI when no tenant
+    // secret matches (e.g. no tenant has real keys set up yet in dev).
+    if (!event && isDev && process.env.STRIPE_WEBHOOK_SECRET) {
+      try {
+        event = constructWebhookEvent(rawBody, sig, process.env.STRIPE_WEBHOOK_SECRET, process.env.STRIPE_SECRET_KEY || null);
+        tenantStripeKey = process.env.STRIPE_SECRET_KEY || null;
+        console.warn("[DEV ONLY] Verified webhook using global STRIPE_WEBHOOK_SECRET fallback (no tenant secret matched).");
+      } catch {
+        // fall through to the error below
+      }
+    }
+
+    if (!event) {
+      console.error("Webhook signature verification failed: no tenant secret matched");
       return res.status(400).json({ error: "Invalid webhook signature" });
     }
 
@@ -2869,7 +2856,7 @@ export async function registerRoutes(
                 if (!clientForUpdate) {
                   return res.json({ received: true });
                 }
-                if (metaTenantId && clientForUpdate.tenantId !== metaTenantId) {
+                if (clientForUpdate.tenantId !== metaTenantId) {
                   console.error(`Webhook: tenant mismatch for client ${clientId}`);
                   return res.json({ received: true });
                 }

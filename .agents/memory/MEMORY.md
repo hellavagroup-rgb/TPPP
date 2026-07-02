@@ -6,3 +6,4 @@
 - [HTML emails do not auto-linkify plain-text URLs](email-html-autolinkify.md) — a shared plain-text-to-HTML email wrapper must explicitly wrap URLs in `<a href>`, or links render as inert text.
 - [Per-tenant feature flags must be checked on every page](tenant-feature-flags-per-page.md) — gating a field in the admin view doesn't gate it elsewhere; each page rendering that data needs its own check.
 - [Production demo tenant](production-demo-tenant.md) — "Wellness Demo Practice" is a real, intentional third prod tenant seeded with fake data for video recording; don't treat as a leak or delete it.
+- [Multi-tenant webhook tenant identification](multi-tenant-webhook-identification.md) — never pick a per-tenant secret by reading unverified event metadata; verify against every candidate secret instead.

@@ -50,7 +50,7 @@ integrations = ["javascript_database:1.0.0"]
 [userenv]
 
 [userenv.shared]
-FROM_EMAIL = "The Perinatal Psychology Practice <noreply@notifications.unboundly.io>"
+FROM_EMAIL = "noreply@notifications.unboundly.io"
 SUPER_ADMIN_KEY = "demo-admin-2024"
 
 [userenv.production]

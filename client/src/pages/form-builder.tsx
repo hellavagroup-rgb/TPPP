@@ -212,6 +212,7 @@ export default function FormBuilder() {
     onSuccess: () => {
       localStorage.removeItem(DRAFT_KEY);
       queryClient.invalidateQueries({ queryKey: ["/api/forms"] });
+      queryClient.invalidateQueries({ queryKey: ["forms"] });
       toast({ title: "Form Created", description: "New form template saved successfully." });
       setLocation("/forms");
     },

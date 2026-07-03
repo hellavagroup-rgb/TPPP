@@ -25,7 +25,7 @@ import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissi
 import { isStripeConfigured, getStripeInstance, createCheckoutSession, chargeOffSession, constructWebhookEvent } from "./stripe";
 import { encryptSecret, decryptSecret, isEncryptionConfigured } from "./encryption";
 import { getAuthUrl, exchangeCodeForTokens, syncConnection, buildRedirectUri } from "./gmailSync";
-import { isNull, isNotNull, eq, and, inArray, desc } from "drizzle-orm";
+import { isNull, isNotNull, eq, and, inArray, desc, like } from "drizzle-orm";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -3335,6 +3335,135 @@ export async function registerRoutes(
     } catch (error) {
       if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors });
       res.status(500).json({ error: "Failed to update Stripe credentials" });
+    }
+  });
+
+  // Seed the Intake Inbox feature with fictional demo enquiries for a tenant (demo/showcase use only)
+  app.post("/api/super-admin/tenants/:id/seed-intake-demo", requireSuperAdmin, async (req, res) => {
+    try {
+      const [tenant] = await db.select().from(tenants).where(eq(tenants.id, req.params.id));
+      if (!tenant) return res.status(404).json({ error: "Tenant not found" });
+
+      await db.update(tenants).set({ gmailIntakeEnabled: true }).where(eq(tenants.id, tenant.id));
+
+      const existing = await db
+        .select({ id: intakeMessages.id })
+        .from(intakeMessages)
+        .where(and(eq(intakeMessages.tenantId, tenant.id), like(intakeMessages.threadId, "demo-seed-%")));
+      if (existing.length > 0) {
+        return res.json({ success: true, alreadySeeded: true, existingCount: existing.length, gmailIntakeEnabled: true });
+      }
+
+      const SEED_MESSAGES: { threadId: string; channel: "email" | "whatsapp" | "phone"; fromAddress: string; subject: string; body: string }[] = [
+        {
+          threadId: "demo-seed-001",
+          channel: "email",
+          fromAddress: "olivia.bennett@example.com",
+          subject: "New enquiry: Therapy Enquiry Form",
+          body: [
+            "Your Name", "Olivia Bennett",
+            "Email", "olivia.bennett@example.com",
+            "Phone", "07700 900123",
+            "I am looking for", "Therapy for myself",
+            "What are your main concerns at the moment?", "Anxiety since finding out I'm pregnant",
+            "How long have these difficulties been present?", "2-6 weeks",
+            "Where would you like support to take place?", "Online",
+            "Availability", "Weekday mornings",
+            "Our current fees are £200-250 per session. Does this feel manageable for you?", "Yes",
+            "Additional comments", "This is my first pregnancy and I'd like some support early on.",
+          ].join("\n"),
+        },
+        {
+          threadId: "demo-seed-002",
+          channel: "email",
+          fromAddress: "priya.shah@example.com",
+          subject: "New enquiry: Therapy Enquiry Form",
+          body: [
+            "Your Name", "Priya Shah",
+            "Email", "priya.shah@example.com",
+            "Phone", "07700 900456",
+            "I am looking for", "Therapy for myself",
+            "What are your main concerns at the moment?", "Postnatal depression",
+            "Please briefly describe what you're most worried about right now",
+              "I had my baby 10 weeks ago and haven't felt like myself since. I feel low most days.",
+            "How long have these difficulties been present?", "More than 6 weeks",
+            "Have you had therapy before?", "Yes",
+            "Are there any immediate safety concerns?", "None of the above",
+            "Where would you like support to take place?", "In person",
+            "Availability", "Weekday afternoons",
+            "Our current fees are £200-250 per session. Does this feel manageable for you?", "Yes",
+          ].join("\n"),
+        },
+        {
+          threadId: "demo-seed-003",
+          channel: "email",
+          fromAddress: "megan.turner@example.com",
+          subject: "New enquiry: Therapy Enquiry Form",
+          body: [
+            "Your Name", "Megan Turner",
+            "Email", "megan.turner@example.com",
+            "Phone", "07700 900789",
+            "I am looking for", "Therapy for myself",
+            "What are your main concerns at the moment?", "Birth trauma",
+            "Please briefly describe what you're most worried about right now",
+              "I had an emergency c-section and have been having flashbacks. Struggling to sleep.",
+            "How long have these difficulties been present?", "2-6 weeks",
+            "Have you had therapy before?", "No",
+            "Are there any immediate safety concerns?", "None of the above",
+            "Where would you like support to take place?", "Online",
+            "Availability", "Evenings or weekends",
+            "Our current fees are £200-250 per session. Does this feel manageable for you?", "Yes",
+          ].join("\n"),
+        },
+        {
+          threadId: "demo-seed-004",
+          channel: "email",
+          fromAddress: "hannah.wright@example.com",
+          subject: "Referral from GP surgery",
+          body: [
+            "Your Name", "Hannah Wright",
+            "Email", "hannah.wright@example.com",
+            "Phone", "07700 900321",
+            "I am looking for", "Therapy for myself",
+            "What are your main concerns at the moment?", "Stress and low mood, trying to conceive",
+            "How long have these difficulties been present?", "More than 6 weeks",
+            "Where would you like support to take place?", "Online",
+            "Availability", "Flexible",
+            "Our current fees are £200-250 per session. Does this feel manageable for you?", "Need to check with insurer",
+            "Additional comments", "Referred by my GP, Dr. Cole. Have Vitality health insurance.",
+          ].join("\n"),
+        },
+        {
+          threadId: "demo-seed-005",
+          channel: "whatsapp",
+          fromAddress: "+44 7700 900654",
+          subject: "WhatsApp enquiry",
+          body: "Hi, I saw your practice online and wanted to ask about availability for prenatal anxiety support. My name is Zara Ahmed, is it possible to have a call this week?",
+        },
+      ];
+
+      const inserted: string[] = [];
+      for (const msg of SEED_MESSAGES) {
+        const parsed = parseIntakeEmailBody(msg.body);
+        await db.insert(intakeMessages).values({
+          tenantId: tenant.id,
+          channel: msg.channel,
+          threadId: msg.threadId,
+          fromAddress: msg.fromAddress,
+          subject: msg.subject,
+          body: msg.body,
+          extractedName: parsed.name,
+          extractedPhone: parsed.phone,
+          extractedData: parsed.fields,
+          status: "new",
+        } as any);
+        inserted.push(msg.threadId);
+      }
+
+      res.json({ success: true, alreadySeeded: false, insertedCount: inserted.length, gmailIntakeEnabled: true });
+    } catch (error) {
+      console.error("Failed to seed demo intake messages:", error);
+      res.status(500).json({ error: "Failed to seed demo intake messages" });
     }
   });
 

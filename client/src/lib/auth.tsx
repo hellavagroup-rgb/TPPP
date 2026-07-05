@@ -60,8 +60,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const loggedInUser = await api.login(email, password);
       setUser(loggedInUser as User);
       
-      // Invalidate all queries so they refetch with the new session
-      await queryClient.invalidateQueries();
+      // Purge any cached data from a previous session (possibly a different
+      // tenant on a shared device) before loading data for the new session.
+      // invalidateQueries alone is not enough: it only refetches currently
+      // mounted queries, so unmounted query keys like ["/api/clinicians"]
+      // could still serve stale cross-tenant data from cache until something
+      // else happened to refetch them.
+      queryClient.clear();
       
       // Redirect based on role
       if (loggedInUser.role === "clinician") {
@@ -83,6 +88,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await api.logout();
       setUser(null);
+      // Purge all cached data so nothing from this session (client details,
+      // clinician availability, etc.) can leak into whichever account logs
+      // in next on this device.
+      queryClient.clear();
       setLocation("/login");
     } catch (error) {
       console.error("Logout failed:", error);

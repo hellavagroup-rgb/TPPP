@@ -55,7 +55,7 @@ export interface IStorage {
   getTimeSlotById(id: string): Promise<TimeSlot | undefined>;
   createTimeSlot(slot: InsertTimeSlot): Promise<TimeSlot>;
   deleteTimeSlot(id: string): Promise<void>;
-  addTimeSlots(clinicianId: string, newSlots: Omit<TimeSlot, 'id' | 'createdAt'>[]): Promise<TimeSlot[]>;
+  addTimeSlots(clinicianId: string, newSlots: Omit<TimeSlot, 'id' | 'createdAt'>[], tenantId?: string | null): Promise<TimeSlot[]>;
   deleteTimeSlotById(id: string): Promise<boolean>;
   getAllTimeSlots(): Promise<TimeSlot[]>;
   
@@ -79,7 +79,7 @@ export interface IStorage {
   deleteFormTemplate(id: string): Promise<void>;
   
   // ============ FORM SUBMISSIONS ============
-  getAllCompletedFormSubmissions(): Promise<{ submission: FormSubmission; clientName: string; clientDisplayId: string; formTitle: string; formFields: any[] }[]>;
+  getAllCompletedFormSubmissions(tenantId?: string | null): Promise<{ submission: FormSubmission; clientName: string; clientDisplayId: string; formTitle: string; formFields: any[] }[]>;
   getFormSubmissionsByClientId(clientId: string): Promise<FormSubmission[]>;
   createFormSubmission(submission: InsertFormSubmission, tenantId?: string | null): Promise<FormSubmission>;
   getDraftSubmission(clientId: string, formTemplateId: string): Promise<FormSubmission | undefined>;
@@ -282,7 +282,7 @@ export class DatabaseStorage implements IStorage {
     await db.delete(timeSlots).where(eq(timeSlots.id, id));
   }
 
-  async addTimeSlots(clinicianId: string, newSlots: Omit<TimeSlot, 'id' | 'createdAt'>[]): Promise<TimeSlot[]> {
+  async addTimeSlots(clinicianId: string, newSlots: Omit<TimeSlot, 'id' | 'createdAt'>[], tenantId?: string | null): Promise<TimeSlot[]> {
     if (newSlots.length === 0) return [];
     
     const insertedSlots = await db.insert(timeSlots).values(newSlots.map((slot, index) => ({
@@ -299,6 +299,7 @@ export class DatabaseStorage implements IStorage {
       batchId: slot.batchId,
       frequency: (slot as any).frequency || "weekly",
       isOngoing: (slot as any).isOngoing || false,
+      ...(tenantId ? { tenantId } : {}),
     }))).returning();
     
     await db.update(clinicians).set({
@@ -697,11 +698,13 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ============ FORM SUBMISSIONS ============
-  async getAllCompletedFormSubmissions(): Promise<{ submission: FormSubmission; clientName: string; clientDisplayId: string; formTitle: string; formFields: any[] }[]> {
+  async getAllCompletedFormSubmissions(tenantId?: string | null): Promise<{ submission: FormSubmission; clientName: string; clientDisplayId: string; formTitle: string; formFields: any[] }[]> {
     const submissions = await db
       .select()
       .from(formSubmissions)
-      .where(eq(formSubmissions.isDraft, false))
+      .where(tenantId
+        ? and(eq(formSubmissions.isDraft, false), eq(formSubmissions.tenantId, tenantId))
+        : eq(formSubmissions.isDraft, false))
       .orderBy(formSubmissions.submittedAt);
 
     if (submissions.length === 0) return [];

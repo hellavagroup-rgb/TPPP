@@ -8,3 +8,5 @@
 - [Production demo tenant](production-demo-tenant.md) — "Wellness Demo Practice" is a real, intentional third prod tenant seeded with fake data for video recording; don't treat as a leak or delete it.
 - [Multi-tenant webhook tenant identification](multi-tenant-webhook-identification.md) — never pick a per-tenant secret by reading unverified event metadata; verify against every candidate secret instead.
 - [Shared sender address causes stale display-name caching](shared-sender-address-name-caching.md) — a correct per-tenant "From" header can still show an old name if a mail client cached it for the shared address.
+- [Tenant ownership checks should key off a reliably-scoped parent](tenant-ownership-check-source.md) — don't trust a child row's own tenantId column if it may have legacy nulls; derive from the parent entity instead.
+- [Clear query cache on login/logout, not just invalidate](query-cache-clear-on-auth-transition.md) — invalidateQueries() alone leaves stale cross-account/cross-tenant data in unmounted query cache entries.

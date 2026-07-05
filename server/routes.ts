@@ -705,6 +705,13 @@ export async function registerRoutes(
   // ============ AVAILABILITY / TIME SLOTS ============
   app.get("/api/timeslots/:clinicianId", requireAuth, async (req, res) => {
     try {
+      const targetClinician = await storage.getClinicianById(req.params.clinicianId);
+      if (!targetClinician) {
+        return res.status(404).json({ error: "Clinician not found" });
+      }
+      if (targetClinician.tenantId !== req.tenant?.id) {
+        return res.status(403).json({ error: "Access denied" });
+      }
       const slots = await storage.getTimeSlotsByClinicianId(req.params.clinicianId);
       res.json(slots);
     } catch (error) {
@@ -715,7 +722,15 @@ export async function registerRoutes(
   // Add new time slots (additive - does not delete existing slots)
   app.post("/api/timeslots/:clinicianId", requireAuth, async (req, res) => {
     try {
-      // Check authorization: Admin can edit any, Clinician can only edit their own
+      const targetClinician = await storage.getClinicianById(req.params.clinicianId);
+      if (!targetClinician) {
+        return res.status(404).json({ error: "Clinician not found" });
+      }
+      if (targetClinician.tenantId !== req.tenant?.id) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      // Check authorization: Admin can edit any (within their tenant), Clinician can only edit their own
       if (req.user!.role === "clinician") {
         const clinician = await storage.getClinicianByUserId(req.user!.id);
         if (!clinician || clinician.id !== req.params.clinicianId) {
@@ -771,7 +786,7 @@ export async function registerRoutes(
         }
       }
 
-      const inserted = await storage.addTimeSlots(req.params.clinicianId, newSlots);
+      const inserted = await storage.addTimeSlots(req.params.clinicianId, newSlots, req.tenant?.id);
       
       const clinician = await storage.getClinicianById(req.params.clinicianId);
       let clinicianName = "Unknown";
@@ -817,7 +832,12 @@ export async function registerRoutes(
       if (slot.clinicianId !== req.params.clinicianId) {
         return res.status(403).json({ error: "Forbidden" });
       }
-      if (slot.tenantId !== req.tenant?.id) {
+      // Derive tenant ownership from the clinician rather than the slot's own
+      // tenantId column: legacy slots inserted before per-slot tenant tagging
+      // was added can have a null tenantId, and clinicianId is always reliably
+      // tenant-scoped.
+      const owningClinician = await storage.getClinicianById(req.params.clinicianId);
+      if (!owningClinician || owningClinician.tenantId !== req.tenant?.id) {
         return res.status(403).json({ error: "Access denied" });
       }
 
@@ -1900,7 +1920,7 @@ export async function registerRoutes(
 
   app.get("/api/email-templates/:key", requireAdmin, async (req, res) => {
     try {
-      const template = await storage.getEmailTemplateByKey(req.params.key);
+      const template = await storage.getEmailTemplateByKey(req.params.key, req.tenant?.id);
       if (!template) {
         return res.status(404).json({ error: "Template not found" });
       }
@@ -1940,7 +1960,7 @@ export async function registerRoutes(
       let filename = "";
 
       if (type === "form-responses") {
-        const rows = await storage.getAllCompletedFormSubmissions();
+        const rows = await storage.getAllCompletedFormSubmissions(req.tenant?.id);
         filename = "form-responses";
 
         // Collect all unique field labels across all forms

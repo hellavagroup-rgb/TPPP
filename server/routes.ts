@@ -313,7 +313,8 @@ export async function registerRoutes(
         name,
         password: placeholderPassword,
         role: "clinician",
-      });
+        tenantId: req.tenant?.id,
+      } as any);
 
       // Create clinician profile
       const clinician = await storage.createClinician({

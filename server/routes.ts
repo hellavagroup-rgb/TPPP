@@ -6,7 +6,7 @@ import fs from "fs";
 import multer from "multer";
 import ExcelJS from "exceljs";
 import { storage } from "./storage";
-import { setupAuth, requireAuth, requireAdmin, requireClinician, hashPassword, auditLog } from "./auth";
+import { setupAuth, requireAuth, requireAdmin, requireClinician, hashPassword, auditLog, destroySessionsForUser } from "./auth";
 import passport from "passport";
 import { 
   insertClientSchema, insertClinicianSchema, insertTimeSlotSchema, 
@@ -3230,9 +3230,15 @@ export async function registerRoutes(
         clinicianUpdated = true;
       }
 
-      console.log(`[super-admin] Reassigned user ${user.id} (${user.email}) from tenant ${previousTenantId} to ${newTenantId} (${tenant.name}). Clinician profile updated: ${clinicianUpdated}`);
+      // Force an immediate logout for this user if they have a live session —
+      // the tenant lookup itself is always fresh on the server, but a browser
+      // tab that already loaded data under the old tenant would otherwise keep
+      // showing it (client-side query cache is only cleared on login/logout).
+      const destroyedSessions = await destroySessionsForUser(user.id);
 
-      res.json({ success: true, previousTenantId, newTenantId, tenantName: tenant.name, clinicianUpdated });
+      console.log(`[super-admin] Reassigned user ${user.id} (${user.email}) from tenant ${previousTenantId} to ${newTenantId} (${tenant.name}). Clinician profile updated: ${clinicianUpdated}. Sessions terminated: ${destroyedSessions}`);
+
+      res.json({ success: true, previousTenantId, newTenantId, tenantName: tenant.name, clinicianUpdated, sessionsTerminated: destroyedSessions });
     } catch (error) {
       console.error("Reassign tenant error:", error);
       res.status(400).json({ error: "Failed to reassign tenant" });
@@ -3252,7 +3258,7 @@ export async function registerRoutes(
       const [tenant] = await db.select().from(tenants).where(eq(tenants.id, newTenantId));
       if (!tenant) return res.status(404).json({ error: "Target tenant not found" });
 
-      const results: { email: string; success: boolean; error?: string; previousTenantId?: string | null; clinicianUpdated?: boolean }[] = [];
+      const results: { email: string; success: boolean; error?: string; previousTenantId?: string | null; clinicianUpdated?: boolean; sessionsTerminated?: number }[] = [];
 
       for (const rawEmail of emails) {
         const email = rawEmail.toLowerCase().trim();
@@ -3273,8 +3279,13 @@ export async function registerRoutes(
             clinicianUpdated = true;
           }
 
-          console.log(`[super-admin] Bulk-reassigned user ${user.id} (${user.email}) from tenant ${previousTenantId} to ${newTenantId} (${tenant.name}). Clinician profile updated: ${clinicianUpdated}`);
-          results.push({ email, success: true, previousTenantId, clinicianUpdated });
+          // Force logout of any live session so a browser that already loaded
+          // data under the old (wrong) tenant can't keep showing it — see the
+          // single-user reassign endpoint above for the full rationale.
+          const destroyedSessions = await destroySessionsForUser(user.id);
+
+          console.log(`[super-admin] Bulk-reassigned user ${user.id} (${user.email}) from tenant ${previousTenantId} to ${newTenantId} (${tenant.name}). Clinician profile updated: ${clinicianUpdated}. Sessions terminated: ${destroyedSessions}`);
+          results.push({ email, success: true, previousTenantId, clinicianUpdated, sessionsTerminated: destroyedSessions });
         } catch (err) {
           console.error(`Bulk reassign failed for ${email}:`, err);
           results.push({ email, success: false, error: "Unexpected error" });

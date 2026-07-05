@@ -3239,6 +3239,55 @@ export async function registerRoutes(
     }
   });
 
+  // Bulk variant of the above — lets a super-admin fix a batch of accounts that
+  // were corrupted by the same past incident (e.g. several accounts silently
+  // reassigned to the wrong tenant) in one action instead of one-by-one.
+  app.post("/api/super-admin/users/reassign-tenant-bulk", requireSuperAdmin, async (req, res) => {
+    try {
+      const { emails, newTenantId } = z.object({
+        emails: z.array(z.string().email()).min(1).max(200),
+        newTenantId: z.string().uuid(),
+      }).parse(req.body);
+
+      const [tenant] = await db.select().from(tenants).where(eq(tenants.id, newTenantId));
+      if (!tenant) return res.status(404).json({ error: "Target tenant not found" });
+
+      const results: { email: string; success: boolean; error?: string; previousTenantId?: string | null; clinicianUpdated?: boolean }[] = [];
+
+      for (const rawEmail of emails) {
+        const email = rawEmail.toLowerCase().trim();
+        try {
+          const user = await storage.getUserByEmail(email);
+          if (!user) {
+            results.push({ email, success: false, error: "User not found" });
+            continue;
+          }
+
+          const previousTenantId = user.tenantId;
+          await storage.updateUser(user.id, { tenantId: newTenantId } as any);
+
+          let clinicianUpdated = false;
+          const clinician = await storage.getClinicianByUserId(user.id);
+          if (clinician && clinician.tenantId !== newTenantId) {
+            await db.update(clinicians).set({ tenantId: newTenantId }).where(eq(clinicians.id, clinician.id));
+            clinicianUpdated = true;
+          }
+
+          console.log(`[super-admin] Bulk-reassigned user ${user.id} (${user.email}) from tenant ${previousTenantId} to ${newTenantId} (${tenant.name}). Clinician profile updated: ${clinicianUpdated}`);
+          results.push({ email, success: true, previousTenantId, clinicianUpdated });
+        } catch (err) {
+          console.error(`Bulk reassign failed for ${email}:`, err);
+          results.push({ email, success: false, error: "Unexpected error" });
+        }
+      }
+
+      res.json({ success: true, tenantName: tenant.name, results });
+    } catch (error) {
+      console.error("Bulk reassign tenant error:", error);
+      res.status(400).json({ error: "Failed to bulk reassign tenant" });
+    }
+  });
+
   // Update tenant branding
   app.patch("/api/super-admin/tenants/:id/branding", requireSuperAdmin, async (req, res) => {
     try {

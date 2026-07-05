@@ -24,3 +24,13 @@ app, treat it as a live bug, not defensive code — replace it with a warn-only 
 is needed, provide a narrow, audited, single-record action (reassign one user/entity by id/email to
 an explicit target tenant) gated behind super-admin, and cascade to linked profile rows (e.g. a
 clinician profile tied to a user) so the same record can't end up split across two tenants again.
+
+**Second-order lesson (recurred later on the same codebase):** removing the buggy auto-assign
+endpoint stops *new* corruption but does **not** repair rows it already corrupted before removal.
+When a report looks like a previously-fixed bug, check production data directly for lingering
+victims of the old bug, not just whether the vulnerable code path is still reachable. Here, a
+different flow (a "create clinician" feature that set `tenantId` on the profile row but forgot it
+on the linked login/user row) kept feeding new orphaned rows into the same historical damage, so
+the leak symptom reappeared long after the original endpoint was deleted — fix the feeding bug too,
+not just the historical one, and provide a bulk-remediation path when several records need the same
+correction (12+ accounts in this case) rather than expecting one-by-one manual fixes.

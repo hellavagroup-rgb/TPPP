@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -916,6 +917,7 @@ function UsersTab({ adminKey }: { adminKey: string }) {
       </Card>
 
       <ReassignTenantCard adminKey={adminKey} />
+      <BulkReassignTenantCard adminKey={adminKey} />
     </div>
   );
 }
@@ -1003,6 +1005,117 @@ function ReassignTenantCard({ adminKey }: { adminKey: string }) {
             Reassign Tenant
           </Button>
         </form>
+      </CardContent>
+    </Card>
+  );
+}
+
+function BulkReassignTenantCard({ adminKey }: { adminKey: string }) {
+  const [emailsText, setEmailsText] = useState("");
+  const [newTenantId, setNewTenantId] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [results, setResults] = useState<{ email: string; success: boolean; error?: string; clinicianUpdated?: boolean }[] | null>(null);
+
+  const { data: tenantList } = useQuery<{ id: string; name: string }[]>({
+    queryKey: ["super-admin-tenants"],
+    queryFn: async () => {
+      const res = await superAdminFetch("/api/super-admin/tenants", {}, adminKey);
+      if (!res.ok) throw new Error("Failed to load tenants");
+      return res.json();
+    },
+  });
+
+  const emails = emailsText
+    .split(/[\n,]/)
+    .map(e => e.trim())
+    .filter(Boolean);
+
+  const handleBulkReassign = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (emails.length === 0 || !newTenantId) return;
+    setLoading(true);
+    setResults(null);
+    try {
+      const res = await superAdminFetch("/api/super-admin/users/reassign-tenant-bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ emails, newTenantId }),
+      }, adminKey);
+      const data = await res.json();
+      if (res.ok) {
+        setResults(data.results);
+        const failCount = data.results.filter((r: any) => !r.success).length;
+        if (failCount === 0) {
+          toast.success(`Moved ${data.results.length} account(s) to ${data.tenantName}`);
+        } else {
+          toast.error(`${failCount} of ${data.results.length} account(s) failed — see details below`);
+        }
+      } else {
+        toast.error(data.error || "Failed to bulk reassign tenant");
+      }
+    } catch {
+      toast.error("Network error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Bulk Reassign Users to a Different Tenant</CardTitle>
+        <CardDescription>
+          Moves several accounts (and their linked clinician profiles, if any) to another tenant in one
+          go. Use this to clean up a batch of accounts affected by the same past data issue.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={handleBulkReassign} className="space-y-4 max-w-sm">
+          <div className="space-y-1.5">
+            <Label htmlFor="bulk-reassign-emails">User emails (one per line or comma-separated)</Label>
+            <Textarea
+              id="bulk-reassign-emails"
+              data-testid="input-bulk-reassign-emails"
+              value={emailsText}
+              onChange={e => setEmailsText(e.target.value)}
+              placeholder={"clinician1@example.com\nclinician2@example.com"}
+              rows={6}
+              required
+            />
+            <p className="text-xs text-muted-foreground">{emails.length} email(s) detected</p>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="bulk-reassign-tenant">New tenant</Label>
+            <select
+              id="bulk-reassign-tenant"
+              data-testid="select-bulk-reassign-tenant"
+              className="w-full border rounded-md h-9 px-3 text-sm bg-background"
+              value={newTenantId}
+              onChange={e => setNewTenantId(e.target.value)}
+              required
+            >
+              <option value="" disabled>Select a tenant</option>
+              {tenantList?.map(t => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          </div>
+          <Button type="submit" disabled={loading} data-testid="button-bulk-reassign-tenant">
+            {loading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+            Reassign All
+          </Button>
+        </form>
+        {results && (
+          <div className="mt-4 space-y-1 text-sm" data-testid="results-bulk-reassign">
+            {results.map(r => (
+              <div key={r.email} className={r.success ? "text-green-600" : "text-destructive"}>
+                {r.success ? "✓" : "✗"} {r.email}
+                {r.success && r.clinicianUpdated ? " (clinician profile updated)" : ""}
+                {!r.success && r.error ? ` — ${r.error}` : ""}
+              </div>
+            ))}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

@@ -83,8 +83,9 @@ export interface IStorage {
   getFormSubmissionsByClientId(clientId: string): Promise<FormSubmission[]>;
   createFormSubmission(submission: InsertFormSubmission, tenantId?: string | null): Promise<FormSubmission>;
   getDraftSubmission(clientId: string, formTemplateId: string): Promise<FormSubmission | undefined>;
-  saveOrUpdateDraft(clientId: string, formTemplateId: string, responses: any): Promise<FormSubmission>;
-  submitDraft(submissionId: string, responses: any): Promise<FormSubmission | undefined>;
+  saveOrUpdateDraft(clientId: string, formTemplateId: string, responses: any, tenantId?: string | null): Promise<FormSubmission>;
+  submitDraft(submissionId: string, responses: any, tenantId?: string | null): Promise<FormSubmission | undefined>;
+  backfillFormSubmissionTenantIds(): Promise<number>;
   
   // ============ TASKS ============
   getAllTasks(tenantId?: string | null): Promise<Task[]>;
@@ -107,7 +108,7 @@ export interface IStorage {
   // ============ NON-ENGAGEMENT CATEGORIES ============
   getAllNonEngagementCategories(tenantId?: string | null): Promise<NonEngagementCategory[]>;
   createNonEngagementCategory(category: InsertNonEngagementCategory, tenantId?: string | null): Promise<NonEngagementCategory>;
-  deleteNonEngagementCategory(id: string): Promise<boolean>;
+  deleteNonEngagementCategory(id: string, tenantId?: string | null): Promise<boolean>;
 
   // ============ CUSTOM INSURERS ============
   getCustomInsurers(tenantId?: string | null): Promise<CustomInsurer[]>;
@@ -256,8 +257,14 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateClinician(id: string, updates: Partial<InsertClinician>): Promise<Clinician | undefined> {
+    // Never let a caller reassign a clinician's tenant or linked user account
+    // through a general-purpose profile update — these fields are only ever
+    // supposed to change via the dedicated tenant-reassignment/user-linking
+    // flows. Stripping them here protects every current and future caller,
+    // even ones that pass through most of req.body unfiltered.
+    const { tenantId, userId, ...safeUpdates } = updates as Partial<InsertClinician> & { tenantId?: unknown; userId?: unknown };
     const [clinician] = await db.update(clinicians).set({
-      ...updates,
+      ...safeUpdates,
       lastUpdatedAvailability: new Date()
     }).where(eq(clinicians.id, id)).returning();
     return clinician || undefined;
@@ -753,14 +760,15 @@ export class DatabaseStorage implements IStorage {
     return draft || undefined;
   }
 
-  async saveOrUpdateDraft(clientId: string, formTemplateId: string, responses: any): Promise<FormSubmission> {
+  async saveOrUpdateDraft(clientId: string, formTemplateId: string, responses: any, tenantId?: string | null): Promise<FormSubmission> {
     // Check if a draft already exists
     const existingDraft = await this.getDraftSubmission(clientId, formTemplateId);
     
     if (existingDraft) {
-      // Update existing draft
+      // Update existing draft. Also self-heal tenantId here in case this draft
+      // was originally created before per-submission tenant tagging existed.
       const [updated] = await db.update(formSubmissions)
-        .set({ responses, submittedAt: new Date() })
+        .set({ responses, submittedAt: new Date(), ...(tenantId ? { tenantId } : {}) })
         .where(eq(formSubmissions.id, existingDraft.id))
         .returning();
       return updated;
@@ -771,21 +779,40 @@ export class DatabaseStorage implements IStorage {
         formTemplateId,
         responses,
         isDraft: true,
+        ...(tenantId ? { tenantId } : {}),
       }).returning();
       return newDraft;
     }
   }
 
-  async submitDraft(submissionId: string, responses: any): Promise<FormSubmission | undefined> {
+  async submitDraft(submissionId: string, responses: any, tenantId?: string | null): Promise<FormSubmission | undefined> {
     const [submitted] = await db.update(formSubmissions)
       .set({ 
         responses, 
         isDraft: false, 
-        submittedAt: new Date() 
+        submittedAt: new Date(),
+        ...(tenantId ? { tenantId } : {}),
       })
       .where(eq(formSubmissions.id, submissionId))
       .returning();
     return submitted || undefined;
+  }
+
+  // One-time repair for form_submissions rows created before per-submission
+  // tenant tagging existed on the public submit/draft routes (they always had
+  // a null tenantId because req.tenant is never resolved on public routes).
+  // Derives the correct tenant from the row's own client, which is always
+  // reliably tenant-tagged — never guesses or falls back to "first tenant".
+  async backfillFormSubmissionTenantIds(): Promise<number> {
+    const result = await db.execute(sql`
+      UPDATE form_submissions fs
+      SET tenant_id = c.tenant_id
+      FROM clients c
+      WHERE fs.client_id = c.id
+        AND fs.tenant_id IS NULL
+        AND c.tenant_id IS NOT NULL
+    `);
+    return result.rowCount ?? 0;
   }
 
   // ============ TASKS ============
@@ -898,8 +925,12 @@ export class DatabaseStorage implements IStorage {
     return result;
   }
 
-  async deleteNonEngagementCategory(id: string): Promise<boolean> {
-    const result = await db.delete(nonEngagementCategories).where(eq(nonEngagementCategories.id, id));
+  async deleteNonEngagementCategory(id: string, tenantId?: string | null): Promise<boolean> {
+    const result = await db.delete(nonEngagementCategories).where(
+      tenantId
+        ? and(eq(nonEngagementCategories.id, id), eq(nonEngagementCategories.tenantId, tenantId))
+        : eq(nonEngagementCategories.id, id)
+    );
     return (result.rowCount ?? 0) > 0;
   }
 

@@ -918,6 +918,7 @@ function UsersTab({ adminKey }: { adminKey: string }) {
 
       <ReassignTenantCard adminKey={adminKey} />
       <BulkReassignTenantCard adminKey={adminKey} />
+      <BackfillFormSubmissionTenantsCard adminKey={adminKey} />
     </div>
   );
 }
@@ -1115,6 +1116,56 @@ function BulkReassignTenantCard({ adminKey }: { adminKey: string }) {
               </div>
             ))}
           </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function BackfillFormSubmissionTenantsCard({ adminKey }: { adminKey: string }) {
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<{ updated: number } | null>(null);
+
+  const handleBackfill = async () => {
+    setLoading(true);
+    setResult(null);
+    try {
+      const res = await superAdminFetch("/api/super-admin/form-submissions/backfill-tenant-ids", {
+        method: "POST",
+      }, adminKey);
+      const data = await res.json();
+      if (res.ok) {
+        setResult({ updated: data.updated });
+        toast.success(data.updated > 0 ? `Fixed ${data.updated} form submission(s)` : "No form submissions needed fixing");
+      } else {
+        toast.error(data.error || "Failed to backfill form submission tenant IDs");
+      }
+    } catch {
+      toast.error("Network error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Fix Untagged Form Submissions</CardTitle>
+        <CardDescription>
+          Some form submissions and drafts saved before tenant tagging was added to the public submission
+          flow are missing a tenant. This finds those rows and tags them using their client's tenant
+          (never guessed). Safe to run more than once.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <Button onClick={handleBackfill} disabled={loading} data-testid="button-backfill-form-submission-tenants">
+          {loading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+          Fix Untagged Form Submissions
+        </Button>
+        {result && (
+          <p className="mt-3 text-sm text-muted-foreground" data-testid="text-backfill-result">
+            {result.updated > 0 ? `Updated ${result.updated} row(s).` : "No rows needed updating."}
+          </p>
         )}
       </CardContent>
     </Card>

@@ -119,11 +119,17 @@ export async function registerRoutes(
       // Hash password
       const hashedPassword = await hashPassword(validated.password);
       
+      // Always force the new user into the creating admin's own tenant —
+      // never trust a tenantId supplied in the request body. Without this,
+      // any tenant admin could create a login account (with a password they
+      // control) inside a different tenant, or omit tenantId entirely and
+      // reproduce the historical blank-tenant account bug.
       const user = await storage.createUser({
         ...validated,
         email: validated.email.toLowerCase(),
-        password: hashedPassword
-      });
+        password: hashedPassword,
+        tenantId: req.tenant?.id,
+      } as any);
 
       // Don't return password
       const { password: _, ...safeUser } = user;
@@ -1266,9 +1272,14 @@ export async function registerRoutes(
       const existingDraft = await storage.getDraftSubmission(clientId, formId);
       let submission;
       
+      // Public routes never have req.tenant resolved (no session to derive it
+      // from), so tenant tagging must come from the already-verified client
+      // record instead — this is the same reliable-parent-entity pattern used
+      // for timeslots. Passing req.tenant?.id here would always be undefined
+      // and leave every real client submission with a null tenantId.
       if (existingDraft) {
         // Convert draft to final submission
-        const converted = await storage.submitDraft(existingDraft.id, data);
+        const converted = await storage.submitDraft(existingDraft.id, data, client.tenantId);
         if (!converted) {
           throw new Error("Failed to convert draft to submission");
         }
@@ -1279,7 +1290,7 @@ export async function registerRoutes(
           formTemplateId: formId,
           clientId,
           responses: data,
-        }, req.tenant?.id);
+        }, client.tenantId);
       }
 
       // Extract insurer from form data if present
@@ -1387,8 +1398,10 @@ export async function registerRoutes(
         return res.status(404).json({ error: "Form not found" });
       }
 
-      // Save or update draft
-      const draft = await storage.saveOrUpdateDraft(clientId, formId, data);
+      // Save or update draft. Derived from the client's own tenantId (a
+      // reliable, always-set source) rather than req.tenant, which is never
+      // resolved on this unauthenticated public route.
+      const draft = await storage.saveOrUpdateDraft(clientId, formId, data, client.tenantId);
 
       res.json({ 
         success: true, 
@@ -1674,6 +1687,9 @@ export async function registerRoutes(
       const task = await storage.getTaskById(taskId);
       if (!task) {
         return res.status(404).json({ error: "Task not found" });
+      }
+      if (task.tenantId !== req.tenant?.id) {
+        return res.status(403).json({ error: "Access denied" });
       }
 
       const tcTR = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail } : undefined;
@@ -2168,7 +2184,7 @@ export async function registerRoutes(
 
   app.delete("/api/non-engagement-categories/:id", requireAdmin, async (req, res) => {
     try {
-      const deleted = await storage.deleteNonEngagementCategory(req.params.id);
+      const deleted = await storage.deleteNonEngagementCategory(req.params.id, req.tenant?.id);
       if (!deleted) {
         return res.status(404).json({ error: "Category not found" });
       }
@@ -3296,6 +3312,21 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Bulk reassign tenant error:", error);
       res.status(400).json({ error: "Failed to bulk reassign tenant" });
+    }
+  });
+
+  // One-time repair: backfills tenantId on any form_submissions row that was
+  // created via the public submit/draft endpoints before those routes tagged
+  // tenantId from the client record. Only ever sets tenantId derived from the
+  // row's own client (a reliable, always-correct source) — never guesses.
+  app.post("/api/super-admin/form-submissions/backfill-tenant-ids", requireSuperAdmin, async (req, res) => {
+    try {
+      const updated = await storage.backfillFormSubmissionTenantIds();
+      console.log(`[super-admin] Backfilled tenantId on ${updated} form_submissions row(s) from their client's tenant`);
+      res.json({ success: true, updated });
+    } catch (error) {
+      console.error("Backfill form submission tenant IDs error:", error);
+      res.status(500).json({ error: "Failed to backfill form submission tenant IDs" });
     }
   });
 

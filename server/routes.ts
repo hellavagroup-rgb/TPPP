@@ -10,7 +10,8 @@ import { setupAuth, requireAuth, requireAdmin, requireClinician, hashPassword, a
 import passport from "passport";
 import { 
   insertClientSchema, insertClinicianSchema, insertTimeSlotSchema, 
-  insertFormTemplateSchema, insertTaskSchema, insertUserSchema 
+  insertFormTemplateSchema, insertTaskSchema, insertUserSchema,
+  type InsertFormTemplate
 } from "@shared/schema";
 import { z } from "zod";
 import { sendEmail, buildFromAddress, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail, GENERIC_PRACTICE_NAME } from "./email";
@@ -3327,6 +3328,65 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Backfill form submission tenant IDs error:", error);
       res.status(500).json({ error: "Failed to backfill form submission tenant IDs" });
+    }
+  });
+
+  // List all form templates across all tenants, with the owning tenant's name,
+  // so a super-admin can pick a source form to copy elsewhere.
+  app.get("/api/super-admin/forms", requireSuperAdmin, async (_req, res) => {
+    try {
+      const rows = await db.select({
+        id: formTemplates.id,
+        title: formTemplates.title,
+        description: formTemplates.description,
+        createdAt: formTemplates.createdAt,
+        tenantId: formTemplates.tenantId,
+        tenantName: tenants.name,
+      })
+        .from(formTemplates)
+        .leftJoin(tenants, eq(formTemplates.tenantId, tenants.id))
+        .orderBy(formTemplates.title);
+      res.json(rows);
+    } catch (error) {
+      console.error("Super-admin list forms error:", error);
+      res.status(500).json({ error: "Failed to fetch forms" });
+    }
+  });
+
+  // Copy a form template from one tenant to another. Always creates a brand
+  // new, independently-owned row in the target tenant (never shares or
+  // repoints the original) — the target tenant can then freely edit its copy
+  // via the normal /api/forms routes without ever touching the source
+  // tenant's form, and the source tenant's form is completely unaffected.
+  // This is the supported way to let one tenant reuse another tenant's form
+  // (with that tenant's permission) while keeping full tenant isolation.
+  app.post("/api/super-admin/forms/copy-to-tenant", requireSuperAdmin, async (req, res) => {
+    try {
+      const { formTemplateId, targetTenantId, newTitle } = z.object({
+        formTemplateId: z.string().uuid(),
+        targetTenantId: z.string().uuid(),
+        newTitle: z.string().min(1).optional(),
+      }).parse(req.body);
+
+      const sourceForm = await storage.getFormTemplateById(formTemplateId);
+      if (!sourceForm) return res.status(404).json({ error: "Source form not found" });
+
+      const [targetTenant] = await db.select().from(tenants).where(eq(tenants.id, targetTenantId));
+      if (!targetTenant) return res.status(404).json({ error: "Target tenant not found" });
+
+      const copiedForm = await storage.createFormTemplate({
+        title: newTitle ?? sourceForm.title,
+        description: sourceForm.description,
+        fields: sourceForm.fields,
+      } as InsertFormTemplate, targetTenantId);
+
+      console.log(`[super-admin] Copied form template ${sourceForm.id} ("${sourceForm.title}") from tenant ${sourceForm.tenantId} to tenant ${targetTenantId} (${targetTenant.name}) as new form ${copiedForm.id}`);
+
+      res.json({ success: true, form: copiedForm, tenantName: targetTenant.name });
+    } catch (error) {
+      console.error("Copy form to tenant error:", error);
+      if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors });
+      res.status(500).json({ error: "Failed to copy form to tenant" });
     }
   });
 

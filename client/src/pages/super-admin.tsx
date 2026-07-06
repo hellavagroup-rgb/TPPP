@@ -805,6 +805,7 @@ function TenantDetail({ tenantId, adminKey, onBack }: { tenantId: string; adminK
           <TabsTrigger value="stripe" data-testid="tab-stripe">Stripe</TabsTrigger>
           <TabsTrigger value="gmail" data-testid="tab-gmail">Gmail</TabsTrigger>
           <TabsTrigger value="users" data-testid="tab-users">Users</TabsTrigger>
+          <TabsTrigger value="forms" data-testid="tab-forms">Forms</TabsTrigger>
         </TabsList>
 
         <TabsContent value="branding">
@@ -825,6 +826,10 @@ function TenantDetail({ tenantId, adminKey, onBack }: { tenantId: string; adminK
 
         <TabsContent value="users">
           <UsersTab adminKey={adminKey} />
+        </TabsContent>
+
+        <TabsContent value="forms">
+          <FormsTab adminKey={adminKey} />
         </TabsContent>
       </Tabs>
     </div>
@@ -1167,6 +1172,137 @@ function BackfillFormSubmissionTenantsCard({ adminKey }: { adminKey: string }) {
             {result.updated > 0 ? `Updated ${result.updated} row(s).` : "No rows needed updating."}
           </p>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── Forms Tab ───────────────────────────────────────────────────────────────
+
+function FormsTab({ adminKey }: { adminKey: string }) {
+  return (
+    <div className="space-y-6">
+      <CopyFormToTenantCard adminKey={adminKey} />
+    </div>
+  );
+}
+
+function CopyFormToTenantCard({ adminKey }: { adminKey: string }) {
+  const [sourceFormId, setSourceFormId] = useState("");
+  const [targetTenantId, setTargetTenantId] = useState("");
+  const [newTitle, setNewTitle] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const { data: forms, refetch: refetchForms } = useQuery<{ id: string; title: string; tenantId: string | null; tenantName: string }[]>({
+    queryKey: ["super-admin-forms"],
+    queryFn: async () => {
+      const res = await superAdminFetch("/api/super-admin/forms", {}, adminKey);
+      if (!res.ok) throw new Error("Failed to load forms");
+      return res.json();
+    },
+  });
+
+  const { data: tenantList } = useQuery<{ id: string; name: string }[]>({
+    queryKey: ["super-admin-tenants"],
+    queryFn: async () => {
+      const res = await superAdminFetch("/api/super-admin/tenants", {}, adminKey);
+      if (!res.ok) throw new Error("Failed to load tenants");
+      return res.json();
+    },
+  });
+
+  const selectedForm = forms?.find(f => f.id === sourceFormId);
+
+  const handleCopy = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!sourceFormId || !targetTenantId) return;
+    setLoading(true);
+    try {
+      const res = await superAdminFetch("/api/super-admin/forms/copy-to-tenant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          formTemplateId: sourceFormId,
+          targetTenantId,
+          ...(newTitle.trim() ? { newTitle: newTitle.trim() } : {}),
+        }),
+      }, adminKey);
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(`Copied "${data.form?.title}" to ${data.tenantName} as a new, independently-editable form`);
+        setSourceFormId("");
+        setTargetTenantId("");
+        setNewTitle("");
+        refetchForms();
+      } else {
+        toast.error(data.error || "Failed to copy form");
+      }
+    } catch {
+      toast.error("Network error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Copy a Form to Another Tenant</CardTitle>
+        <CardDescription>
+          Creates a brand-new, independent copy of a form template under a different practice. The two
+          copies are never linked — each tenant can edit their own without affecting the other. Use this
+          when one practice agrees to share a form with another.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={handleCopy} className="space-y-4 max-w-sm">
+          <div className="space-y-1.5">
+            <Label htmlFor="copy-form-source">Form to copy</Label>
+            <select
+              id="copy-form-source"
+              data-testid="select-copy-form-source"
+              className="w-full border rounded-md h-9 px-3 text-sm bg-background"
+              value={sourceFormId}
+              onChange={e => setSourceFormId(e.target.value)}
+              required
+            >
+              <option value="" disabled>Select a form</option>
+              {forms?.map(f => (
+                <option key={f.id} value={f.id}>{f.title} — {f.tenantName ?? "No tenant"}</option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="copy-form-target">Copy to tenant</Label>
+            <select
+              id="copy-form-target"
+              data-testid="select-copy-form-target"
+              className="w-full border rounded-md h-9 px-3 text-sm bg-background"
+              value={targetTenantId}
+              onChange={e => setTargetTenantId(e.target.value)}
+              required
+            >
+              <option value="" disabled>Select a tenant</option>
+              {tenantList?.map(t => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="copy-form-title">New title (optional)</Label>
+            <Input
+              id="copy-form-title"
+              data-testid="input-copy-form-title"
+              value={newTitle}
+              onChange={e => setNewTitle(e.target.value)}
+              placeholder={selectedForm ? selectedForm.title : "Defaults to the original title"}
+            />
+          </div>
+          <Button type="submit" disabled={loading} data-testid="button-copy-form">
+            {loading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+            Copy Form
+          </Button>
+        </form>
       </CardContent>
     </Card>
   );

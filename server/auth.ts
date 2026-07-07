@@ -2,15 +2,16 @@ import passport from "passport";
 import { Strategy as LocalStrategy } from "passport-local";
 import type { Express } from "express";
 import session from "express-session";
-import createMemoryStore from "memorystore";
+import connectPg from "connect-pg-simple";
 import { scrypt, randomBytes, timingSafeEqual } from "crypto";
 import { promisify } from "util";
 import { storage } from "./storage";
+import { pool } from "./db";
 import type { User } from "@shared/schema";
 
 const scryptAsync = promisify(scrypt);
 
-const MemoryStore = createMemoryStore(session);
+const PgSession = connectPg(session);
 
 // Exposed so other modules (e.g. super-admin tenant reassignment) can force an
 // immediate logout for a user whose tenant assignment changes underneath an
@@ -18,29 +19,19 @@ const MemoryStore = createMemoryStore(session);
 // client's in-memory query cache does not get cleared just because the DB
 // row changed, so a stale session could otherwise keep showing the old
 // tenant's data until the user happens to log out on their own.
-let sessionStore: InstanceType<ReturnType<typeof createMemoryStore>> | null = null;
-
-export function destroySessionsForUser(userId: string): Promise<number> {
-  return new Promise((resolve) => {
-    if (!sessionStore || typeof (sessionStore as any).all !== "function") {
-      return resolve(0);
-    }
-    (sessionStore as any).all((err: any, sessions: Record<string, any> | any[]) => {
-      if (err || !sessions) return resolve(0);
-      const entries: [string, any][] = Array.isArray(sessions)
-        ? sessions.map((s: any) => [s.id, s])
-        : Object.entries(sessions);
-      const matching = entries.filter(([, sess]) => sess?.passport?.user === userId);
-      if (matching.length === 0) return resolve(0);
-      let remaining = matching.length;
-      for (const [sid] of matching) {
-        sessionStore!.destroy(sid, () => {
-          remaining -= 1;
-          if (remaining === 0) resolve(matching.length);
-        });
-      }
-    });
-  });
+// Uses a direct SQL query against the session table because connect-pg-simple
+// does not expose an .all() method for iterating sessions.
+export async function destroySessionsForUser(userId: string): Promise<number> {
+  try {
+    const result = await pool.query(
+      `DELETE FROM session WHERE sess->'passport'->>'user' = $1 AND expire > NOW()`,
+      [userId]
+    );
+    return result.rowCount ?? 0;
+  } catch (err) {
+    console.error("[auth] destroySessionsForUser error:", err);
+    return 0;
+  }
 }
 
 // Password hashing utilities (using scrypt - more secure than bcrypt)
@@ -86,8 +77,11 @@ export function setupAuth(app: Express) {
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
     },
-    store: sessionStore = new MemoryStore({
-      checkPeriod: 86400000, // prune expired entries every 24h
+    store: new PgSession({
+      pool,
+      createTableIfMissing: true,
+      // Prune expired sessions every 24 hours
+      pruneSessionInterval: 86400,
     }),
   };
 

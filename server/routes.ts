@@ -2452,7 +2452,11 @@ export async function registerRoutes(
       const count = await syncConnection(connWithReset);
       res.json({ success: true, newMessages: count });
     } catch (err: any) {
-      res.status(500).json({ error: err?.message || "Re-sweep failed" });
+      const msg: string = err?.message || "";
+      if (msg.includes("invalid_grant") || msg.includes("Token has been expired")) {
+        return res.status(400).json({ error: "invalid_grant" });
+      }
+      res.status(500).json({ error: msg || "Re-sweep failed" });
     }
   });
 

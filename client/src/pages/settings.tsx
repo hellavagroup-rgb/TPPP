@@ -1121,8 +1121,19 @@ function GmailConnectionsTab() {
   async function handleResweep(id: string) {
     setResweepingId(id);
     try {
-      const res = await apiRequest("POST", `/api/gmail-connections/${id}/resweep`);
+      const res = await fetch(`/api/gmail-connections/${id}/resweep`, {
+        method: "POST",
+        credentials: "include",
+      });
       const data = await res.json();
+      if (!res.ok) {
+        if (data?.error === "invalid_grant") {
+          toast.error("Gmail connection expired — please disconnect this inbox and reconnect it", { duration: 8000 });
+        } else {
+          toast.error(`Re-sweep failed: ${data?.error || res.statusText}`, { duration: 6000 });
+        }
+        return;
+      }
       queryClient.invalidateQueries({ queryKey: ["/api/gmail-connections"] });
       queryClient.invalidateQueries({ queryKey: ["/api/intake-messages"] });
       if (data.newMessages > 0) {
@@ -1130,8 +1141,8 @@ function GmailConnectionsTab() {
       } else {
         toast.success("Re-sweep complete — no missed messages found");
       }
-    } catch {
-      toast.error("Re-sweep failed");
+    } catch (err: any) {
+      toast.error(`Re-sweep failed: ${err?.message || "unknown error"}`, { duration: 6000 });
     } finally {
       setResweepingId(null);
     }

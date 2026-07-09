@@ -16,6 +16,7 @@ export interface TenantContext {
   id: string;
   name: string;
   fromEmail?: string | null;
+  primaryColor?: string | null;
 }
 
 // Used whenever there is no tenant context (or a tenant lookup fails). Must never be a
@@ -44,9 +45,29 @@ function linkifyUrls(text: string): string {
   return text.replace(/(https?:\/\/[^\s<]+[^\s<.,;:'")\]])/g, url => `<a href="${url}" style="color:#667eea;word-break:break-all;">${url}</a>`);
 }
 
-function wrapInHtmlTemplate(text: string, headerTitle?: string, practiceName?: string): string {
+function hexLuminance(hex: string): number {
+  const c = hex.replace('#', '');
+  const r = parseInt(c.slice(0, 2), 16) / 255;
+  const g = parseInt(c.slice(2, 4), 16) / 255;
+  const b = parseInt(c.slice(4, 6), 16) / 255;
+  const toLinear = (v: number) => v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+  return 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b);
+}
+
+function headerStyles(primaryColor?: string | null): { bg: string; textColor: string } {
+  if (!primaryColor || !/^#[0-9a-fA-F]{6}$/.test(primaryColor)) {
+    return { bg: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', textColor: '#ffffff' };
+  }
+  return {
+    bg: primaryColor,
+    textColor: hexLuminance(primaryColor) > 0.35 ? '#1a1a1a' : '#ffffff',
+  };
+}
+
+function wrapInHtmlTemplate(text: string, headerTitle?: string, practiceName?: string, primaryColor?: string | null): string {
   const footer = practiceName || GENERIC_PRACTICE_NAME;
   const lines = text.split('\n').map(line => line ? `<p>${linkifyUrls(line)}</p>` : '<br>').join('\n');
+  const { bg, textColor } = headerStyles(primaryColor);
   return `
     <!DOCTYPE html>
     <html>
@@ -55,9 +76,9 @@ function wrapInHtmlTemplate(text: string, headerTitle?: string, practiceName?: s
         <style>
           body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }
           .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-          .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+          .header { background: ${bg}; color: ${textColor}; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
           .content { background: #f8f9fa; padding: 30px; border-radius: 0 0 8px 8px; }
-          .button { display: inline-block; background: #667eea; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 20px 0; }
+          .button { display: inline-block; background: ${bg}; color: ${textColor}; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 20px 0; }
           .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
         </style>
       </head>
@@ -131,7 +152,7 @@ export async function generateFormInviteEmail(formName: string, formUrl: string,
     return {
       to: '',
       subject,
-      html: wrapInHtmlTemplate(bodyText, practiceName, practiceName),
+      html: wrapInHtmlTemplate(bodyText, practiceName, practiceName, tenant?.primaryColor),
       text: bodyText,
       from: buildFromAddress(tenant),
     };
@@ -148,9 +169,9 @@ export async function generateFormInviteEmail(formName: string, formUrl: string,
           <style>
             body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-            .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+            .header { background: ${headerStyles(tenant?.primaryColor).bg}; color: ${headerStyles(tenant?.primaryColor).textColor}; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
             .content { background: #f8f9fa; padding: 30px; border-radius: 0 0 8px 8px; }
-            .button { display: inline-block; background: #667eea; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 20px 0; }
+            .button { display: inline-block; background: ${headerStyles(tenant?.primaryColor).bg}; color: ${headerStyles(tenant?.primaryColor).textColor}; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 20px 0; }
             .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
           </style>
         </head>
@@ -195,7 +216,7 @@ export async function generatePasswordResetEmail(userName: string, resetUrl: str
     return {
       to: '',
       subject,
-      html: wrapInHtmlTemplate(bodyText, 'Password Reset', practiceName),
+      html: wrapInHtmlTemplate(bodyText, 'Password Reset', practiceName, tenant?.primaryColor),
       text: bodyText,
       from: buildFromAddress(tenant),
     };
@@ -212,9 +233,9 @@ export async function generatePasswordResetEmail(userName: string, resetUrl: str
           <style>
             body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-            .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+            .header { background: ${headerStyles(tenant?.primaryColor).bg}; color: ${headerStyles(tenant?.primaryColor).textColor}; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
             .content { background: #f8f9fa; padding: 30px; border-radius: 0 0 8px 8px; }
-            .button { display: inline-block; background: #667eea; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 20px 0; }
+            .button { display: inline-block; background: ${headerStyles(tenant?.primaryColor).bg}; color: ${headerStyles(tenant?.primaryColor).textColor}; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 20px 0; }
             .warning { background: #fff3cd; border: 1px solid #ffc107; padding: 12px; border-radius: 4px; margin: 15px 0; }
             .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
           </style>
@@ -265,7 +286,7 @@ export async function generateTaskReminderEmail(assigneeName: string, taskTitle:
     return {
       to: '',
       subject,
-      html: wrapInHtmlTemplate(bodyText, 'Task Reminder', practiceName),
+      html: wrapInHtmlTemplate(bodyText, 'Task Reminder', practiceName, tenant?.primaryColor),
       text: bodyText,
       from: buildFromAddress(tenant),
     };
@@ -282,7 +303,7 @@ export async function generateTaskReminderEmail(assigneeName: string, taskTitle:
           <style>
             body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-            .header { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+            .header { background: ${headerStyles(tenant?.primaryColor).bg}; color: ${headerStyles(tenant?.primaryColor).textColor}; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
             .content { background: #f8f9fa; padding: 30px; border-radius: 0 0 8px 8px; }
             .task-box { background: white; border: 1px solid #ddd; border-radius: 6px; padding: 20px; margin: 15px 0; }
             .due-date { color: #dc3545; font-weight: bold; }
@@ -327,7 +348,7 @@ export async function generateAvailabilityReminderEmail(clinicianName: string, l
     return {
       to: '',
       subject,
-      html: wrapInHtmlTemplate(bodyText, 'Availability Update Request', practiceName),
+      html: wrapInHtmlTemplate(bodyText, 'Availability Update Request', practiceName, tenant?.primaryColor),
       text: bodyText,
       from: buildFromAddress(tenant),
     };
@@ -344,9 +365,9 @@ export async function generateAvailabilityReminderEmail(clinicianName: string, l
           <style>
             body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-            .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+            .header { background: ${headerStyles(tenant?.primaryColor).bg}; color: ${headerStyles(tenant?.primaryColor).textColor}; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
             .content { background: #f8f9fa; padding: 30px; border-radius: 0 0 8px 8px; }
-            .button { display: inline-block; background: #667eea; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 20px 0; }
+            .button { display: inline-block; background: ${headerStyles(tenant?.primaryColor).bg}; color: ${headerStyles(tenant?.primaryColor).textColor}; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 20px 0; }
             .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
           </style>
         </head>
@@ -389,7 +410,7 @@ export async function generateFormCompletionEmail(tenant?: TenantContext): Promi
     return {
       to: '',
       subject,
-      html: wrapInHtmlTemplate(bodyText, 'Thank You', practiceName),
+      html: wrapInHtmlTemplate(bodyText, 'Thank You', practiceName, tenant?.primaryColor),
       text: bodyText,
       from: buildFromAddress(tenant),
     };
@@ -408,7 +429,7 @@ ${practiceName} Team`;
   return {
     to: '',
     subject: `Thank You for Completing Your Intake Form - ${practiceName}`,
-    html: wrapInHtmlTemplate(defaultBodyText, 'Thank You', practiceName),
+    html: wrapInHtmlTemplate(defaultBodyText, 'Thank You', practiceName, tenant?.primaryColor),
     text: defaultBodyText,
     from: buildFromAddress(tenant),
   };
@@ -428,7 +449,7 @@ export async function generateNewReferralEmail(clientDisplayId: string, clientNa
       subject: storedTemplate.subject
         .replace(/\{\{clientDisplayId\}\}/g, clientDisplayId)
         .replace(/\{\{practice_name\}\}/g, practiceName),
-      html: wrapInHtmlTemplate(bodyText, 'New Referral', practiceName),
+      html: wrapInHtmlTemplate(bodyText, 'New Referral', practiceName, tenant?.primaryColor),
       text: bodyText,
       from: buildFromAddress(tenant),
     };
@@ -439,7 +460,7 @@ export async function generateNewReferralEmail(clientDisplayId: string, clientNa
   return {
     to: '',
     subject: `New Referral Received - ${clientDisplayId}`,
-    html: wrapInHtmlTemplate(bodyText, 'New Referral', practiceName),
+    html: wrapInHtmlTemplate(bodyText, 'New Referral', practiceName, tenant?.primaryColor),
     text: bodyText,
     from: buildFromAddress(tenant),
   };
@@ -461,7 +482,7 @@ export async function generateWaitlistUpdateEmail(clientDisplayId: string, clien
       subject: storedTemplate.subject
         .replace(/\{\{clientDisplayId\}\}/g, clientDisplayId)
         .replace(/\{\{practice_name\}\}/g, practiceName),
-      html: wrapInHtmlTemplate(bodyText, 'Waitlist Update', practiceName),
+      html: wrapInHtmlTemplate(bodyText, 'Waitlist Update', practiceName, tenant?.primaryColor),
       text: bodyText,
       from: buildFromAddress(tenant),
     };
@@ -472,7 +493,7 @@ export async function generateWaitlistUpdateEmail(clientDisplayId: string, clien
   return {
     to: '',
     subject: `Client Status Updated - ${clientDisplayId}`,
-    html: wrapInHtmlTemplate(bodyText, 'Waitlist Update', practiceName),
+    html: wrapInHtmlTemplate(bodyText, 'Waitlist Update', practiceName, tenant?.primaryColor),
     text: bodyText,
     from: buildFromAddress(tenant),
   };
@@ -515,9 +536,9 @@ ${practiceName} Team`;
     <style>
       body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }
       .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-      .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+      .header { background: ${headerStyles(tenant?.primaryColor).bg}; color: ${headerStyles(tenant?.primaryColor).textColor}; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
       .content { background: #f8f9fa; padding: 30px; border-radius: 0 0 8px 8px; }
-      .pay-button { display: inline-block; background: #667eea; color: white; padding: 14px 28px; border-radius: 6px; text-decoration: none; font-weight: bold; margin: 20px 0; }
+      .pay-button { display: inline-block; background: ${headerStyles(tenant?.primaryColor).bg}; color: ${headerStyles(tenant?.primaryColor).textColor}; padding: 14px 28px; border-radius: 6px; text-decoration: none; font-weight: bold; margin: 20px 0; }
       .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
     </style>
   </head>
@@ -552,7 +573,7 @@ export async function generateClinicianWelcomeEmail(
     return {
       to: '',
       subject,
-      html: wrapInHtmlTemplate(bodyText, `Welcome to ${practiceName}`, practiceName),
+      html: wrapInHtmlTemplate(bodyText, `Welcome to ${practiceName}`, practiceName, tenant?.primaryColor),
       text: bodyText,
       from: buildFromAddress(tenant),
     };
@@ -562,7 +583,7 @@ export async function generateClinicianWelcomeEmail(
   return {
     to: '',
     subject: `Your Login Credentials - ${practiceName}`,
-    html: wrapInHtmlTemplate(bodyText, `Welcome to ${practiceName}`, practiceName),
+    html: wrapInHtmlTemplate(bodyText, `Welcome to ${practiceName}`, practiceName, tenant?.primaryColor),
     text: bodyText,
     from: buildFromAddress(tenant),
   };
@@ -583,7 +604,7 @@ export async function generateAdminInviteEmail(
     return {
       to: '',
       subject,
-      html: wrapInHtmlTemplate(bodyText, `Invitation \u2013 ${practiceName}`, practiceName),
+      html: wrapInHtmlTemplate(bodyText, `Invitation \u2013 ${practiceName}`, practiceName, tenant?.primaryColor),
       text: bodyText,
       from: buildFromAddress(tenant),
     };
@@ -593,7 +614,7 @@ export async function generateAdminInviteEmail(
   return {
     to: '',
     subject: `You've been invited as an Admin - ${practiceName}`,
-    html: wrapInHtmlTemplate(bodyText, `Invitation \u2013 ${practiceName}`, practiceName),
+    html: wrapInHtmlTemplate(bodyText, `Invitation \u2013 ${practiceName}`, practiceName, tenant?.primaryColor),
     text: bodyText,
     from: buildFromAddress(tenant),
   };

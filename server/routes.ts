@@ -376,7 +376,7 @@ export async function registerRoutes(
 
       // Send welcome email with credentials
       const practiceName = req.tenant?.name || GENERIC_PRACTICE_NAME;
-      const tenantCtx = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail } : undefined;
+      const tenantCtx = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor } : undefined;
       const welcomeEmail = await generateClinicianWelcomeEmail(user.name, user.email, tempPassword, tenantCtx);
       const emailResult = await sendEmail({ ...welcomeEmail, to: user.email });
 
@@ -489,7 +489,7 @@ export async function registerRoutes(
 
       // Send invite email
       const invitePracticeName = req.tenant?.name || GENERIC_PRACTICE_NAME;
-      const inviteTenantCtx = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail } : undefined;
+      const inviteTenantCtx = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor } : undefined;
       const inviteEmail = await generateAdminInviteEmail(name, inviteUrl, inviteTenantCtx);
       const emailResult = await sendEmail({ ...inviteEmail, to: email });
 
@@ -944,7 +944,7 @@ export async function registerRoutes(
         for (const admin of adminUsers) {
           const prefs = admin.notificationPrefs as { newReferrals?: boolean } | null;
           if (prefs?.newReferrals !== false) {
-            const tc = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail } : undefined;
+            const tc = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor } : undefined;
             const emailOptions = await generateNewReferralEmail(client.displayId, clientName, tc);
             await sendEmail({ ...emailOptions, to: admin.email });
           }
@@ -1095,7 +1095,7 @@ export async function registerRoutes(
 
               // Email the payment link to the client
               const amountPounds = (amountPence / 100).toFixed(2);
-              const tcAuto = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail } : undefined;
+              const tcAuto = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor } : undefined;
               const emailOptions = await generatePaymentLinkEmail(checkoutResult.url, amountPounds, tcAuto);
               await sendEmail({ ...emailOptions, to: updated.email });
               console.log(`Auto-generated payment link and emailed to client ${updated.id}`);
@@ -1114,7 +1114,7 @@ export async function registerRoutes(
           for (const admin of adminUsers) {
             const prefs = admin.notificationPrefs as { waitlistUpdates?: boolean } | null;
             if (prefs?.waitlistUpdates !== false) {
-              const tcW = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail } : undefined;
+              const tcW = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor } : undefined;
               const emailOptions = await generateWaitlistUpdateEmail(
                 updated.displayId,
                 clientName,
@@ -1559,7 +1559,7 @@ export async function registerRoutes(
               const dueDateStr = validated.dueDate ? 
                 new Date(validated.dueDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 
                 'Not specified';
-              const tcT = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail } : undefined;
+              const tcT = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor } : undefined;
               const emailOptions = await generateTaskReminderEmail(
                 assigneeUser.name,
                 validated.title,
@@ -1656,7 +1656,7 @@ export async function registerRoutes(
       const formUrl = `${baseUrl}/fill/${client.id}/${formId}`;
 
       // Generate and send email
-      const tcF = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail } : undefined;
+      const tcF = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor } : undefined;
       const emailOptions = await generateFormInviteEmail(form.title, formUrl, tcF);
       emailOptions.to = client.email;
 
@@ -1693,7 +1693,7 @@ export async function registerRoutes(
         return res.status(403).json({ error: "Access denied" });
       }
 
-      const tcTR = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail } : undefined;
+      const tcTR = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor } : undefined;
       const emailOptions = await generateTaskReminderEmail(
         task.assignee,
         task.title,
@@ -1745,7 +1745,7 @@ export async function registerRoutes(
           continue;
         }
 
-        const tcA = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail } : undefined;
+        const tcA = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor } : undefined;
         const emailOptions = await generateAvailabilityReminderEmail(user.name, loginUrl, tcA);
         emailOptions.to = user.email;
 
@@ -2782,7 +2782,7 @@ export async function registerRoutes(
       let emailSent = false;
       try {
         const amountPounds = (amountPence / 100).toFixed(2);
-        const tcPL = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail } : undefined;
+        const tcPL = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor } : undefined;
         const emailOptions = await generatePaymentLinkEmail(result.url, amountPounds, tcPL);
         const emailResult = await sendEmail({ ...emailOptions, to: client.email });
         emailSent = emailResult.success;
@@ -2956,7 +2956,7 @@ export async function registerRoutes(
                   const clientName = `${client.firstName || ''} ${client.lastName || ''}`.trim() || 'Unknown';
                   const amountPounds = charge.amountPence ? (charge.amountPence / 100).toFixed(2) : '0.00';
                   const failTenant = await storage.getTenantById(client.tenantId).catch(() => null);
-                  const tcFail = failTenant ? { id: failTenant.id, name: failTenant.name, fromEmail: failTenant.fromEmail } : undefined;
+                  const tcFail = failTenant ? { id: failTenant.id, name: failTenant.name, fromEmail: failTenant.fromEmail, primaryColor: failTenant.primaryColor } : undefined;
                   const emailOptions = generatePaymentFailureEmail(client.displayId, clientName, amountPounds, failureReason, tcFail);
                   for (const admin of adminUsers) {
                     await sendEmail({ ...emailOptions, to: admin.email });
@@ -2982,7 +2982,7 @@ export async function registerRoutes(
                   const clientName = `${client.firstName || ''} ${client.lastName || ''}`.trim() || 'Unknown';
                   const amountPounds = pi.amount ? (pi.amount / 100).toFixed(2) : '0.00';
                   const failTenant2 = await storage.getTenantById(piTenantId).catch(() => null);
-                  const tcFail2 = failTenant2 ? { id: failTenant2.id, name: failTenant2.name, fromEmail: failTenant2.fromEmail } : undefined;
+                  const tcFail2 = failTenant2 ? { id: failTenant2.id, name: failTenant2.name, fromEmail: failTenant2.fromEmail, primaryColor: failTenant2.primaryColor } : undefined;
                   const emailOptions = generatePaymentFailureEmail(client.displayId, clientName, amountPounds, failureReason, tcFail2);
                   for (const admin of adminUsers) {
                     await sendEmail({ ...emailOptions, to: admin.email });

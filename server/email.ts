@@ -536,6 +536,97 @@ ${practiceName} Team`;
   return { to: '', subject: finalSubject, html, text: bodyText, from: buildFromAddress(tenant) };
 }
 
+export async function generateClinicianWelcomeEmail(
+  userName: string,
+  userEmail: string,
+  tempPassword: string,
+  tenant?: TenantContext
+): Promise<EmailOptions> {
+  const practiceName = tenant?.name || GENERIC_PRACTICE_NAME;
+  const storedTemplate = await getStoredTemplate('clinician_welcome', tenant?.id);
+
+  if (storedTemplate) {
+    const placeholders = { name: userName, email: userEmail, temporary_password: tempPassword, practice_name: practiceName };
+    const bodyText = replacePlaceholders(storedTemplate.bodyText, placeholders);
+    const subject = replacePlaceholders(storedTemplate.subject, placeholders);
+    return {
+      to: '',
+      subject,
+      html: wrapInHtmlTemplate(bodyText, `Welcome to ${practiceName}`, practiceName),
+      text: bodyText,
+      from: buildFromAddress(tenant),
+    };
+  }
+
+  const bodyText = `Hello ${userName},\n\nYour login credentials have been generated. Here are your details:\n\nEmail: ${userEmail}\nTemporary Password: ${tempPassword}\n\nPlease log in and change your password as soon as possible.\n\nBest regards,\n${practiceName} Team`;
+  return {
+    to: '',
+    subject: `Your Login Credentials - ${practiceName}`,
+    html: wrapInHtmlTemplate(bodyText, `Welcome to ${practiceName}`, practiceName),
+    text: bodyText,
+    from: buildFromAddress(tenant),
+  };
+}
+
+export async function generateAdminInviteEmail(
+  userName: string,
+  inviteUrl: string,
+  tenant?: TenantContext
+): Promise<EmailOptions> {
+  const practiceName = tenant?.name || GENERIC_PRACTICE_NAME;
+  const storedTemplate = await getStoredTemplate('admin_invite', tenant?.id);
+
+  if (storedTemplate) {
+    const placeholders = { name: userName, invite_link: inviteUrl, practice_name: practiceName };
+    const bodyText = replacePlaceholders(storedTemplate.bodyText, placeholders);
+    const subject = replacePlaceholders(storedTemplate.subject, placeholders);
+    return {
+      to: '',
+      subject,
+      html: wrapInHtmlTemplate(bodyText, `Invitation \u2013 ${practiceName}`, practiceName),
+      text: bodyText,
+      from: buildFromAddress(tenant),
+    };
+  }
+
+  const bodyText = `Hello ${userName},\n\nYou have been invited to join ${practiceName} as an administrator.\n\nPlease click the link below to set up your password and activate your account:\n${inviteUrl}\n\nThis link will expire in 7 days.\n\nBest regards,\n${practiceName}`;
+  return {
+    to: '',
+    subject: `You've been invited as an Admin - ${practiceName}`,
+    html: wrapInHtmlTemplate(bodyText, `Invitation \u2013 ${practiceName}`, practiceName),
+    text: bodyText,
+    from: buildFromAddress(tenant),
+  };
+}
+
+export async function getFormCompletionPageContent(
+  tenantId: string | null | undefined,
+  practiceName: string
+): Promise<{ heading: string; body: string }> {
+  const storedTemplate = await getStoredTemplate('form_completion_page', tenantId);
+  const defaultHeading = 'Thank you for completing our intake form.';
+  const defaultBody = [
+    'A senior clinician will review your responses within 2\u20133 working days. This helps us understand your needs, consider any preferences or adjustments, and suggest the most suitable Psychologist for you.',
+    'We will be in touch soon with next steps.',
+    "If you have any questions in the meantime, please get in touch with us directly using the contact details we've previously provided you.",
+    'If you need urgent support, please contact your GP or a trusted healthcare provider. In the UK, you can also receive immediate support from: the Samaritans (Call 116 123 lines open 24/7 365 days a year or email jo@samaritans.org); or contact CALM (https://www.thecalmzone.net/) on their national helpline 0800 585858 (5pm to midnight).',
+    'Warm regards,',
+    '{{practice_name}} Team',
+  ].join('\n\n');
+
+  if (storedTemplate) {
+    return {
+      heading: replacePlaceholders(storedTemplate.subject, { practice_name: practiceName }),
+      body: replacePlaceholders(storedTemplate.bodyText, { practice_name: practiceName }),
+    };
+  }
+
+  return {
+    heading: defaultHeading,
+    body: replacePlaceholders(defaultBody, { practice_name: practiceName }),
+  };
+}
+
 export function generatePaymentFailureEmail(clientDisplayId: string, clientName: string, amountPounds: string, failureReason: string, tenant?: TenantContext): EmailOptions {
   const practiceName = tenant?.name || GENERIC_PRACTICE_NAME;
   const subject = `Payment Failed – ${clientDisplayId}`;

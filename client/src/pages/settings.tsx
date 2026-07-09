@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { toast } from "sonner";
-import { Loader2, Save, Mail, Trash2, UserPlus, Link2, ShieldCheck, Download, Database, RefreshCw, CheckCircle2, AlertCircle, ExternalLink } from "lucide-react";
+import { Loader2, Save, Mail, Trash2, UserPlus, Link2, ShieldCheck, Download, Database, RefreshCw, CheckCircle2, AlertCircle, ExternalLink, Layout } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useAuth } from "@/lib/auth";
@@ -162,6 +162,54 @@ If you have any questions, please don't hesitate to contact us.
 Warm regards,
 {{practice_name}} Team`,
   },
+  {
+    templateKey: "clinician_welcome",
+    name: "Clinician Login Credentials",
+    subject: "Your Login Credentials - {{practice_name}}",
+    bodyText: `Hello {{name}},
+
+Your login credentials have been generated. Here are your details:
+
+Email: {{email}}
+Temporary Password: {{temporary_password}}
+
+Please log in and change your password as soon as possible.
+
+Best regards,
+{{practice_name}} Team`,
+  },
+  {
+    templateKey: "admin_invite",
+    name: "Admin Invitation",
+    subject: "You've been invited as an Admin - {{practice_name}}",
+    bodyText: `Hello {{name}},
+
+You have been invited to join {{practice_name}} as an administrator.
+
+Please click the link below to set up your password and activate your account:
+{{invite_link}}
+
+This link will expire in 7 days.
+
+Best regards,
+{{practice_name}}`,
+  },
+  {
+    templateKey: "form_completion_page",
+    name: "Form Submitted Page",
+    subject: "Thank you for completing our intake form.",
+    bodyText: `A senior clinician will review your responses within 2-3 working days. This helps us understand your needs, consider any preferences or adjustments, and suggest the most suitable Psychologist for you.
+
+We will be in touch soon with next steps.
+
+If you have any questions in the meantime, please get in touch with us directly using the contact details we've previously provided you.
+
+If you need urgent support, please contact your GP or a trusted healthcare provider. In the UK, you can also receive immediate support from: the Samaritans (Call 116 123 lines open 24/7 365 days a year or email jo@samaritans.org); or contact CALM (https://www.thecalmzone.net/) on their national helpline 0800 585858 (5pm to midnight).
+
+Warm regards,
+
+{{practice_name}} Team`,
+  },
 ];
 
 function NotificationsTab() {
@@ -294,9 +342,9 @@ function EmailTemplatesTab() {
     <div className="space-y-4">
       <Card className="border-none shadow-sm">
         <CardHeader>
-          <CardTitle>Email Templates</CardTitle>
+          <CardTitle>Message Templates</CardTitle>
           <CardDescription>
-            Customize the content of emails sent to clients and clinicians. Use placeholders like {"{{name}}"} or {"{{practice_name}}"} which will be replaced with actual values.
+            Customize emails and messages sent to clients and clinicians. Use placeholders like {"{{name}}"} or {"{{practice_name}}"} which will be replaced automatically. The <strong>Form Submitted Page</strong> template controls what clients see on screen after submitting their intake form.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -322,7 +370,7 @@ function EmailTemplatesTab() {
                       />
                     </div>
                     <div className="grid gap-2">
-                      <Label>Subject Line</Label>
+                      <Label>{editingTemplate === 'form_completion_page' ? 'Heading' : 'Subject Line'}</Label>
                       <Input
                         value={editForm.subject}
                         onChange={(e) => setEditForm({ ...editForm, subject: e.target.value })}
@@ -330,7 +378,7 @@ function EmailTemplatesTab() {
                       />
                     </div>
                     <div className="grid gap-2">
-                      <Label>Email Body</Label>
+                      <Label>{editingTemplate === 'form_completion_page' ? 'Page Content' : 'Email Body'}</Label>
                       <Textarea
                         value={editForm.bodyText}
                         onChange={(e) => setEditForm({ ...editForm, bodyText: e.target.value })}
@@ -353,13 +401,21 @@ function EmailTemplatesTab() {
                   <div className="flex items-start justify-between">
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
-                        <Mail className="h-4 w-4 text-muted-foreground" />
+                        {defaultTemplate.templateKey === 'form_completion_page'
+                          ? <Layout className="h-4 w-4 text-muted-foreground" />
+                          : <Mail className="h-4 w-4 text-muted-foreground" />}
                         <h4 className="font-medium">{template?.name || defaultTemplate.name}</h4>
+                        {defaultTemplate.templateKey === 'form_completion_page' && (
+                          <span className="text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded">In-app page</span>
+                        )}
                         {wasSaved && (
                           <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded">Customized</span>
                         )}
                       </div>
-                      <p className="text-sm text-muted-foreground">Subject: {template?.subject || defaultTemplate.subject}</p>
+                      <p className="text-sm text-muted-foreground">
+                        {defaultTemplate.templateKey === 'form_completion_page' ? 'Heading: ' : 'Subject: '}
+                        {template?.subject || defaultTemplate.subject}
+                      </p>
                     </div>
                     <Button variant="outline" size="sm" onClick={() => startEditing(defaultTemplate.templateKey)} data-testid={`button-edit-template-${defaultTemplate.templateKey}`}>
                       Edit
@@ -1247,7 +1303,7 @@ export default function Settings() {
       <Tabs defaultValue={defaultTab} className="space-y-4">
         <TabsList className="flex-wrap h-auto">
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
-          <TabsTrigger value="email-templates">Email Templates</TabsTrigger>
+          <TabsTrigger value="email-templates">Message Templates</TabsTrigger>
           {nonEngagementEnabled && <TabsTrigger value="non-engagement">Non-Engagement</TabsTrigger>}
           {dataExportEnabled && <TabsTrigger value="data-export">Data Export</TabsTrigger>}
           <TabsTrigger value="account">Account</TabsTrigger>

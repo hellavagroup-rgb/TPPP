@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -123,6 +123,27 @@ function AvailabilityPicker({ value, onChange, error }: AvailabilityPickerProps)
   );
 }
 
+function linkifyText(text: string): React.ReactNode[] {
+  const urlRegex = /https?:\/\/[^\s]+/g;
+  const result: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = urlRegex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      result.push(text.slice(lastIndex, match.index));
+    }
+    const url = match[0];
+    result.push(
+      <a key={match.index} href={url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">{url}</a>
+    );
+    lastIndex = match.index + url.length;
+  }
+  if (lastIndex < text.length) {
+    result.push(text.slice(lastIndex));
+  }
+  return result;
+}
+
 export default function FormFill() {
   const [, params] = useRoute("/fill/:clientId/:formId");
   const [isSubmitted, setIsSubmitted] = useState(false);
@@ -148,6 +169,11 @@ export default function FormFill() {
   });
   const brandLogo = branding?.logoUrl || null;
   const brandName = branding?.name || "PsychPortal";
+
+  const { data: completionPage } = useQuery<{ heading: string; body: string }>({
+    queryKey: [`/api/public/form-completion-page/${params?.clientId}`],
+    enabled: !!params?.clientId,
+  });
 
   // Check for existing draft
   const { data: draftData, isLoading: draftLoading } = useQuery<{
@@ -295,40 +321,27 @@ export default function FormFill() {
   };
 
   if (isSubmitted) {
-      return (
-          <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
-              <Card className="max-w-xl w-full text-center p-6 shadow-lg border-t-4 border-t-emerald-500">
-                  <div className="mx-auto w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mb-4 text-emerald-600">
-                      <CheckCircle2 className="h-8 w-8" />
-                  </div>
-                  <h1 className="text-2xl font-serif font-bold text-slate-900 mb-4">Thank you for completing our intake form.</h1>
-                  <div className="text-slate-600 text-left space-y-4 mb-6">
-                      <p>
-                          A senior clinician will review your responses within 2-3 working days. This helps us understand your needs, consider any preferences or adjustments, and suggest the most suitable Psychologist for you.
-                      </p>
-                      <p>
-                          We will be in touch soon with next steps.
-                      </p>
-                      <p>
-                          If you have any questions in the meantime, please get in touch with us directly using the contact details we've previously provided you.
-                      </p>
-                      <p>
-                          If you need urgent support, please contact your GP or a trusted healthcare provider. In the UK, you can also receive immediate support from: the Samaritans (Call 116 123 lines open 24/7 365 days a year or email{" "}
-                          <a href="mailto:jo@samaritans.org" className="text-primary hover:underline">jo@samaritans.org</a>); or contact CALM (<a href="https://www.thecalmzone.net/" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">https://www.thecalmzone.net/</a>) on their national helpline 0800 585858 (5pm to midnight).
-                      </p>
-                      <p className="pt-2">
-                          Warm regards,
-                      </p>
-                      <p className="font-medium">
-                          {brandName} Team
-                      </p>
-                  </div>
-                  <Button variant="outline" onClick={() => window.close()}>
-                      Close Window
-                  </Button>
-              </Card>
+    const heading = completionPage?.heading || 'Thank you for completing our intake form.';
+    const paragraphs = (completionPage?.body || '').split('\n\n').filter(Boolean);
+
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
+        <Card className="max-w-xl w-full text-center p-6 shadow-lg border-t-4 border-t-emerald-500">
+          <div className="mx-auto w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mb-4 text-emerald-600">
+            <CheckCircle2 className="h-8 w-8" />
           </div>
-      );
+          <h1 className="text-2xl font-serif font-bold text-slate-900 mb-4">{heading}</h1>
+          <div className="text-slate-600 text-left space-y-4 mb-6">
+            {paragraphs.map((para, i) => (
+              <p key={i}>{linkifyText(para)}</p>
+            ))}
+          </div>
+          <Button variant="outline" onClick={() => window.close()}>
+            Close Window
+          </Button>
+        </Card>
+      </div>
+    );
   }
 
   if (formLoading || clientLoading || draftLoading) {

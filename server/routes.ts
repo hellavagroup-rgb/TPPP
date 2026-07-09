@@ -14,7 +14,7 @@ import {
   type InsertFormTemplate
 } from "@shared/schema";
 import { z } from "zod";
-import { sendEmail, buildFromAddress, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail, GENERIC_PRACTICE_NAME } from "./email";
+import { sendEmail, buildFromAddress, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail, generateClinicianWelcomeEmail, generateAdminInviteEmail, getFormCompletionPageContent, GENERIC_PRACTICE_NAME } from "./email";
 import { forceReseedDatabase } from "./seed";
 import { seedDemoData } from "./seedDemo";
 import { parseIntakeEmailBody } from "./intakeParser";
@@ -376,21 +376,9 @@ export async function registerRoutes(
 
       // Send welcome email with credentials
       const practiceName = req.tenant?.name || GENERIC_PRACTICE_NAME;
-      const emailResult = await sendEmail({
-        to: user.email,
-        subject: `Your Login Credentials - ${practiceName}`,
-        from: buildFromAddress(req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail } : undefined),
-        html: `
-          <h1>Welcome to ${practiceName}</h1>
-          <p>Hello ${user.name},</p>
-          <p>Your login credentials have been generated. Here are your details:</p>
-          <p><strong>Email:</strong> ${user.email}</p>
-          <p><strong>Temporary Password:</strong> ${tempPassword}</p>
-          <p>Please log in and change your password as soon as possible.</p>
-          <p>Best regards,<br>${practiceName} Team</p>
-        `,
-        text: `Welcome to ${practiceName}\n\nHello ${user.name},\n\nYour login credentials have been generated.\n\nEmail: ${user.email}\nTemporary Password: ${tempPassword}\n\nPlease log in and change your password as soon as possible.`,
-      });
+      const tenantCtx = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail } : undefined;
+      const welcomeEmail = await generateClinicianWelcomeEmail(user.name, user.email, tempPassword, tenantCtx);
+      const emailResult = await sendEmail({ ...welcomeEmail, to: user.email });
 
       if (!emailResult.success) {
         console.error("Failed to send login email:", emailResult.error);
@@ -501,13 +489,9 @@ export async function registerRoutes(
 
       // Send invite email
       const invitePracticeName = req.tenant?.name || GENERIC_PRACTICE_NAME;
-      const emailResult = await sendEmail({
-        to: email,
-        subject: `You've been invited as an Admin - ${invitePracticeName}`,
-        from: buildFromAddress(req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail } : undefined),
-        html: `<p>Hello ${name},</p><p>You have been invited to join ${invitePracticeName} as an administrator.</p><p>Please click the link below to set up your password and activate your account:</p><p><a href="${inviteUrl}">${inviteUrl}</a></p><p>This link will expire in 7 days.</p><p>Best regards,<br>${invitePracticeName}</p>`,
-        text: `Hello ${name},\n\nYou have been invited to join ${invitePracticeName} as an administrator.\n\nPlease click the link below to set up your password and activate your account:\n${inviteUrl}\n\nThis link will expire in 7 days.\n\nBest regards,\n${invitePracticeName}`,
-      });
+      const inviteTenantCtx = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail } : undefined;
+      const inviteEmail = await generateAdminInviteEmail(name, inviteUrl, inviteTenantCtx);
+      const emailResult = await sendEmail({ ...inviteEmail, to: email });
 
       if (!emailResult.success) {
         // Delete the user if email failed
@@ -1234,6 +1218,22 @@ export async function registerRoutes(
       });
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch client" });
+    }
+  });
+
+  // Public: return customizable form-completion page content for a given client's tenant
+  app.get("/api/public/form-completion-page/:clientId", async (req, res) => {
+    try {
+      const client = await storage.getClientById(req.params.clientId);
+      if (!client) {
+        return res.json({ heading: 'Thank you for completing our intake form.', body: '' });
+      }
+      const tenant = await storage.getTenantById(client.tenantId).catch(() => null);
+      const practiceName = tenant?.name || GENERIC_PRACTICE_NAME;
+      const content = await getFormCompletionPageContent(client.tenantId, practiceName);
+      res.json(content);
+    } catch {
+      res.json({ heading: 'Thank you for completing our intake form.', body: '' });
     }
   });
 

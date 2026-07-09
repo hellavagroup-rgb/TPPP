@@ -2437,6 +2437,25 @@ export async function registerRoutes(
     }
   });
 
+  // Re-sweep: reset historyId so the next sync does a full 30-day sweep instead
+  // of starting from the stored incremental checkpoint. Used to backfill emails
+  // that were previously missed (e.g. due to over-aggressive category filters).
+  app.post("/api/gmail-connections/:id/resweep", requireAdmin, async (req, res) => {
+    try {
+      const [conn] = await db
+        .select()
+        .from(gmailConnections)
+        .where(and(eq(gmailConnections.id, req.params.id), eq(gmailConnections.tenantId, req.tenant!.id)));
+      if (!conn) return res.status(404).json({ error: "Connection not found" });
+      // Clear historyId so syncConnection falls through to a full sweep
+      const connWithReset = { ...conn, historyId: null };
+      const count = await syncConnection(connWithReset);
+      res.json({ success: true, newMessages: count });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Re-sweep failed" });
+    }
+  });
+
   // ============ INTAKE MESSAGES ============
   app.post("/api/intake-messages", requireAdmin, async (req, res) => {
     try {

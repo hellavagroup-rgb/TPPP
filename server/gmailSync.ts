@@ -60,10 +60,46 @@ function extractTextBody(payload: any): string {
     return decodeBase64(payload.body.data);
   }
 
-  // Multipart — walk parts looking for text/plain
+  // Multipart — walk parts looking for text/plain first, then text/html
   if (payload.parts) {
     for (const part of payload.parts) {
       const text = extractTextBody(part);
+      if (text) return text;
+    }
+  }
+
+  return "";
+}
+
+/** Fallback: strip HTML tags to plain text for HTML-only emails. */
+function extractHtmlAsText(payload: any): string {
+  if (!payload) return "";
+
+  if (payload.mimeType === "text/html" && payload.body?.data) {
+    const html = decodeBase64(payload.body.data);
+    return html
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/p>/gi, "\n")
+      .replace(/<\/div>/gi, "\n")
+      .replace(/<\/tr>/gi, "\n")
+      .replace(/<\/td>/gi, "\t")
+      .replace(/<[^>]+>/g, "")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+      .replace(/\t{2,}/g, "\t")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+
+  if (payload.parts) {
+    for (const part of payload.parts) {
+      const text = extractHtmlAsText(part);
       if (text) return text;
     }
   }
@@ -96,12 +132,17 @@ function isMarketingEmail(
   headers: Array<{ name: string; value: string }>,
   labelIds: string[],
 ): boolean {
-  if (extractHeader(headers, "list-unsubscribe")) return true;
   if (extractHeader(headers, "x-mailchimp-id")) return true;
-  const promoLabels = ["CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL", "CATEGORY_UPDATES", "CATEGORY_FORUMS"];
+  // CATEGORY_UPDATES intentionally excluded: Gmail often puts automated form
+  // submission notifications into the Updates tab, which are valid intake emails.
+  // CATEGORY_PROMOTIONS / CATEGORY_SOCIAL / CATEGORY_FORUMS are safe to drop.
+  const promoLabels = ["CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL", "CATEGORY_FORUMS"];
   if (labelIds.some(l => promoLabels.includes(l))) return true;
   const precedence = extractHeader(headers, "precedence").toLowerCase();
-  if (precedence === "bulk" || precedence === "list") return true;
+  if (precedence === "list") return true;
+  // list-unsubscribe only blocks when combined with bulk precedence, not on its own,
+  // because some form platforms add it for compliance even on transactional mail.
+  if (extractHeader(headers, "list-unsubscribe") && precedence === "bulk") return true;
   return false;
 }
 
@@ -158,12 +199,14 @@ export async function syncConnection(connection: {
   }
 
   if (!connection.historyId) {
-    // Full sweep: pull messages from the last 30 days, skip promotions/social
+    // Full sweep: pull messages from the last 30 days, skip promotions/social.
+    // -category:updates intentionally omitted: form submission notifications often
+    // land in the Updates tab and are valid intake emails.
     const since = Math.floor((Date.now() - 30 * 24 * 60 * 60 * 1000) / 1000);
     const listRes = await gmail.users.messages.list({
       userId: "me",
-      q: `after:${since} in:inbox -category:promotions -category:social -category:updates`,
-      maxResults: 100,
+      q: `after:${since} in:inbox -category:promotions -category:social`,
+      maxResults: 200,
     });
 
     // Also capture the current historyId so future syncs are incremental
@@ -226,7 +269,7 @@ export async function syncConnection(connection: {
       // Extract email from "Name <email>" format
       const fromMatch = fromHeader.match(/<([^>]+)>/) || fromHeader.match(/([^\s]+@[^\s]+)/);
       const fromAddress = fromMatch ? fromMatch[1] : fromHeader;
-      const rawBody = extractTextBody(msg.payload);
+      const rawBody = extractTextBody(msg.payload) || extractHtmlAsText(msg.payload);
 
       if (!rawBody.trim()) {
         log(`[gmail] ${connection.gmailAddress}: skipping ${msgId} — empty body`);

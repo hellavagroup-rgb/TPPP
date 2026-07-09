@@ -1047,6 +1047,7 @@ interface GmailConnection {
 function GmailConnectionsTab() {
   const queryClient = useQueryClient();
   const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [resweepingId, setResweepingId] = useState<string | null>(null);
   const [deleteDialogId, setDeleteDialogId] = useState<string | null>(null);
   const [debugInfo, setDebugInfo] = useState<{ redirectUri: string; clientId: string; url: string } | null>(null);
   const [showDebug, setShowDebug] = useState(false);
@@ -1114,6 +1115,25 @@ function GmailConnectionsTab() {
       toast.error("Sync failed");
     } finally {
       setSyncingId(null);
+    }
+  }
+
+  async function handleResweep(id: string) {
+    setResweepingId(id);
+    try {
+      const res = await apiRequest("POST", `/api/gmail-connections/${id}/resweep`);
+      const data = await res.json();
+      queryClient.invalidateQueries({ queryKey: ["/api/gmail-connections"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/intake-messages"] });
+      if (data.newMessages > 0) {
+        toast.success(`Re-sweep complete — ${data.newMessages} previously missed message${data.newMessages !== 1 ? "s" : ""} found`);
+      } else {
+        toast.success("Re-sweep complete — no missed messages found");
+      }
+    } catch {
+      toast.error("Re-sweep failed");
+    } finally {
+      setResweepingId(null);
     }
   }
 
@@ -1193,11 +1213,23 @@ function GmailConnectionsTab() {
                       size="sm"
                       variant="outline"
                       onClick={() => handleSync(conn.id)}
-                      disabled={syncingId === conn.id}
+                      disabled={syncingId === conn.id || resweepingId === conn.id}
                       data-testid={`button-sync-gmail-${conn.id}`}
                     >
                       <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${syncingId === conn.id ? "animate-spin" : ""}`} />
                       Sync now
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-muted-foreground"
+                      onClick={() => handleResweep(conn.id)}
+                      disabled={syncingId === conn.id || resweepingId === conn.id}
+                      title="Re-scan the last 30 days to recover any emails that were missed"
+                      data-testid={`button-resweep-gmail-${conn.id}`}
+                    >
+                      <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${resweepingId === conn.id ? "animate-spin" : ""}`} />
+                      Re-sweep inbox
                     </Button>
                     <Button
                       size="sm"

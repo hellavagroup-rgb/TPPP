@@ -1721,6 +1721,11 @@ export default function Clients() {
                         {clinicians.find(c => c.id === client.assignedClinicianId)?.name.split(",")[0]}
                       </span>
                     )}
+                    {(client as any).slotLocationType === "in_person" ? (
+                      <span className="inline-block text-[11px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-300 leading-tight">In-Person</span>
+                    ) : (client as any).slotLocationType === "online" ? (
+                      <span className="inline-block text-[11px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-300 leading-tight">Online</span>
+                    ) : null}
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button variant="ghost" size="icon">

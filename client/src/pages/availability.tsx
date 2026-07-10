@@ -599,11 +599,12 @@ export default function Availability() {
                 <Plus className="h-4 w-4" /> Add Availability
               </Button>
             </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
+            <DialogContent className="flex flex-col max-h-[90vh]">
+              <DialogHeader className="shrink-0">
                 <DialogTitle>Add Availability</DialogTitle>
                 <DialogDescription>Add availability or time off for a clinician.</DialogDescription>
               </DialogHeader>
+              <div className="overflow-y-auto flex-1 pr-1">
               <div className="grid gap-4 py-4">
                 {user?.role !== "clinician" && (
                   <div className="grid gap-2">
@@ -633,6 +634,38 @@ export default function Availability() {
                     </SelectContent>
                   </Select>
                 </div>
+
+                {newSlotType !== "Vacation" && (
+                  <div className="grid gap-2">
+                    <Label>Location Type</Label>
+                    <div className="flex gap-4">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="locationType"
+                          value="online"
+                          checked={newLocationType === "online"}
+                          onChange={() => setNewLocationType("online")}
+                          data-testid="radio-location-online"
+                          className="h-4 w-4 accent-primary"
+                        />
+                        <span className="text-sm">Online</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="locationType"
+                          value="in_person"
+                          checked={newLocationType === "in_person"}
+                          onChange={() => setNewLocationType("in_person")}
+                          data-testid="radio-location-in-person"
+                          className="h-4 w-4 accent-primary"
+                        />
+                        <span className="text-sm">In-Person</span>
+                      </label>
+                    </div>
+                  </div>
+                )}
 
                 {newSlotType === "Recurring" && (
                   <>
@@ -747,38 +780,6 @@ export default function Availability() {
                 )}
 
                 {newSlotType !== "Vacation" && (
-                  <div className="grid gap-2">
-                    <Label>Location Type</Label>
-                    <div className="flex gap-4">
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="radio"
-                          name="locationType"
-                          value="online"
-                          checked={newLocationType === "online"}
-                          onChange={() => setNewLocationType("online")}
-                          data-testid="radio-location-online"
-                          className="h-4 w-4 accent-primary"
-                        />
-                        <span className="text-sm">Online</span>
-                      </label>
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="radio"
-                          name="locationType"
-                          value="in_person"
-                          checked={newLocationType === "in_person"}
-                          onChange={() => setNewLocationType("in_person")}
-                          data-testid="radio-location-in-person"
-                          className="h-4 w-4 accent-primary"
-                        />
-                        <span className="text-sm">In-Person</span>
-                      </label>
-                    </div>
-                  </div>
-                )}
-
-                {newSlotType !== "Vacation" && (
                   <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded">
                     {(() => {
                       const preview = splitIntoHourlySlots(newStartTime, newEndTime);
@@ -788,7 +789,8 @@ export default function Availability() {
                   </div>
                 )}
               </div>
-              <DialogFooter>
+              </div>
+              <DialogFooter className="shrink-0">
                 <Button 
                   onClick={handleAddAvailability} 
                   disabled={!dialogClinicianId || addSlotsMutation.isPending}

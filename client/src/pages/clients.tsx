@@ -25,6 +25,16 @@ import {
     DialogTrigger,
     DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { 
   MoreHorizontal, 
   Search, 
@@ -253,6 +263,7 @@ export default function Clients() {
   const [isAllocateDialogOpen, setIsAllocateDialogOpen] = useState(false);
   const [isManualAllocation, setIsManualAllocation] = useState(false); // Track if current allocation is manual
   const [allocationReason, setAllocationReason] = useState(""); // Reason for allocation decision
+  const [inPersonWarning, setInPersonWarning] = useState<{ clinicianId: string; slotId: string; allocationMethod: "form" | "manual" } | null>(null);
 
   const [archiveReason, setArchiveReason] = useState("");
   const [archiveCategory, setArchiveCategory] = useState("");
@@ -2069,7 +2080,17 @@ export default function Clients() {
                                       ? "opacity-60 border-slate-200" 
                                       : "hover:border-primary hover:bg-primary/5"
                             }`}
-                            onClick={() => { handleAssign(clinician.id, slot.id, isManualAllocation ? "manual" : "form"); setIsAllocateDialogOpen(false); setIsManualAllocation(false); }}
+                            onClick={() => {
+                              const method = isManualAllocation ? "manual" : "form";
+                              if ((slot as any).locationType === "in_person") {
+                                setIsAllocateDialogOpen(false);
+                                setInPersonWarning({ clinicianId: clinician.id, slotId: slot.id, allocationMethod: method });
+                              } else {
+                                handleAssign(clinician.id, slot.id, method);
+                                setIsAllocateDialogOpen(false);
+                                setIsManualAllocation(false);
+                              }
+                            }}
                           >
                             {slotIsMatch && !isPending && <span className="absolute -top-1 -right-1 bg-emerald-500 text-white text-[8px] px-1 rounded">Match</span>}
                             {isPending && <span className="absolute -top-1 -right-1 bg-amber-500 text-white text-[8px] px-1 rounded">Pending</span>}
@@ -2082,6 +2103,13 @@ export default function Clients() {
                                   <span className={`ml-1 font-bold ${isPending ? "text-amber-700" : slotIsMatch ? "text-emerald-700" : "text-muted-foreground"}`}>
                                     {(slot as any).frequency === "fortnightly" ? "F" : "W"}
                                   </span>
+                                )}
+                              </div>
+                              <div className="mt-0.5">
+                                {(slot as any).locationType === "in_person" ? (
+                                  <span className="inline-block text-[8px] px-1 py-0 rounded-full bg-amber-100 text-amber-700 border border-amber-300 leading-tight">In-Person</span>
+                                ) : (
+                                  <span className="inline-block text-[8px] px-1 py-0 rounded-full bg-blue-100 text-blue-700 border border-blue-300 leading-tight">Online</span>
                                 )}
                               </div>
                               {isPending && pendingDate && (
@@ -2536,12 +2564,27 @@ export default function Clients() {
                             className={`justify-start h-auto py-2 px-3 text-xs ${
                               slot.isBooked ? "opacity-50 line-through decoration-destructive" : "hover:border-primary hover:bg-primary/5"
                             }`}
-                            onClick={() => handleAssign(clinician.id, slot.id, "manual")}
+                            onClick={() => {
+                              if ((slot as any).locationType === "in_person") {
+                                setIsManualAllocateOpen(false);
+                                setInPersonWarning({ clinicianId: clinician.id, slotId: slot.id, allocationMethod: "manual" });
+                              } else {
+                                handleAssign(clinician.id, slot.id, "manual");
+                                setIsManualAllocateOpen(false);
+                              }
+                            }}
                           >
                             <CalendarCheck className="h-3 w-3 mr-2" />
                             <div className="text-left">
                               <div className="font-medium">{slot.day || format(parseISO(slot.date!), "EEE")}</div>
                               <div className="text-[10px] text-muted-foreground">{slot.startTime} - {slot.endTime}</div>
+                              <div className="mt-0.5">
+                                {(slot as any).locationType === "in_person" ? (
+                                  <span className="inline-block text-[8px] px-1 py-0 rounded-full bg-amber-100 text-amber-700 border border-amber-300 leading-tight">In-Person</span>
+                                ) : (
+                                  <span className="inline-block text-[8px] px-1 py-0 rounded-full bg-blue-100 text-blue-700 border border-blue-300 leading-tight">Online</span>
+                                )}
+                              </div>
                             </div>
                           </Button>
                         ))}
@@ -3142,6 +3185,35 @@ export default function Clients() {
           </DialogContent>
         </Dialog>
       )}
+
+      {/* In-Person Slot Warning (allocation dialogs) */}
+      <AlertDialog open={!!inPersonWarning} onOpenChange={(open) => { if (!open) setInPersonWarning(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>In-Person Slot</AlertDialogTitle>
+            <AlertDialogDescription>
+              This slot is marked as <strong>In-Person</strong>. Please ensure the client is aware they will need to attend in person before confirming.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-inperson-cancel-alloc">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-inperson-confirm-alloc"
+              onClick={() => {
+                if (inPersonWarning) {
+                  handleAssign(inPersonWarning.clinicianId, inPersonWarning.slotId, inPersonWarning.allocationMethod);
+                  if (inPersonWarning.allocationMethod === "manual") {
+                    setIsManualAllocation(false);
+                  }
+                  setInPersonWarning(null);
+                }
+              }}
+            >
+              Confirm Allocation
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

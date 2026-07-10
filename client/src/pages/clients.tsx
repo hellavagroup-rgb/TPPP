@@ -1538,7 +1538,14 @@ export default function Clients() {
                       </div>
                     )}
                     {client.assignedSlot && (
-                      <p className="text-[10px] text-muted-foreground font-mono">{client.assignedSlot}</p>
+                      <div className="space-y-0.5">
+                        <p className="text-[10px] text-muted-foreground font-mono">{client.assignedSlot}</p>
+                        {(client as any).slotLocationType === "in_person" ? (
+                          <span className="inline-block text-[9px] px-1.5 py-0 rounded-full bg-amber-100 text-amber-700 border border-amber-300 leading-tight">In-Person</span>
+                        ) : (client as any).slotLocationType === "online" ? (
+                          <span className="inline-block text-[9px] px-1.5 py-0 rounded-full bg-blue-100 text-blue-700 border border-blue-300 leading-tight">Online</span>
+                        ) : null}
+                      </div>
                     )}
                     {client.notes && (
                       <p className="text-[10px] text-muted-foreground mt-1 italic line-clamp-2" data-testid={`notes-${client.id}`}>"{client.notes}"</p>
@@ -1637,7 +1644,14 @@ export default function Clients() {
                       </div>
                     )}
                     {client.assignedSlot && (
-                      <p className="text-[10px] text-muted-foreground font-mono">{client.assignedSlot}</p>
+                      <div className="space-y-0.5">
+                        <p className="text-[10px] text-muted-foreground font-mono">{client.assignedSlot}</p>
+                        {(client as any).slotLocationType === "in_person" ? (
+                          <span className="inline-block text-[9px] px-1.5 py-0 rounded-full bg-amber-100 text-amber-700 border border-amber-300 leading-tight">In-Person</span>
+                        ) : (client as any).slotLocationType === "online" ? (
+                          <span className="inline-block text-[9px] px-1.5 py-0 rounded-full bg-blue-100 text-blue-700 border border-blue-300 leading-tight">Online</span>
+                        ) : null}
+                      </div>
                     )}
                     {client.notes && (
                       <p className="text-[10px] text-muted-foreground mt-1 italic line-clamp-2" data-testid={`notes-${client.id}`}>"{client.notes}"</p>
@@ -2311,9 +2325,15 @@ export default function Clients() {
                   <span className="font-medium">Clinician:</span>{" "}
                   {clinicians.find(c => c.id === editStatusClient.assignedClinicianId)?.name?.split(",")[0] || "None"}
                 </div>
-                <div className="text-sm">
-                  <span className="font-medium">Slot:</span>{" "}
-                  {editStatusClient.assignedSlot || "None"}
+                <div className="text-sm flex items-center gap-2 flex-wrap">
+                  <span><span className="font-medium">Slot:</span>{" "}{editStatusClient.assignedSlot || "None"}</span>
+                  {editStatusClient.assignedSlot && (
+                    (editStatusClient as any).slotLocationType === "in_person" ? (
+                      <span className="inline-block text-[10px] px-1.5 py-0 rounded-full bg-amber-100 text-amber-700 border border-amber-300 leading-tight">In-Person</span>
+                    ) : (editStatusClient as any).slotLocationType === "online" ? (
+                      <span className="inline-block text-[10px] px-1.5 py-0 rounded-full bg-blue-100 text-blue-700 border border-blue-300 leading-tight">Online</span>
+                    ) : null
+                  )}
                 </div>
               </div>
 

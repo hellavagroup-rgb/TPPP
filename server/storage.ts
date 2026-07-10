@@ -343,14 +343,20 @@ export class DatabaseStorage implements IStorage {
 
   // ============ CLIENTS ============
   async getAllClients(includeArchived?: boolean, tenantId?: string): Promise<Client[]> {
-    if (includeArchived) {
-      return await db.select().from(clients)
-        .where(tenantId ? eq(clients.tenantId, tenantId) : undefined)
-        .orderBy(desc(clients.intakeDate));
-    }
-    return await db.select().from(clients)
-      .where(tenantId ? and(eq(clients.isArchived, false), eq(clients.tenantId, tenantId)) : eq(clients.isArchived, false))
+    const baseWhere = includeArchived
+      ? (tenantId ? eq(clients.tenantId, tenantId) : undefined)
+      : (tenantId
+          ? and(eq(clients.isArchived, false), eq(clients.tenantId, tenantId))
+          : eq(clients.isArchived, false));
+
+    const rows = await db
+      .select({ client: clients, slotLocationType: timeSlots.locationType })
+      .from(clients)
+      .leftJoin(timeSlots, eq(clients.assignedSlotId, timeSlots.id))
+      .where(baseWhere)
       .orderBy(desc(clients.intakeDate));
+
+    return rows.map(r => ({ ...r.client, slotLocationType: r.slotLocationType ?? null })) as any;
   }
 
   async restoreClient(id: string): Promise<Client | undefined> {

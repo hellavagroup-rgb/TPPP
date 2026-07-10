@@ -306,6 +306,7 @@ export class DatabaseStorage implements IStorage {
       batchId: slot.batchId,
       frequency: (slot as any).frequency || "weekly",
       isOngoing: (slot as any).isOngoing || false,
+      locationType: (slot as any).locationType || "online",
       ...(tenantId ? { tenantId } : {}),
     }))).returning();
     

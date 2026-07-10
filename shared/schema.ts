@@ -116,6 +116,7 @@ export const timeSlots = pgTable("time_slots", {
   batchId: text("batch_id"), // Groups slots created together for batch operations
   frequency: text("frequency", { enum: ["weekly", "fortnightly"] }).default("weekly"), // Schedule frequency
   isOngoing: boolean("is_ongoing").default(false), // Whether schedule continues indefinitely
+  locationType: text("location_type", { enum: ["online", "in_person"] }).notNull().default("online"), // Slot delivery mode
   createdAt: timestamp("created_at").defaultNow().notNull(),
   tenantId: varchar("tenant_id").references(() => tenants.id),
 });

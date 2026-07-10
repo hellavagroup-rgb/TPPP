@@ -116,9 +116,12 @@ export default function Availability() {
   const [newEndTime, setNewEndTime] = useState("10:00");
   const [dialogClinicianId, setDialogClinicianId] = useState<string>("");
 
+  const [newLocationType, setNewLocationType] = useState<"online" | "in_person">("online");
+
   const [isAllocating, setIsAllocating] = useState(false);
   const [allocatingClientId, setAllocatingClientId] = useState<string | null>(null);
   const [allocatingClient, setAllocatingClient] = useState<Client | null>(null);
+  const [inPersonWarning, setInPersonWarning] = useState<{ slot: TimeSlot; clinicianId: string } | null>(null);
 
   const { data: clinicians = [] } = useQuery<(Clinician & { name: string; availability?: TimeSlot[] })[]>({
     queryKey: ["/api/clinicians"],
@@ -364,6 +367,7 @@ export default function Availability() {
     setSelectedDays([]);
     setNewStartTime("09:00");
     setNewEndTime("10:00");
+    setNewLocationType("online");
   };
 
   const handleAddAvailability = () => {
@@ -417,6 +421,7 @@ export default function Availability() {
             batchId: null,
             frequency: frequency,
             isOngoing: !hasEndDate,
+            locationType: newLocationType,
           } as any);
         });
       });
@@ -515,12 +520,27 @@ export default function Availability() {
   const handleSlotClick = (slot: TimeSlot, clinicianId: string) => {
     if (!isAllocating || !allocatingClientId) return;
     if (slot.isBooked || slot.type === "Vacation") return;
-    
+
+    if ((slot as any).locationType === "in_person") {
+      setInPersonWarning({ slot, clinicianId });
+      return;
+    }
+
     assignClientMutation.mutate({
       clientId: allocatingClientId,
       clinicianId,
       slotId: slot.id,
     });
+  };
+
+  const handleConfirmInPerson = () => {
+    if (!inPersonWarning || !allocatingClientId) return;
+    assignClientMutation.mutate({
+      clientId: allocatingClientId,
+      clinicianId: inPersonWarning.clinicianId,
+      slotId: inPersonWarning.slot.id,
+    });
+    setInPersonWarning(null);
   };
 
   const cancelAllocation = () => {
@@ -727,6 +747,38 @@ export default function Availability() {
                 )}
 
                 {newSlotType !== "Vacation" && (
+                  <div className="grid gap-2">
+                    <Label>Location Type</Label>
+                    <div className="flex gap-4">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="locationType"
+                          value="online"
+                          checked={newLocationType === "online"}
+                          onChange={() => setNewLocationType("online")}
+                          data-testid="radio-location-online"
+                          className="h-4 w-4 accent-primary"
+                        />
+                        <span className="text-sm">Online</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="locationType"
+                          value="in_person"
+                          checked={newLocationType === "in_person"}
+                          onChange={() => setNewLocationType("in_person")}
+                          data-testid="radio-location-in-person"
+                          className="h-4 w-4 accent-primary"
+                        />
+                        <span className="text-sm">In-Person</span>
+                      </label>
+                    </div>
+                  </div>
+                )}
+
+                {newSlotType !== "Vacation" && (
                   <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded">
                     {(() => {
                       const preview = splitIntoHourlySlots(newStartTime, newEndTime);
@@ -842,8 +894,13 @@ export default function Availability() {
                                       Available from {validFrom}{validUntil ? ` to ${validUntil}` : ""}
                                     </div>
                                   )}
+                                  {(slot as any).locationType === "in_person" ? (
+                                    <span className="inline-block text-[8px] px-1 py-0 rounded-full bg-amber-100 text-amber-700 border border-amber-300 mt-0.5 leading-tight">In-Person</span>
+                                  ) : (
+                                    <span className="inline-block text-[8px] px-1 py-0 rounded-full bg-blue-100 text-blue-700 border border-blue-300 mt-0.5 leading-tight">Online</span>
+                                  )}
                                   {slot.isBooked && (
-                                    <Badge variant="secondary" className="text-[8px] px-1 py-0 mt-0.5">
+                                    <Badge variant="secondary" className="text-[8px] px-1 py-0 mt-0.5 block">
                                       {slotToClientMap[slot.id]?.displayId || "Booked"}
                                     </Badge>
                                   )}
@@ -897,6 +954,26 @@ export default function Availability() {
               data-testid="button-confirm-delete"
             >
               {deleteSlotMutation.isPending ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!inPersonWarning} onOpenChange={(open) => { if (!open) setInPersonWarning(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>In-Person Slot</AlertDialogTitle>
+            <AlertDialogDescription>
+              This slot is marked as In-Person. You can still proceed with the allocation.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-inperson-cancel">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleConfirmInPerson}
+              data-testid="button-inperson-confirm"
+            >
+              Confirm
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

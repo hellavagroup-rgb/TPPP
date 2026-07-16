@@ -264,6 +264,12 @@ export default function Availability() {
     }
   }, [isDialogOpen, clinicians, user, dialogClinicianId]);
 
+  useEffect(() => {
+    if (isDialogOpen) {
+      setNewLocationType((tenant?.defaultLocationType as "online" | "in_person") ?? "online");
+    }
+  }, [isDialogOpen, tenant]);
+
   const allCliniciansData = [...(cliniciansWithSlots.data || [])].sort((a, b) => {
     const slotsA = a.slots?.filter(s => s.type !== "Vacation").length || 0;
     const slotsB = b.slots?.filter(s => s.type !== "Vacation").length || 0;

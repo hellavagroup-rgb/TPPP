@@ -1012,7 +1012,13 @@ export async function registerRoutes(
       // Validate displayId change if provided
       if (req.body.displayId && req.body.displayId !== currentClient.displayId) {
         const newId = String(req.body.displayId).trim().toUpperCase();
-        if (!/^W\d+$/.test(newId)) {
+        if (!newId) {
+          return res.status(400).json({ error: "Client ID cannot be empty" });
+        }
+        // Replacing a PENDING ID: accept any non-empty string (name or W number)
+        // For regular IDs: enforce W+digits format
+        const isPendingReplacement = currentClient.displayId?.startsWith("PENDING-");
+        if (!isPendingReplacement && !/^W\d+$/.test(newId)) {
           return res.status(400).json({ error: "Client ID must start with W followed by numbers (e.g. W12345678)" });
         }
         const existing = await storage.getClientByDisplayId(newId);

@@ -804,7 +804,7 @@ export default function Clients() {
     setEditingClient(client);
     setEditClientRateStr(client.agreedRatePence != null ? String(client.agreedRatePence / 100) : "");
     setEditClientData({
-      displayId: client.displayId,
+      displayId: client.displayId?.startsWith("PENDING-") ? "" : client.displayId,
       email: client.email,
       phone: client.phone || "",
       insurer: client.insurer || "Private",
@@ -838,8 +838,14 @@ export default function Clients() {
             notes: editClientData.notes || null,
             status: editClientData.status,
           };
-          // Only send displayId if it was changed
-          if (editClientData.displayId !== editingClient.displayId) {
+          // For PENDING clients: only send displayId if the user typed a new value
+          // For regular clients: send if it changed
+          const isPending = editingClient.displayId?.startsWith("PENDING-");
+          if (isPending) {
+            if (editClientData.displayId.trim()) {
+              updates.displayId = editClientData.displayId.trim().toUpperCase();
+            }
+          } else if (editClientData.displayId !== editingClient.displayId) {
             updates.displayId = editClientData.displayId.trim().toUpperCase();
           }
           updateClientMutation.mutate({
@@ -2162,14 +2168,14 @@ export default function Clients() {
           <div className="grid gap-4 py-4">
             {editingClient?.displayId?.startsWith("PENDING-") && (
               <div className="grid gap-2">
-                <Label>Client ID (W Number)</Label>
+                <Label>Client ID</Label>
                 <Input
-                  placeholder="e.g. W12345678"
+                  placeholder="e.g. W12345678 or client name"
                   value={editClientData.displayId}
                   onChange={e => setEditClientData({...editClientData, displayId: e.target.value})}
                   className="font-mono"
                 />
-                <p className="text-xs text-muted-foreground">Enter the W number to replace the temporary PENDING ID.</p>
+                <p className="text-xs text-muted-foreground">Enter a W number or name to replace the temporary ID. Leave blank to keep the current PENDING ID.</p>
               </div>
             )}
             <div className="grid grid-cols-2 gap-4">

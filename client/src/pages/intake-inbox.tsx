@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { Mail, UserPlus, EyeOff, Eye } from "lucide-react";
+import { Mail, UserPlus, EyeOff, Eye, RefreshCw } from "lucide-react";
 import { format } from "date-fns";
 
 interface IntakeMessage {
@@ -182,6 +182,21 @@ export default function IntakeInbox() {
     },
   });
 
+  const reParseMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/intake-messages/backfill-parse");
+      if (!res.ok) throw new Error("Re-parse failed");
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({ title: "Re-parse complete", description: `Updated ${data.updated} message${data.updated !== 1 ? "s" : ""}.` });
+      queryClient.invalidateQueries({ queryKey: ["/api/intake-messages"] });
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to re-parse messages.", variant: "destructive" });
+    },
+  });
+
   const newCount = messages.filter((m) => m.status === "new").length;
   const ignoredCount = messages.filter((m) => m.status === "ignored").length;
 
@@ -221,6 +236,17 @@ export default function IntakeInbox() {
                   {bulkIgnoreMutation.isPending ? "Ignoring…" : `Ignore ${selected.size} selected`}
                 </Button>
               )}
+              <Button
+                size="sm"
+                variant="outline"
+                data-testid="button-reparse"
+                disabled={reParseMutation.isPending}
+                onClick={() => reParseMutation.mutate()}
+                title="Re-parse all messages to fix swapped question/answer columns"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${reParseMutation.isPending ? "animate-spin" : ""}`} />
+                {reParseMutation.isPending ? "Re-parsing…" : "Re-parse"}
+              </Button>
               <Button
                 size="sm"
                 variant={showIgnored ? "secondary" : "outline"}

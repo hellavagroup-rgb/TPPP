@@ -267,6 +267,29 @@ function parseAlternatingFormat(body: string): ParsedIntakeEmail {
   return buildResult(fields);
 }
 
+/**
+ * If the parsed fields have no recognisable name/email/phone keys but the
+ * INVERTED dict (swapping keys and values) does, return the inverted version.
+ *
+ * This corrects HTML-only emails where the form template emits each answer
+ * BEFORE its label (e.g. CYA Psychology), causing the alternating-line parser
+ * to store { answer: label } instead of { label: answer }.
+ */
+function autoCorrectIfReversed(result: ParsedIntakeEmail): ParsedIntakeEmail {
+  if (result.name || result.email || result.phone) return result;
+  if (Object.keys(result.fields).length < 2) return result;
+
+  const inverted: Record<string, string> = {};
+  for (const [k, v] of Object.entries(result.fields)) {
+    if (v) inverted[v] = k;
+  }
+  const invertedResult = buildResult(inverted);
+  if (invertedResult.name || invertedResult.email || invertedResult.phone) {
+    return invertedResult;
+  }
+  return result;
+}
+
 export function parseIntakeEmailBody(rawBody: string): ParsedIntakeEmail {
   if (!rawBody || !rawBody.trim()) {
     return { fields: {}, name: null, email: null, phone: null };
@@ -280,15 +303,15 @@ export function parseIntakeEmailBody(rawBody: string): ParsedIntakeEmail {
   // Format A: *Label*<TAB>Value (tab-separated, same line)
   const tabResult = tryParseAsteriskTabFormat(body);
   if (tabResult && Object.keys(tabResult.fields).length >= 2) {
-    return tabResult;
+    return autoCorrectIfReversed(tabResult);
   }
 
   // Format B: *Label* on one line, value on next line(s) — may have multi-line labels
   const asteriskAltResult = parseAsteriskAlternatingFormat(body);
   if (asteriskAltResult && Object.keys(asteriskAltResult.fields).length >= 2) {
-    return asteriskAltResult;
+    return autoCorrectIfReversed(asteriskAltResult);
   }
 
   // Format C: plain alternating label/value lines
-  return parseAlternatingFormat(body);
+  return autoCorrectIfReversed(parseAlternatingFormat(body));
 }

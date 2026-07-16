@@ -842,6 +842,41 @@ export async function registerRoutes(
     }
   });
 
+  // Toggle location type on a single slot (admin only, tenant-scoped)
+  app.patch("/api/timeslots/:slotId/location-type", requireAdmin, async (req, res) => {
+    try {
+      const { locationType } = req.body as { locationType: string };
+      if (locationType !== "online" && locationType !== "in_person") {
+        return res.status(400).json({ error: "Invalid locationType" });
+      }
+      const updated = await storage.updateTimeSlotLocationType(
+        req.params.slotId,
+        req.tenant!.id,
+        locationType,
+      );
+      if (!updated) return res.status(404).json({ error: "Slot not found or access denied" });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update slot location type" });
+    }
+  });
+
+  // Update tenant-level availability settings (admin only)
+  app.patch("/api/tenant/availability-settings", requireAdmin, async (req, res) => {
+    try {
+      const { defaultLocationType } = req.body as { defaultLocationType: string };
+      if (defaultLocationType !== "online" && defaultLocationType !== "in_person") {
+        return res.status(400).json({ error: "Invalid defaultLocationType" });
+      }
+      await db.update(tenants)
+        .set({ defaultLocationType })
+        .where(eq(tenants.id, req.tenant!.id));
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update availability settings" });
+    }
+  });
+
   // ============ CLIENT ROUTES (GDPR Protected) ============
   app.get("/api/clients", requireAdmin, auditLog("view", "client"), async (req, res) => {
     try {

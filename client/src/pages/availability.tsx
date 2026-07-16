@@ -116,7 +116,21 @@ export default function Availability() {
   const [newEndTime, setNewEndTime] = useState("10:00");
   const [dialogClinicianId, setDialogClinicianId] = useState<string>("");
 
+  const { data: tenant } = useQuery<{ defaultLocationType?: string }>({
+    queryKey: ["/api/tenant"],
+    enabled: user?.role === "admin",
+  });
+
   const [newLocationType, setNewLocationType] = useState<"online" | "in_person">("online");
+
+  const toggleLocationMutation = useMutation({
+    mutationFn: async ({ slotId, locationType }: { slotId: string; locationType: string }) => {
+      const res = await apiRequest("PATCH", `/api/timeslots/${slotId}/location-type`, { locationType });
+      if (!res.ok) throw new Error("Failed to update");
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/clinicians"] }),
+    onError: () => toast({ title: "Error", description: "Failed to update location type", variant: "destructive" }),
+  });
 
   const [isAllocating, setIsAllocating] = useState(false);
   const [allocatingClientId, setAllocatingClientId] = useState<string | null>(null);
@@ -367,7 +381,7 @@ export default function Availability() {
     setSelectedDays([]);
     setNewStartTime("09:00");
     setNewEndTime("10:00");
-    setNewLocationType("online");
+    setNewLocationType((tenant?.defaultLocationType as "online" | "in_person") ?? "online");
   };
 
   const handleAddAvailability = () => {
@@ -896,10 +910,31 @@ export default function Availability() {
                                       Available from {validFrom}{validUntil ? ` to ${validUntil}` : ""}
                                     </div>
                                   )}
-                                  {(slot as any).locationType === "in_person" ? (
-                                    <span className="inline-block text-[8px] px-1 py-0 rounded-full bg-amber-100 text-amber-700 border border-amber-300 mt-0.5 leading-tight">In-Person</span>
+                                  {user?.role === "admin" && !isAllocating ? (
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        const next = (slot as any).locationType === "in_person" ? "online" : "in_person";
+                                        toggleLocationMutation.mutate({ slotId: slot.id, locationType: next });
+                                      }}
+                                      className={`inline-block text-[8px] px-1 py-0 rounded-full border mt-0.5 leading-tight cursor-pointer hover:opacity-75 transition-opacity ${
+                                        (slot as any).locationType === "in_person"
+                                          ? "bg-amber-100 text-amber-700 border-amber-300"
+                                          : "bg-blue-100 text-blue-700 border-blue-300"
+                                      }`}
+                                      data-testid={`button-toggle-location-${slot.id}`}
+                                      title="Click to toggle Online / In-Person"
+                                    >
+                                      {(slot as any).locationType === "in_person" ? "In-Person" : "Online"}
+                                    </button>
                                   ) : (
-                                    <span className="inline-block text-[8px] px-1 py-0 rounded-full bg-blue-100 text-blue-700 border border-blue-300 mt-0.5 leading-tight">Online</span>
+                                    <span className={`inline-block text-[8px] px-1 py-0 rounded-full border mt-0.5 leading-tight ${
+                                      (slot as any).locationType === "in_person"
+                                        ? "bg-amber-100 text-amber-700 border-amber-300"
+                                        : "bg-blue-100 text-blue-700 border-blue-300"
+                                    }`}>
+                                      {(slot as any).locationType === "in_person" ? "In-Person" : "Online"}
+                                    </span>
                                   )}
                                   {slot.isBooked && (
                                     <Badge variant="secondary" className="text-[8px] px-1 py-0 mt-0.5 block">

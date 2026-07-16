@@ -32,6 +32,7 @@ export const tenants = pgTable("tenants", {
     showTier?: boolean;
     showTherapyMode?: boolean;
   }>(),
+  defaultLocationType: text("default_location_type").default("online"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

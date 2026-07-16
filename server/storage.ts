@@ -58,6 +58,7 @@ export interface IStorage {
   addTimeSlots(clinicianId: string, newSlots: Omit<TimeSlot, 'id' | 'createdAt'>[], tenantId?: string | null): Promise<TimeSlot[]>;
   deleteTimeSlotById(id: string): Promise<boolean>;
   getAllTimeSlots(): Promise<TimeSlot[]>;
+  updateTimeSlotLocationType(id: string, tenantId: string, locationType: string): Promise<TimeSlot | undefined>;
   
   // ============ CLIENTS ============
   getAllClients(includeArchived?: boolean, tenantId?: string): Promise<Client[]>;
@@ -339,6 +340,18 @@ export class DatabaseStorage implements IStorage {
 
   async getAllTimeSlots(): Promise<TimeSlot[]> {
     return await db.select().from(timeSlots);
+  }
+
+  async updateTimeSlotLocationType(id: string, tenantId: string, locationType: string): Promise<TimeSlot | undefined> {
+    const [slot] = await db.select().from(timeSlots).where(eq(timeSlots.id, id));
+    if (!slot) return undefined;
+    const clinician = await db.select().from(clinicians).where(eq(clinicians.id, slot.clinicianId!)).limit(1);
+    if (!clinician[0] || clinician[0].tenantId !== tenantId) return undefined;
+    const [updated] = await db.update(timeSlots)
+      .set({ locationType })
+      .where(eq(timeSlots.id, id))
+      .returning();
+    return updated;
   }
 
   // ============ CLIENTS ============

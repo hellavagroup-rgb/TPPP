@@ -448,8 +448,33 @@ interface Clinician {
 
 function AccountTab() {
   const { user, refreshUser } = useAuth();
+  const queryClient = useQueryClient();
   const [name, setName] = useState(user?.name || "");
   const [isSaving, setIsSaving] = useState(false);
+
+  const { data: tenant } = useQuery<{ defaultLocationType?: string }>({
+    queryKey: ["/api/tenant"],
+  });
+
+  const [defaultLocationType, setDefaultLocationType] = useState<"online" | "in_person">("online");
+
+  useEffect(() => {
+    if (tenant?.defaultLocationType) {
+      setDefaultLocationType(tenant.defaultLocationType as "online" | "in_person");
+    }
+  }, [tenant]);
+
+  const saveAvailabilitySettings = useMutation({
+    mutationFn: async (locationType: string) => {
+      const res = await apiRequest("PATCH", "/api/tenant/availability-settings", { defaultLocationType: locationType });
+      if (!res.ok) throw new Error("Failed to save");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/tenant"] });
+      toast.success("Availability default saved");
+    },
+    onError: () => toast.error("Failed to save availability settings"),
+  });
 
   const handleSave = async () => {
     if (!name.trim()) {
@@ -473,38 +498,83 @@ function AccountTab() {
   };
 
   return (
-    <Card className="border-none shadow-sm">
-      <CardHeader>
-        <CardTitle>Profile</CardTitle>
-        <CardDescription>Manage your account settings.</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid gap-2">
-          <Label htmlFor="profile-name">Name</Label>
-          <Input 
-            id="profile-name" 
-            value={name} 
-            onChange={(e) => setName(e.target.value)}
-            data-testid="input-profile-name"
-          />
-        </div>
-        <div className="grid gap-2">
-          <Label htmlFor="profile-email">Email</Label>
-          <Input 
-            id="profile-email" 
-            value={user?.email || ""} 
-            disabled 
-            className="bg-muted"
-            data-testid="input-profile-email"
-          />
-          <p className="text-xs text-muted-foreground">Email cannot be changed.</p>
-        </div>
-        <Button onClick={handleSave} disabled={isSaving} data-testid="button-save-profile">
-          {isSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-          Save Changes
-        </Button>
-      </CardContent>
-    </Card>
+    <div className="space-y-4">
+      <Card className="border-none shadow-sm">
+        <CardHeader>
+          <CardTitle>Profile</CardTitle>
+          <CardDescription>Manage your account settings.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-2">
+            <Label htmlFor="profile-name">Name</Label>
+            <Input 
+              id="profile-name" 
+              value={name} 
+              onChange={(e) => setName(e.target.value)}
+              data-testid="input-profile-name"
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="profile-email">Email</Label>
+            <Input 
+              id="profile-email" 
+              value={user?.email || ""} 
+              disabled 
+              className="bg-muted"
+              data-testid="input-profile-email"
+            />
+            <p className="text-xs text-muted-foreground">Email cannot be changed.</p>
+          </div>
+          <Button onClick={handleSave} disabled={isSaving} data-testid="button-save-profile">
+            {isSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+            Save Changes
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card className="border-none shadow-sm">
+        <CardHeader>
+          <CardTitle>Availability Defaults</CardTitle>
+          <CardDescription>Choose the default location type when adding new availability slots.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex gap-6">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio"
+                name="defaultLocationType"
+                value="online"
+                checked={defaultLocationType === "online"}
+                onChange={() => setDefaultLocationType("online")}
+                data-testid="radio-default-location-online"
+                className="h-4 w-4 accent-primary"
+              />
+              <span className="text-sm">Online</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio"
+                name="defaultLocationType"
+                value="in_person"
+                checked={defaultLocationType === "in_person"}
+                onChange={() => setDefaultLocationType("in_person")}
+                data-testid="radio-default-location-in-person"
+                className="h-4 w-4 accent-primary"
+              />
+              <span className="text-sm">In-Person</span>
+            </label>
+          </div>
+          <Button
+            onClick={() => saveAvailabilitySettings.mutate(defaultLocationType)}
+            disabled={saveAvailabilitySettings.isPending || defaultLocationType === (tenant?.defaultLocationType ?? "online")}
+            data-testid="button-save-availability-defaults"
+          >
+            {saveAvailabilitySettings.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+            Save Default
+          </Button>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 

@@ -242,52 +242,117 @@ function parseAsteriskAlternatingFormat(body: string): ParsedIntakeEmail | null 
 }
 
 /**
+ * Build a label→value dict from alternating lines, starting at `startOffset`.
+ * Lines before `startOffset` are skipped entirely.
+ *
+ * This lets callers try different starting positions to handle "orphan" leading
+ * lines (e.g. a value with no label, like a child's age appearing at the top
+ * of a CYA Psychology form email).
+ */
+function buildAlternatingFields(
+  lines: string[],
+  startOffset: number,
+): Record<string, string> {
+  const fields: Record<string, string> = {};
+  let i = startOffset;
+  while (i < lines.length) {
+    const label = lines[i];
+    if (!label) { i++; continue; }
+    let j = i + 1;
+    while (j < lines.length && !lines[j]) j++;
+    if (j >= lines.length) break;
+    fields[label] = lines[j];
+    i = j + 1;
+  }
+  return fields;
+}
+
+/**
  * Format C: Plain alternating label / value lines (no asterisk wrapping).
+ *
+ * Tries three candidate interpretations and returns whichever scores highest:
+ *   1. Offset 0 — standard label-value-label-value… starting from the first line
+ *   2. Offset 1 — skip the first line (handles a leading orphan value with no
+ *      label, which shifts pairs by one when read naïvely)
+ *   3. Inversion of offset-0 — handles emails where each VALUE appears before
+ *      its LABEL throughout the whole body
+ *
+ * Each candidate is scored by how well recognised label keys (Email, Phone,
+ * Name…) match the expected format of their values.  The highest scorer wins.
  */
 function parseAlternatingFormat(body: string): ParsedIntakeEmail {
   const lines = body
     .split('\n')
     .map((l) => l.replace(/\r$/, '').trim());
 
-  const fields: Record<string, string> = {};
-  let i = 0;
+  const fields0 = buildAlternatingFields(lines, 0);
+  const fields1 = buildAlternatingFields(lines, 1);
+  const fieldsInv = invertFields(fields0);
 
-  while (i < lines.length) {
-    const label = lines[i];
-    if (!label) { i++; continue; }
+  const candidates: Record<string, string>[] = [fields0, fields1, fieldsInv].filter(
+    (f) => Object.keys(f).length >= 2,
+  );
 
-    let j = i + 1;
-    while (j < lines.length && !lines[j]) j++;
-    if (j >= lines.length) break;
+  let bestFields = fields0;
+  let bestScore = scoreFields(fields0);
 
-    fields[label] = lines[j];
-    i = j + 1;
+  for (const candidate of candidates.slice(1)) {
+    const s = scoreFields(candidate);
+    if (s > bestScore) {
+      bestScore = s;
+      bestFields = candidate;
+    }
   }
 
-  return buildResult(fields);
+  return buildResult(bestFields);
+}
+
+// ---------------------------------------------------------------------------
+// Semantic scoring helpers
+// ---------------------------------------------------------------------------
+
+function isEmailLike(s: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s]+$/.test(s.trim());
+}
+
+function isPhoneLike(s: string): boolean {
+  return /^[+\d][\d\s().\-]{5,19}$/.test(s.trim());
+}
+
+function isNameLike(s: string): boolean {
+  const t = s.trim();
+  return (
+    /^[A-Z][a-z]/.test(t) &&
+    !isEmailLike(t) &&
+    !isPhoneLike(t) &&
+    t.length < 60
+  );
 }
 
 /**
- * If the parsed fields have no recognisable name/email/phone keys but the
- * INVERTED dict (swapping keys and values) does, return the inverted version.
- *
- * This corrects HTML-only emails where the form template emits each answer
- * BEFORE its label (e.g. CYA Psychology), causing the alternating-line parser
- * to store { answer: label } instead of { label: answer }.
+ * Score a fields dict by how well the VALUES match what each LABEL suggests.
+ * Higher score = labels and values are correctly paired.
  */
-function autoCorrectIfReversed(result: ParsedIntakeEmail): ParsedIntakeEmail {
-  if (result.name || result.email || result.phone) return result;
-  if (Object.keys(result.fields).length < 2) return result;
+function scoreFields(fields: Record<string, string>): number {
+  let score = 0;
+  for (const [k, v] of Object.entries(fields)) {
+    if (matchesAny(k, EMAIL_LABELS) && isEmailLike(v)) score += 3;
+    if (matchesAny(k, PHONE_LABELS) && isPhoneLike(v)) score += 3;
+    if (matchesAny(k, NAME_LABELS) && isNameLike(v)) score += 2;
+  }
+  return score;
+}
 
-  const inverted: Record<string, string> = {};
-  for (const [k, v] of Object.entries(result.fields)) {
-    if (v) inverted[v] = k;
+/**
+ * Invert a fields dict (swap keys and values), skipping entries where the
+ * value is empty.
+ */
+function invertFields(fields: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(fields)) {
+    if (v) out[v] = k;
   }
-  const invertedResult = buildResult(inverted);
-  if (invertedResult.name || invertedResult.email || invertedResult.phone) {
-    return invertedResult;
-  }
-  return result;
+  return out;
 }
 
 export function parseIntakeEmailBody(rawBody: string): ParsedIntakeEmail {
@@ -303,15 +368,17 @@ export function parseIntakeEmailBody(rawBody: string): ParsedIntakeEmail {
   // Format A: *Label*<TAB>Value (tab-separated, same line)
   const tabResult = tryParseAsteriskTabFormat(body);
   if (tabResult && Object.keys(tabResult.fields).length >= 2) {
-    return autoCorrectIfReversed(tabResult);
+    return tabResult;
   }
 
   // Format B: *Label* on one line, value on next line(s) — may have multi-line labels
   const asteriskAltResult = parseAsteriskAlternatingFormat(body);
   if (asteriskAltResult && Object.keys(asteriskAltResult.fields).length >= 2) {
-    return autoCorrectIfReversed(asteriskAltResult);
+    return asteriskAltResult;
   }
 
-  // Format C: plain alternating label/value lines
-  return autoCorrectIfReversed(parseAlternatingFormat(body));
+  // Format C: plain alternating label/value lines.
+  // parseAlternatingFormat internally tries offset-0, offset-1, and inversion
+  // and picks whichever is semantically best (see scoreFields).
+  return parseAlternatingFormat(body);
 }

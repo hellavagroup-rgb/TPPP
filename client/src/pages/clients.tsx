@@ -1363,6 +1363,9 @@ export default function Clients() {
                       <Button size="sm" variant="outline" className="w-full gap-1 text-xs" onClick={() => handleOpenPhoneFill(client)}>
                         <Phone className="h-3 w-3" /> Fill by Phone
                       </Button>
+                      <Button size="sm" variant="outline" className="w-full gap-1 text-xs text-emerald-700 border-emerald-300 hover:bg-emerald-50" onClick={() => updateClientMutation.mutate({ id: client.id, updates: { status: "Forms Completed", formsCompletedAt: new Date().toISOString() } })}>
+                        <CheckCircle2 className="h-3 w-3" /> Mark Forms Completed
+                      </Button>
                     </div>
                   </CardContent>
                 </Card>
@@ -1434,6 +1437,9 @@ export default function Clients() {
                     <p className="text-[10px] text-amber-600 mt-2 flex items-center gap-1">
                       <Mail className="h-3 w-3" /> Awaiting response
                     </p>
+                    <Button size="sm" variant="outline" className="w-full gap-1 text-xs text-emerald-700 border-emerald-300 hover:bg-emerald-50 mt-1" onClick={() => updateClientMutation.mutate({ id: client.id, updates: { status: "Forms Completed", formsCompletedAt: new Date().toISOString() } })}>
+                      <CheckCircle2 className="h-3 w-3" /> Mark Forms Completed
+                    </Button>
                   </CardContent>
                 </Card>
               ))}
@@ -1474,6 +1480,19 @@ export default function Clients() {
                           <DropdownMenuItem onClick={() => handleOpenManualAllocate(client)}>
                             <CalendarCheck className="h-4 w-4 mr-2" /> Allocate to Clinician
                           </DropdownMenuItem>
+                          {stripeEnabled && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem onClick={() => handleOpenPaymentLink(client)}>
+                                <CreditCard className="h-4 w-4 mr-2" /> Generate Payment Link
+                              </DropdownMenuItem>
+                              {client.paymentStatus === "active" && (
+                                <DropdownMenuItem onClick={() => handleOpenHistory(client)}>
+                                  <History className="h-4 w-4 mr-2" /> Payment History
+                                </DropdownMenuItem>
+                              )}
+                            </>
+                          )}
                           <DropdownMenuSeparator />
                           <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>
                             Archive/Didn't Engage
@@ -1494,9 +1513,16 @@ export default function Clients() {
                     {paymentStatusBadge(client) && (
                       <div className="mt-1">{paymentStatusBadge(client)}</div>
                     )}
-                    <Button size="sm" className="w-full gap-1 text-xs mt-2 bg-primary hover:bg-primary/90" onClick={() => { setSelectedClient(client); setIsManualAllocation(false); fetchClientAvailability(client.id); setIsAllocateDialogOpen(true); }}>
-                      <UserCheck className="h-3 w-3" /> Allocate
-                    </Button>
+                    <div className="flex flex-col gap-1 mt-2">
+                      <Button size="sm" className="w-full gap-1 text-xs bg-primary hover:bg-primary/90" onClick={() => { setSelectedClient(client); setIsManualAllocation(false); fetchClientAvailability(client.id); setIsAllocateDialogOpen(true); }}>
+                        <UserCheck className="h-3 w-3" /> Allocate
+                      </Button>
+                      {stripeEnabled && (
+                        <Button size="sm" variant="outline" className="w-full gap-1 text-xs text-blue-700 border-blue-300 hover:bg-blue-50" onClick={() => handleOpenPaymentLink(client)}>
+                          <CreditCard className="h-3 w-3" /> Payment Link
+                        </Button>
+                      )}
+                    </div>
                   </CardContent>
                 </Card>
               ))}

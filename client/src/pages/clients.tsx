@@ -1437,9 +1437,6 @@ export default function Clients() {
                     <p className="text-[10px] text-amber-600 mt-2 flex items-center gap-1">
                       <Mail className="h-3 w-3" /> Awaiting response
                     </p>
-                    <Button size="sm" variant="outline" className="w-full gap-1 text-xs text-emerald-700 border-emerald-300 hover:bg-emerald-50 mt-1" onClick={() => updateClientMutation.mutate({ id: client.id, updates: { status: "Forms Completed", formsCompletedAt: new Date().toISOString() } })}>
-                      <CheckCircle2 className="h-3 w-3" /> Mark Forms Completed
-                    </Button>
                   </CardContent>
                 </Card>
               ))}

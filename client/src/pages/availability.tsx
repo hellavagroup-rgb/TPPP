@@ -916,7 +916,7 @@ export default function Availability() {
                                       Available from {validFrom}{validUntil ? ` to ${validUntil}` : ""}
                                     </div>
                                   )}
-                                  {user?.role === "admin" && !isAllocating ? (
+                                  {!isAllocating ? (
                                     <button
                                       onClick={(e) => {
                                         e.stopPropagation();

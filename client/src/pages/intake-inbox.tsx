@@ -146,6 +146,18 @@ export default function IntakeInbox() {
     },
   });
 
+  const unignoreMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/intake-messages/${id}/unignore`);
+      if (!res.ok) throw new Error("Failed to unignore");
+    },
+    onSuccess: () => {
+      toast({ title: "Message restored", description: "Message is now active again." });
+      queryClient.invalidateQueries({ queryKey: ["/api/intake-messages"] });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to unignore message.", variant: "destructive" }),
+  });
+
   const ignoreMutation = useMutation({
     mutationFn: async (id: string) => {
       const res = await apiRequest("POST", `/api/intake-messages/${id}/ignore`);
@@ -366,6 +378,18 @@ export default function IntakeInbox() {
                                 Ignore
                               </Button>
                             </>
+                          )}
+                          {msg.status === "ignored" && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              data-testid={`button-unignore-${msg.id}`}
+                              onClick={() => unignoreMutation.mutate(msg.id)}
+                              disabled={unignoreMutation.isPending && unignoreMutation.variables === msg.id}
+                            >
+                              <Eye className="h-3.5 w-3.5 mr-1" />
+                              {unignoreMutation.isPending && unignoreMutation.variables === msg.id ? "Restoring…" : "Unignore"}
+                            </Button>
                           )}
                         </div>
                       </TableCell>

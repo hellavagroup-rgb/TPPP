@@ -2715,6 +2715,27 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/intake-messages/:id/unignore", requireAdmin, async (req, res) => {
+    try {
+      if (!req.tenant?.gmailIntakeEnabled) {
+        return res.status(403).json({ error: "Gmail Intake is not enabled for this tenant" });
+      }
+      const [message] = await db
+        .select()
+        .from(intakeMessages)
+        .where(and(eq(intakeMessages.id, req.params.id), eq(intakeMessages.tenantId, req.tenant.id)))
+        .limit(1);
+      if (!message) return res.status(404).json({ error: "Intake message not found" });
+      await db
+        .update(intakeMessages)
+        .set({ status: "new" })
+        .where(eq(intakeMessages.id, message.id));
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to unignore intake message" });
+    }
+  });
+
   app.post("/api/intake-messages/bulk-ignore", requireAdmin, async (req, res) => {
     try {
       if (!req.tenant?.gmailIntakeEnabled) {

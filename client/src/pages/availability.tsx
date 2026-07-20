@@ -374,7 +374,7 @@ export default function Availability() {
       }
     });
 
-    return results;
+    return results.sort((a, b) => (a.slot.startTime ?? "").localeCompare(b.slot.startTime ?? ""));
   };
 
   const resetForm = () => {

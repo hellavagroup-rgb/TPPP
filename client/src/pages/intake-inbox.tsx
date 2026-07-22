@@ -280,7 +280,7 @@ export default function IntakeInbox() {
             </div>
           ) : (
             <div className="overflow-auto" style={{ maxHeight: "calc(100vh - 260px)" }}>
-            <Table className="min-w-[750px]">
+            <Table className="min-w-[900px]">
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-10 pr-0">

@@ -279,7 +279,8 @@ export default function IntakeInbox() {
               {showIgnored ? "No intake messages yet." : "No active messages. " + (ignoredCount > 0 ? `${ignoredCount} ignored message${ignoredCount !== 1 ? "s" : ""} hidden.` : "")}
             </div>
           ) : (
-            <Table>
+            <div className="overflow-auto" style={{ maxHeight: "calc(100vh - 260px)" }}>
+            <Table className="min-w-[750px]">
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-10 pr-0">
@@ -397,6 +398,7 @@ export default function IntakeInbox() {
                 })}
               </TableBody>
             </Table>
+            </div>
           )}
         </CardContent>
       </Card>

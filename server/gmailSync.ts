@@ -258,6 +258,14 @@ export async function syncConnection(connection: {
         continue;
       }
 
+      // Skip replies — original form submissions never have In-Reply-To set.
+      // Replies from internal staff (e.g. Nicola replying to an intake thread)
+      // land back in INBOX but should not be imported as new enquiries.
+      if (extractHeader(headers, "in-reply-to")) {
+        log(`[gmail] ${connection.gmailAddress}: skipping ${msgId} — reply (In-Reply-To present)`);
+        continue;
+      }
+
       // Skip marketing / automated / promotional emails
       if (isMarketingEmail(headers, labelIds)) {
         log(`[gmail] ${connection.gmailAddress}: skipping ${msgId} — marketing filter`);

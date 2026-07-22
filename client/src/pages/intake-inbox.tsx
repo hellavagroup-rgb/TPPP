@@ -279,8 +279,7 @@ export default function IntakeInbox() {
               {showIgnored ? "No intake messages yet." : "No active messages. " + (ignoredCount > 0 ? `${ignoredCount} ignored message${ignoredCount !== 1 ? "s" : ""} hidden.` : "")}
             </div>
           ) : (
-            <div className="overflow-auto" style={{ maxHeight: "calc(100vh - 260px)" }}>
-            <Table className="min-w-[900px]">
+            <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-10 pr-0">
@@ -292,12 +291,9 @@ export default function IntakeInbox() {
                       disabled={selectableIds.length === 0}
                     />
                   </TableHead>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Email</TableHead>
-                  <TableHead>Phone</TableHead>
+                  <TableHead className="w-48">Name</TableHead>
                   <TableHead>Subject</TableHead>
-                  <TableHead>Received</TableHead>
-                  <TableHead>Status</TableHead>
+                  <TableHead className="whitespace-nowrap w-36">Received</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -309,10 +305,6 @@ export default function IntakeInbox() {
                   const displayName = msg.extractedName
                     || extractedField(msg.extractedData, "name")
                     || null;
-                  const displayEmail = extractedField(msg.extractedData, "email")
-                    || msg.fromAddress;
-                  const displayPhone = msg.extractedPhone
-                    || extractedField(msg.extractedData, "phone", "telephone", "mobile");
                   return (
                     <TableRow
                       key={msg.id}
@@ -329,21 +321,17 @@ export default function IntakeInbox() {
                           />
                         )}
                       </TableCell>
-                      <TableCell className="font-medium">
-                        {displayName ?? <span className="text-muted-foreground">—</span>}
+                      <TableCell className="w-48">
+                        <div className="font-medium">
+                          {displayName ?? <span className="text-muted-foreground">—</span>}
+                        </div>
+                        <Badge variant={variant} data-testid={`badge-status-${msg.id}`} className="mt-1 text-xs">{label}</Badge>
                       </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{displayEmail}</TableCell>
-                      <TableCell className="text-sm">
-                        {displayPhone ?? <span className="text-muted-foreground">—</span>}
-                      </TableCell>
-                      <TableCell className="max-w-[180px] truncate text-sm text-muted-foreground">
+                      <TableCell className="text-sm text-muted-foreground">
                         {msg.subject}
                       </TableCell>
-                      <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
+                      <TableCell className="text-sm text-muted-foreground whitespace-nowrap w-36">
                         {format(new Date(msg.receivedAt), "dd MMM yyyy HH:mm")}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={variant} data-testid={`badge-status-${msg.id}`}>{label}</Badge>
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-1">
@@ -398,7 +386,6 @@ export default function IntakeInbox() {
                 })}
               </TableBody>
             </Table>
-            </div>
           )}
         </CardContent>
       </Card>

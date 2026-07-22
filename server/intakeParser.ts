@@ -104,17 +104,33 @@ function stripForwardedWrapper(body: string): string {
 }
 
 /**
+ * Strip email-client reply-quote characters from every line.
+ * Handles "Re:" replies where the original form is included as a quoted block
+ * with one or more leading ">" characters (>, >>, >>> etc.) per line.
+ * This is a no-op for lines that don't start with ">".
+ */
+function stripEmailQuotes(body: string): string {
+  return body
+    .split('\n')
+    .map((line) => line.replace(/^(>\s?)+/, ''))
+    .join('\n');
+}
+
+/**
  * Prepare the body for parsing:
  * 1. Strip any forwarded-message wrapper.
- * 2. Truncate at the RFC-3676 signature separator (-- on its own line), which
+ * 2. Strip email reply-quote characters ("> ") so RE: replies are parsed
+ *    correctly — the quoted original form content is recovered intact.
+ * 3. Truncate at the RFC-3676 signature separator (-- on its own line), which
  *    can appear both in the outer email (Clare's signature before the forwarded
  *    block) and in the inner form email footer.
  */
 function prepareBody(rawBody: string): string {
   const inner = stripForwardedWrapper(rawBody);
+  const unquoted = stripEmailQuotes(inner);
   // Remove anything from the standalone "-- " signature separator onwards
-  const sigIdx = inner.search(/^--\s*$/m);
-  return sigIdx !== -1 ? inner.substring(0, sigIdx) : inner;
+  const sigIdx = unquoted.search(/^--\s*$/m);
+  return sigIdx !== -1 ? unquoted.substring(0, sigIdx) : unquoted;
 }
 
 /**

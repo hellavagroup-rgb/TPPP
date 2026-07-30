@@ -194,8 +194,13 @@ export default function Clients() {
         notes: ""
       });
     },
-    onError: () => {
-      toast({ title: "Error", description: "Failed to create client.", variant: "destructive" });
+    onError: async (error: any) => {
+      let description = "Failed to create client.";
+      try {
+        const body = await error?.response?.json?.();
+        if (body?.error && typeof body.error === "string") description = body.error;
+      } catch {}
+      toast({ title: "Error", description, variant: "destructive" });
     },
   });
 

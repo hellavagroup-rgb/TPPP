@@ -993,6 +993,18 @@ export async function registerRoutes(
       if (error instanceof z.ZodError) {
         return res.status(400).json({ error: error.errors });
       }
+      console.error("Failed to create client:", error);
+      // Surface unique constraint violations with a helpful message
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes("unique") || msg.includes("duplicate") || msg.includes("23505")) {
+        if (msg.includes("email")) {
+          return res.status(409).json({ error: "A client with this email address already exists." });
+        }
+        if (msg.includes("display_id")) {
+          return res.status(409).json({ error: "A client with this W-Number already exists." });
+        }
+        return res.status(409).json({ error: "A client with these details already exists." });
+      }
       res.status(500).json({ error: "Failed to create client" });
     }
   });

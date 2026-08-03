@@ -461,11 +461,18 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
+    // Always clear the FK reference to the released slot so there is no stale
+    // assignedSlotId pointing at a slot that is no longer booked. Leaving it set
+    // causes a FK-constraint error if an admin later tries to delete that slot
+    // (the slot's isBooked flag is false so the old guard skipped cleanup).
     const [client] = await db.update(clients).set({
       isArchived: true,
       archivedAt: new Date(),
       archiveReason: reason || null,
       archiveCategory: category || null,
+      assignedSlotId: null,
+      assignedSlot: null,
+      assignedClinicianId: null,
       updatedAt: new Date()
     }).where(eq(clients.id, id)).returning();
     return client || undefined;

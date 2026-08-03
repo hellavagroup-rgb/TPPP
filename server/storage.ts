@@ -327,11 +327,12 @@ export class DatabaseStorage implements IStorage {
     const [slot] = await db.select().from(timeSlots).where(eq(timeSlots.id, id));
     if (!slot) return false;
     
-    if (slot.isBooked) {
-      const clientsWithSlot = await db.select().from(clients).where(eq(clients.assignedSlotId, id));
-      for (const client of clientsWithSlot) {
-        await db.update(clients).set({ assignedSlotId: null, assignedSlot: null, assignedClinicianId: null }).where(eq(clients.id, client.id));
-      }
+    // Always clear client references regardless of isBooked flag — the flag can
+    // get out of sync with the actual FK reference, causing a 23503 constraint
+    // violation if we only clean up when isBooked is true.
+    const clientsWithSlot = await db.select().from(clients).where(eq(clients.assignedSlotId, id));
+    for (const client of clientsWithSlot) {
+      await db.update(clients).set({ assignedSlotId: null, assignedSlot: null, assignedClinicianId: null }).where(eq(clients.id, client.id));
     }
     
     await db.delete(timeSlots).where(eq(timeSlots.id, id));

@@ -141,6 +141,10 @@ export default function Clients() {
   });
   const formsEnabled = tenant?.formsEnabled !== false;
   const nonEngagementEnabled = tenant?.nonEngagementEnabled !== false;
+  // CY&A feature flags (all default false — existing tenants unaffected)
+  const contactPreferenceEnabled = tenant?.contactPreferenceEnabled === true;
+  const multiClinicianAllocationEnabled = tenant?.multiClinicianAllocationEnabled === true;
+  const writeuppChecklistEnabled = tenant?.writeuppChecklistEnabled === true;
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedClient, setSelectedClient] = useState<ClientType | null>(null);
 
@@ -229,6 +233,28 @@ export default function Clients() {
     },
     onError: () => {
       toast({ title: "Error", description: "Failed to assign client.", variant: "destructive" });
+    },
+  });
+
+  // CY&A: multi-clinician option selection state
+  const [selectedOptions, setSelectedOptions] = useState<{clinicianId: string; slotId: string}[]>([]);
+
+  const allocateOptionsMutation = useMutation({
+    mutationFn: async ({ clientId, selections }: { clientId: string; selections: {clinicianId: string; slotId: string}[] }) => {
+      const response = await apiRequest("POST", `/api/clients/${clientId}/allocate-options`, { selections });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/clinicians"] });
+      toast({ title: "Options Sent", description: "Client has been moved to Options Sent." });
+      setSelectedClient(null);
+      setIsAllocateDialogOpen(false);
+      setSelectedOptions([]);
+      setAllocationReason("");
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to send options.", variant: "destructive" });
     },
   });
 
@@ -708,6 +734,33 @@ export default function Clients() {
     } finally {
       setLoadingCharges(false);
     }
+  };
+
+  // CY&A: contact preference and needs-admin-call badges
+  const contactPreferenceBadge = (client: ClientType) => {
+    if (!contactPreferenceEnabled) return null;
+    const cp = (client as any).contactPreference;
+    const needsCall = (client as any).needsAdminCall;
+    if (!cp && !needsCall) return null;
+    return (
+      <div className="flex flex-wrap gap-1 mt-1">
+        {cp === "phone" && (
+          <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded">
+            <Phone className="h-2.5 w-2.5" /> Phone
+          </span>
+        )}
+        {cp === "email" && (
+          <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-sky-100 text-sky-700 px-1.5 py-0.5 rounded">
+            <Mail className="h-2.5 w-2.5" /> Email
+          </span>
+        )}
+        {needsCall && (
+          <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-red-100 text-red-700 px-1.5 py-0.5 rounded">
+            <AlertCircle className="h-2.5 w-2.5" /> Needs Call
+          </span>
+        )}
+      </div>
+    );
   };
 
   const paymentStatusBadge = (client: ClientType) => {
@@ -1310,7 +1363,7 @@ export default function Clients() {
 
       {/* Kanban Board */}
       {!showConfirmedState && !showArchivedState ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+        <div className={`grid grid-cols-1 md:grid-cols-2 ${multiClinicianAllocationEnabled ? 'lg:grid-cols-7' : 'lg:grid-cols-5'} gap-4`}>
           {/* Column 1: Pending Intake */}
           <div className="bg-blue-50/50 rounded-lg p-3 min-h-[400px]">
             <div className="flex items-center justify-between mb-3">
@@ -1359,6 +1412,7 @@ export default function Clients() {
                     {paymentStatusBadge(client) && (
                       <div className="mt-1">{paymentStatusBadge(client)}</div>
                     )}
+                    {contactPreferenceBadge(client)}
                     <div className="flex flex-col gap-1 mt-2">
                       {formsEnabled && (
                         <Button size="sm" variant="outline" className="w-full gap-1 text-xs" onClick={() => handleOpenSendForms(client)}>
@@ -1439,6 +1493,7 @@ export default function Clients() {
                     {paymentStatusBadge(client) && (
                       <div className="mt-1">{paymentStatusBadge(client)}</div>
                     )}
+                    {contactPreferenceBadge(client)}
                     <p className="text-[10px] text-amber-600 mt-2 flex items-center gap-1">
                       <Mail className="h-3 w-3" /> Awaiting response
                     </p>
@@ -1515,8 +1570,9 @@ export default function Clients() {
                     {paymentStatusBadge(client) && (
                       <div className="mt-1">{paymentStatusBadge(client)}</div>
                     )}
+                    {contactPreferenceBadge(client)}
                     <div className="flex flex-col gap-1 mt-2">
-                      <Button size="sm" className="w-full gap-1 text-xs bg-primary hover:bg-primary/90" onClick={() => { setSelectedClient(client); setIsManualAllocation(false); fetchClientAvailability(client.id); setIsAllocateDialogOpen(true); }}>
+                      <Button size="sm" className="w-full gap-1 text-xs bg-primary hover:bg-primary/90" onClick={() => { setSelectedClient(client); setIsManualAllocation(false); fetchClientAvailability(client.id); setIsAllocateDialogOpen(true); setSelectedOptions([]); }}>
                         <UserCheck className="h-3 w-3" /> Allocate
                       </Button>
                       {stripeEnabled && (
@@ -1534,6 +1590,8 @@ export default function Clients() {
             </div>
           </div>
 
+          {/* Columns 4-5: TPPP (single-allocation flow) */}
+          {!multiClinicianAllocationEnabled && (<>
           {/* Column 4: Allocated */}
           <div className="bg-indigo-50/50 rounded-lg p-3 min-h-[400px]">
             <div className="flex items-center justify-between mb-3">
@@ -1603,6 +1661,7 @@ export default function Clients() {
                     {paymentStatusBadge(client) && (
                       <div className="mt-1">{paymentStatusBadge(client)}</div>
                     )}
+                    {contactPreferenceBadge(client)}
                     <Button 
                       size="sm" 
                       variant="outline" 
@@ -1704,6 +1763,7 @@ export default function Clients() {
                     {paymentStatusBadge(client) && (
                       <div className="mt-1">{paymentStatusBadge(client)}</div>
                     )}
+                    {contactPreferenceBadge(client)}
                     <Button 
                       size="sm" 
                       className="w-full gap-1 text-xs mt-2 bg-green-600 hover:bg-green-700"
@@ -1724,6 +1784,191 @@ export default function Clients() {
               )}
             </div>
           </div>
+          </>)}
+
+          {/* CY&A Columns — visible only when multiClinicianAllocationEnabled */}
+          {multiClinicianAllocationEnabled && (<>
+            {/* Options Sent */}
+            <div className="bg-orange-50/50 rounded-lg p-3 min-h-[400px]">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-semibold text-orange-800 text-sm">Options Sent</h3>
+                <Badge variant="secondary" className="bg-orange-100 text-orange-700">{filteredClients.filter(c => c.status === "OptionsSent").length}</Badge>
+              </div>
+              <div className="space-y-2">
+                {filteredClients.filter(c => c.status === "OptionsSent").map(client => (
+                  <Card key={client.id} className="bg-white shadow-sm hover:shadow-md transition-shadow overflow-hidden" data-testid={`kanban-card-${client.id}`}>
+                    <CardContent className="p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-mono font-semibold text-sm">{client.displayId}</span>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="icon" className="h-6 w-6"><MoreHorizontal className="h-3 w-3" /></Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => handleOpenEditClient(client)}><Edit className="h-4 w-4 mr-2" /> Edit Details</DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>Archive/Didn't Engage</DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                      <p className="text-xs text-muted-foreground mb-2"><Clock className="h-3 w-3 inline mr-1" />{formatDateUK(client.intakeDate)}</p>
+                      {client.insurer && client.insurer !== "Private" && <Badge variant="outline" className="text-[10px] mb-2">{client.insurer}</Badge>}
+                      {contactPreferenceBadge(client)}
+                      {paymentStatusBadge(client) && <div className="mt-1">{paymentStatusBadge(client)}</div>}
+                      <p className="text-[10px] text-orange-600 mt-2 flex items-center gap-1"><Mail className="h-3 w-3" /> Options sent to client</p>
+                    </CardContent>
+                  </Card>
+                ))}
+                {filteredClients.filter(c => c.status === "OptionsSent").length === 0 && <p className="text-xs text-muted-foreground text-center py-4">No clients</p>}
+              </div>
+            </div>
+
+            {/* Option Selected */}
+            <div className="bg-teal-50/50 rounded-lg p-3 min-h-[400px]">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-semibold text-teal-800 text-sm">Option Selected</h3>
+                <Badge variant="secondary" className="bg-teal-100 text-teal-700">{filteredClients.filter(c => c.status === "OptionSelected").length}</Badge>
+              </div>
+              <div className="space-y-2">
+                {filteredClients.filter(c => c.status === "OptionSelected").map(client => (
+                  <Card key={client.id} className="bg-white shadow-sm hover:shadow-md transition-shadow overflow-hidden" data-testid={`kanban-card-${client.id}`}>
+                    <CardContent className="p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-mono font-semibold text-sm">{client.displayId}</span>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="icon" className="h-6 w-6"><MoreHorizontal className="h-3 w-3" /></Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => handleOpenEditClient(client)}><Edit className="h-4 w-4 mr-2" /> Edit Details</DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>Archive/Didn't Engage</DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                      <p className="text-xs text-muted-foreground mb-2"><Clock className="h-3 w-3 inline mr-1" />{formatDateUK(client.intakeDate)}</p>
+                      {client.insurer && client.insurer !== "Private" && <Badge variant="outline" className="text-[10px] mb-2">{client.insurer}</Badge>}
+                      {contactPreferenceBadge(client)}
+                      {paymentStatusBadge(client) && <div className="mt-1">{paymentStatusBadge(client)}</div>}
+                      <p className="text-[10px] text-teal-600 mt-2 flex items-center gap-1"><CheckCircle2 className="h-3 w-3" /> Client selected an option</p>
+                    </CardContent>
+                  </Card>
+                ))}
+                {filteredClients.filter(c => c.status === "OptionSelected").length === 0 && <p className="text-xs text-muted-foreground text-center py-4">No clients</p>}
+              </div>
+            </div>
+
+            {/* Registration Pending */}
+            <div className="bg-violet-50/50 rounded-lg p-3 min-h-[400px]">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-semibold text-violet-800 text-sm">Registration Pending</h3>
+                <Badge variant="secondary" className="bg-violet-100 text-violet-700">{filteredClients.filter(c => c.status === "RegistrationPending").length}</Badge>
+              </div>
+              <div className="space-y-2">
+                {filteredClients.filter(c => c.status === "RegistrationPending").map(client => (
+                  <Card key={client.id} className="bg-white shadow-sm hover:shadow-md transition-shadow overflow-hidden" data-testid={`kanban-card-${client.id}`}>
+                    <CardContent className="p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-mono font-semibold text-sm">{client.displayId}</span>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="icon" className="h-6 w-6"><MoreHorizontal className="h-3 w-3" /></Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => handleOpenEditClient(client)}><Edit className="h-4 w-4 mr-2" /> Edit Details</DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>Archive/Didn't Engage</DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                      <p className="text-xs text-muted-foreground mb-2"><Clock className="h-3 w-3 inline mr-1" />{formatDateUK(client.intakeDate)}</p>
+                      {client.insurer && client.insurer !== "Private" && <Badge variant="outline" className="text-[10px] mb-2">{client.insurer}</Badge>}
+                      {contactPreferenceBadge(client)}
+                      {paymentStatusBadge(client) && <div className="mt-1">{paymentStatusBadge(client)}</div>}
+                      <p className="text-[10px] text-violet-600 mt-2 flex items-center gap-1"><Clock className="h-3 w-3" /> Awaiting registration</p>
+                    </CardContent>
+                  </Card>
+                ))}
+                {filteredClients.filter(c => c.status === "RegistrationPending").length === 0 && <p className="text-xs text-muted-foreground text-center py-4">No clients</p>}
+              </div>
+            </div>
+
+            {/* Booking Confirmed */}
+            <div className="bg-green-50/50 rounded-lg p-3 min-h-[400px]">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-semibold text-green-800 text-sm">Booking Confirmed</h3>
+                <Badge variant="secondary" className="bg-green-100 text-green-700">{filteredClients.filter(c => c.status === "BookingConfirmed").length}</Badge>
+              </div>
+              <div className="space-y-2">
+                {filteredClients.filter(c => c.status === "BookingConfirmed").map(client => {
+                  const apptConfirmed = (client as any).writeuppAppointmentConfirmed === true;
+                  const dataTransferred = (client as any).writeuppDataTransferred === true;
+                  const bothTicked = apptConfirmed && dataTransferred;
+                  return (
+                    <Card key={client.id} className="bg-white shadow-sm hover:shadow-md transition-shadow overflow-hidden" data-testid={`kanban-card-${client.id}`}>
+                      <CardContent className="p-3">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="font-mono font-semibold text-sm">{client.displayId}</span>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-6 w-6"><MoreHorizontal className="h-3 w-3" /></Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => handleOpenEditClient(client)}><Edit className="h-4 w-4 mr-2" /> Edit Details</DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                className={writeuppChecklistEnabled && !bothTicked ? "text-muted-foreground" : "text-destructive"}
+                                disabled={writeuppChecklistEnabled && !bothTicked}
+                                onClick={() => { if (!writeuppChecklistEnabled || bothTicked) handleOpenArchiveDialog(client); }}
+                              >
+                                {writeuppChecklistEnabled && !bothTicked ? "Complete WriteUpp first" : "Move to Completed"}
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
+                        <p className="text-xs text-muted-foreground mb-2"><Clock className="h-3 w-3 inline mr-1" />{formatDateUK(client.intakeDate)}</p>
+                        {client.insurer && client.insurer !== "Private" && <Badge variant="outline" className="text-[10px] mb-2">{client.insurer}</Badge>}
+                        {contactPreferenceBadge(client)}
+                        {paymentStatusBadge(client) && <div className="mt-1">{paymentStatusBadge(client)}</div>}
+                        {writeuppChecklistEnabled && (
+                          <div className="mt-2 space-y-1.5 p-2 bg-green-50 border border-green-200 rounded">
+                            <p className="text-[10px] font-medium text-green-800 mb-1">WriteUpp Checklist</p>
+                            <div className="flex items-center gap-2">
+                              <Checkbox
+                                id={`writeup-appt-${client.id}`}
+                                checked={apptConfirmed}
+                                onCheckedChange={(checked) => updateClientMutation.mutate({ id: client.id, updates: { writeuppAppointmentConfirmed: !!checked } })}
+                              />
+                              <label htmlFor={`writeup-appt-${client.id}`} className="text-[10px] cursor-pointer text-green-800">Appointment confirmed in WriteUpp</label>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Checkbox
+                                id={`writeup-data-${client.id}`}
+                                checked={dataTransferred}
+                                onCheckedChange={(checked) => updateClientMutation.mutate({ id: client.id, updates: { writeuppDataTransferred: !!checked } })}
+                              />
+                              <label htmlFor={`writeup-data-${client.id}`} className="text-[10px] cursor-pointer text-green-800">Data transferred to WriteUpp</label>
+                            </div>
+                          </div>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="w-full gap-1 text-xs mt-2 border-green-300 text-green-700 hover:bg-green-50 disabled:opacity-50"
+                          disabled={writeuppChecklistEnabled && !bothTicked}
+                          onClick={() => { if (!writeuppChecklistEnabled || bothTicked) handleOpenArchiveDialog(client); }}
+                        >
+                          <CheckCircle2 className="h-3 w-3" />
+                          {writeuppChecklistEnabled && !bothTicked ? "Complete WriteUpp first" : "Move to Completed"}
+                        </Button>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+                {filteredClients.filter(c => c.status === "BookingConfirmed").length === 0 && <p className="text-xs text-muted-foreground text-center py-4">No clients</p>}
+              </div>
+            </div>
+          </>)}
         </div>
       ) : (
         /* List view for Confirmed and Archived clients */
@@ -1944,12 +2189,14 @@ export default function Clients() {
       )}
 
       {/* Allocate Dialog (from Kanban board) */}
-      <Dialog open={isAllocateDialogOpen} onOpenChange={(open) => { setIsAllocateDialogOpen(open); if (!open) { setIsManualAllocation(false); setAllocationReason(""); } }}>
+      <Dialog open={isAllocateDialogOpen} onOpenChange={(open) => { setIsAllocateDialogOpen(open); if (!open) { setIsManualAllocation(false); setAllocationReason(""); setSelectedOptions([]); } }}>
         <DialogContent className="sm:max-w-[600px] max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Allocate Clinician Slot</DialogTitle>
+            <DialogTitle>{multiClinicianAllocationEnabled ? "Send Clinician Options" : "Allocate Clinician Slot"}</DialogTitle>
             <DialogDescription>
-              Assign {selectedClient?.displayId} to an available time slot.
+              {multiClinicianAllocationEnabled
+                ? `Select up to 3 clinician/slot options to send to ${selectedClient?.displayId}. Click slots to toggle selection.`
+                : `Assign ${selectedClient?.displayId} to an available time slot.`}
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-6 py-4">
@@ -2103,13 +2350,18 @@ export default function Clients() {
                         const slotIsMatch = availMatch === true && !slot.isBooked;
                         const noMatch = availMatch === false;
                         
+                        const isSelectedForOptions = multiClinicianAllocationEnabled && selectedOptions.some(o => o.clinicianId === clinician.id && o.slotId === slot.id);
+                        // Disable booked slots always; also disable zero-capacity clinicians unless override is on
+                        const isSlotUnavailable = slot.isBooked || (!showAllClinicians && (clinician.maxNewClients ?? 0) === 0);
                         return (
                           <Button 
                             key={slot.id}
-                            variant={slot.isBooked ? "ghost" : "outline"}
-                            disabled={!showAllClinicians && (slot.isBooked || (clinician.maxNewClients ?? 0) === 0)}
+                            variant={isSelectedForOptions ? "default" : slot.isBooked ? "ghost" : "outline"}
+                            disabled={!isSelectedForOptions && isSlotUnavailable}
                             className={`justify-start h-auto py-2 px-3 text-xs relative ${
-                              !showAllClinicians && (slot.isBooked || (clinician.maxNewClients ?? 0) === 0)
+                              isSelectedForOptions
+                                ? "bg-primary text-primary-foreground border-primary ring-2 ring-primary/30"
+                                : isSlotUnavailable
                                 ? "opacity-50 cursor-not-allowed" 
                                 : isPending
                                   ? "bg-amber-50 border-amber-300 hover:border-amber-400 hover:bg-amber-100"
@@ -2120,14 +2372,23 @@ export default function Clients() {
                                       : "hover:border-primary hover:bg-primary/5"
                             }`}
                             onClick={() => {
-                              const method = isManualAllocation ? "manual" : "form";
-                              if ((slot as any).locationType === "in_person") {
-                                setIsAllocateDialogOpen(false);
-                                setInPersonWarning({ clinicianId: clinician.id, slotId: slot.id, allocationMethod: method });
+                              if (multiClinicianAllocationEnabled) {
+                                // Multi-select: toggle selection (max 3); never add unavailable slots
+                                if (isSelectedForOptions) {
+                                  setSelectedOptions(prev => prev.filter(o => !(o.clinicianId === clinician.id && o.slotId === slot.id)));
+                                } else if (!slot.isBooked && selectedOptions.length < 3) {
+                                  setSelectedOptions(prev => [...prev, { clinicianId: clinician.id, slotId: slot.id }]);
+                                }
                               } else {
-                                handleAssign(clinician.id, slot.id, method);
-                                setIsAllocateDialogOpen(false);
-                                setIsManualAllocation(false);
+                                const method = isManualAllocation ? "manual" : "form";
+                                if ((slot as any).locationType === "in_person") {
+                                  setIsAllocateDialogOpen(false);
+                                  setInPersonWarning({ clinicianId: clinician.id, slotId: slot.id, allocationMethod: method });
+                                } else {
+                                  handleAssign(clinician.id, slot.id, method);
+                                  setIsAllocateDialogOpen(false);
+                                  setIsManualAllocation(false);
+                                }
                               }
                             }}
                           >
@@ -2169,6 +2430,28 @@ export default function Clients() {
               })}
             </div>
           </div>
+          {/* CY&A: Send Options footer */}
+          {multiClinicianAllocationEnabled && (
+            <div className="border-t pt-4 flex items-center justify-between gap-4">
+              <span className="text-sm text-muted-foreground">
+                {selectedOptions.length === 0
+                  ? "Select 1–3 clinician/slot options"
+                  : `${selectedOptions.length}/3 selected`}
+              </span>
+              <Button
+                disabled={selectedOptions.length === 0 || allocateOptionsMutation.isPending}
+                onClick={() => {
+                  if (selectedClient) {
+                    allocateOptionsMutation.mutate({ clientId: selectedClient.id, selections: selectedOptions });
+                  }
+                }}
+              >
+                {allocateOptionsMutation.isPending
+                  ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Sending...</>
+                  : `Send Options (${selectedOptions.length})`}
+              </Button>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 

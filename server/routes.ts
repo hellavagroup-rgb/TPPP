@@ -22,7 +22,7 @@ import { syncAllActiveConnections } from "./gmailSync";
 import { requireTenant } from './middleware/tenant';
 import { requireSuperAdmin } from './middleware/superAdmin';
 import { db } from "./db";
-import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs, intakeMessages, gmailConnections, paymentCharges } from "@shared/schema";
+import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs, intakeMessages, gmailConnections, paymentCharges, clientClinicianOptions } from "@shared/schema";
 import { isStripeConfigured, getStripeInstance, createCheckoutSession, chargeOffSession, constructWebhookEvent } from "./stripe";
 import { encryptSecret, decryptSecret, isEncryptionConfigured } from "./encryption";
 import { getAuthUrl, exchangeCodeForTokens, syncConnection, buildRedirectUri } from "./gmailSync";
@@ -970,7 +970,11 @@ export async function registerRoutes(
   app.post("/api/clients", requireAdmin, auditLog("create", "client"), async (req, res) => {
     try {
       const validated = insertClientSchema.parse(req.body);
-      const client = await storage.createClient(validated, req.tenant?.id);
+      // CY&A: auto-set needsAdminCall when contact preference is phone
+      const clientDataToCreate = validated.contactPreference === "phone"
+        ? { ...validated, needsAdminCall: true }
+        : validated;
+      const client = await storage.createClient(clientDataToCreate, req.tenant?.id);
 
       // Send new referral notification to admins with newReferrals enabled
       try {
@@ -1208,6 +1212,88 @@ export async function registerRoutes(
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "Failed to assign clinician" });
+    }
+  });
+
+  // CY&A: Multi-clinician allocation — inserts client_clinician_options rows and holds slots
+  app.post("/api/clients/:clientId/allocate-options", requireAdmin, auditLog("assign", "client"), async (req, res) => {
+    try {
+      const { selections } = req.body;
+      // selections: [{clinicianId, slotId}, ...]
+
+      if (!Array.isArray(selections) || selections.length < 1 || selections.length > 3) {
+        return res.status(400).json({ error: "Must provide 1–3 clinician/slot selections" });
+      }
+
+      const client = await storage.getClientById(req.params.clientId);
+      if (!client) return res.status(404).json({ error: "Client not found" });
+      if (client.tenantId !== req.tenant?.id) return res.status(403).json({ error: "Access denied" });
+
+      if (!req.tenant?.multiClinicianAllocationEnabled) {
+        return res.status(400).json({ error: "Multi-clinician allocation is not enabled for this tenant" });
+      }
+
+      // Reject duplicate slotIds in the request
+      const slotIds = selections.map((s: any) => s.slotId);
+      if (new Set(slotIds).size !== slotIds.length) {
+        return res.status(400).json({ error: "Duplicate slot selections are not allowed" });
+      }
+
+      // Validate every selection: must have IDs, slot must be available, slot/clinician must belong to tenant
+      for (const sel of selections) {
+        if (!sel.clinicianId || !sel.slotId) {
+          return res.status(400).json({ error: "Each selection must have clinicianId and slotId" });
+        }
+
+        // Verify slot exists, is unbooked, belongs to this tenant, and belongs to the stated clinician
+        const [slot] = await db.select().from(timeSlots).where(eq(timeSlots.id, sel.slotId)).limit(1);
+        if (!slot) return res.status(400).json({ error: `Slot ${sel.slotId} not found` });
+        if (slot.isBooked) return res.status(400).json({ error: `Slot ${sel.slotId} is already booked` });
+        if (slot.clinicianId !== sel.clinicianId) {
+          return res.status(400).json({ error: `Slot ${sel.slotId} does not belong to clinician ${sel.clinicianId}` });
+        }
+        if (slot.tenantId && slot.tenantId !== req.tenant?.id) {
+          return res.status(403).json({ error: `Slot ${sel.slotId} does not belong to this tenant` });
+        }
+
+        // Verify clinician belongs to this tenant
+        const [clinician] = await db.select().from(clinicians).where(eq(clinicians.id, sel.clinicianId)).limit(1);
+        if (!clinician) return res.status(400).json({ error: `Clinician ${sel.clinicianId} not found` });
+        if (clinician.tenantId !== req.tenant?.id) {
+          return res.status(403).json({ error: `Clinician ${sel.clinicianId} does not belong to this tenant` });
+        }
+      }
+
+      const options = selections.map((sel: { clinicianId: string; slotId: string }) => ({
+        clientId: req.params.clientId,
+        clinicianId: sel.clinicianId,
+        slotId: sel.slotId,
+        status: "pending" as const,
+        selectionToken: crypto.randomBytes(32).toString("hex"),
+        tenantId: req.tenant!.id,
+      }));
+
+      await db.transaction(async (tx) => {
+        // Insert options rows
+        await tx.insert(clientClinicianOptions).values(options as any);
+
+        // Hold each selected slot
+        for (const sel of selections) {
+          await tx.update(timeSlots).set({ isBooked: true }).where(eq(timeSlots.id, sel.slotId));
+        }
+
+        // Move client to OptionsSent
+        await tx.update(clients).set({
+          status: "OptionsSent",
+          updatedAt: new Date(),
+        }).where(eq(clients.id, req.params.clientId));
+      });
+
+      const updated = await storage.getClientById(req.params.clientId);
+      res.json(updated);
+    } catch (error) {
+      console.error("Failed to allocate options:", error);
+      res.status(500).json({ error: "Failed to allocate options" });
     }
   });
 

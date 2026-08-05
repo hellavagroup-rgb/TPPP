@@ -1,5 +1,5 @@
 import { 
-  users, clients, clinicians, timeSlots, formTemplates, formSubmissions, tasks, auditLogs, emailTemplates, inviteTokens, passwordResetTokens, nonEngagementCategories, customInsurers, paymentCharges, intakeMessages, tenants,
+  users, clients, clinicians, timeSlots, formTemplates, formSubmissions, tasks, auditLogs, emailTemplates, inviteTokens, passwordResetTokens, nonEngagementCategories, customInsurers, paymentCharges, intakeMessages, tenants, clientClinicianOptions,
   type User, type InsertUser, type SafeUser,
   type Tenant,
   type Client, type InsertClient,
@@ -15,6 +15,7 @@ import {
   type NonEngagementCategory, type InsertNonEngagementCategory,
   type CustomInsurer, type InsertCustomInsurer,
   type PaymentCharge, type InsertPaymentCharge,
+  type ClientClinicianOption, type InsertClientClinicianOption,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, or, desc, sql, isNull, inArray } from "drizzle-orm";
@@ -114,6 +115,10 @@ export interface IStorage {
   // ============ CUSTOM INSURERS ============
   getCustomInsurers(tenantId?: string | null): Promise<CustomInsurer[]>;
   addCustomInsurer(name: string, tenantId?: string | null): Promise<CustomInsurer>;
+
+  // ============ CLIENT CLINICIAN OPTIONS (CY&A) ============
+  createClientClinicianOptions(options: InsertClientClinicianOption[]): Promise<ClientClinicianOption[]>;
+  getClientClinicianOptions(clientId: string): Promise<ClientClinicianOption[]>;
 
   // ============ PAYMENT CHARGES ============
   createPaymentCharge(charge: InsertPaymentCharge): Promise<PaymentCharge>;
@@ -1013,6 +1018,16 @@ export class DatabaseStorage implements IStorage {
   async updatePaymentCharge(id: string, updates: Partial<InsertPaymentCharge>): Promise<PaymentCharge | undefined> {
     const [result] = await db.update(paymentCharges).set(updates).where(eq(paymentCharges.id, id)).returning();
     return result || undefined;
+  }
+
+  // ============ CLIENT CLINICIAN OPTIONS (CY&A) ============
+  async createClientClinicianOptions(options: InsertClientClinicianOption[]): Promise<ClientClinicianOption[]> {
+    if (options.length === 0) return [];
+    return await db.insert(clientClinicianOptions).values(options as any).returning();
+  }
+
+  async getClientClinicianOptions(clientId: string): Promise<ClientClinicianOption[]> {
+    return await db.select().from(clientClinicianOptions).where(eq(clientClinicianOptions.clientId, clientId));
   }
 
   async getClientsWithFailedPayments(tenantId?: string | null): Promise<{ clientId: string; failureReason: string | null }[]> {

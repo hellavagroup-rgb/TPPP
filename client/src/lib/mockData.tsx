@@ -3,7 +3,7 @@ import { format, subDays, addDays, isSameDay, parseISO, startOfWeek, endOfWeek, 
 import { useAppData } from "./useAppData";
 
 // Types
-export type ClientStatus = "New" | "Forms Sent" | "Forms Completed" | "Assigned" | "Scheduled" | "Waitlist";
+export type ClientStatus = "New" | "Forms Sent" | "Forms Completed" | "Assigned" | "Scheduled" | "Waitlist" | "OptionsSent" | "OptionSelected" | "RegistrationPending" | "BookingConfirmed";
 
 export interface Client {
   id: string; // Internal ID

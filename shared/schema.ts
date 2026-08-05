@@ -33,6 +33,13 @@ export const tenants = pgTable("tenants", {
     showTherapyMode?: boolean;
   }>(),
   defaultLocationType: text("default_location_type").default("online"),
+  // CY&A feature flags — all default false so existing tenants are unaffected
+  contactPreferenceEnabled: boolean("contact_preference_enabled").default(false),
+  multiClinicianAllocationEnabled: boolean("multi_clinician_allocation_enabled").default(false),
+  autoAllocationEmailEnabled: boolean("auto_allocation_email_enabled").default(false),
+  registrationFormEnabled: boolean("registration_form_enabled").default(false),
+  bookingConfirmedEmailEnabled: boolean("booking_confirmed_email_enabled").default(false),
+  writeuppChecklistEnabled: boolean("writeup_checklist_enabled").default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -80,6 +87,7 @@ export const clinicians = pgTable("clinicians", {
   allocateForBupa: boolean("allocate_for_bupa").default(false),
   tier: text("tier", { enum: ["High", "Mid", "Low"] }),
   therapyMode: text("therapy_mode"),
+  zoomLink: text("zoom_link"),
   isActive: boolean("is_active").default(true).notNull(),
   lastUpdatedAvailability: timestamp("last_updated_availability"),
   sessionRatePence: integer("session_rate_pence"), // Session rate in pence (e.g. 15000 = £150)
@@ -145,7 +153,7 @@ export const clients = pgTable("clients", {
   // Clinical Data
   referralSource: text("referral_source"),
   insurer: text("insurer"),
-  status: text("status", { enum: ["New", "Forms Sent", "Forms Completed", "Assigned", "AwaitingConfirmation", "Scheduled", "Waitlist"] }).notNull().default("New"),
+  status: text("status", { enum: ["New", "Forms Sent", "Forms Completed", "Assigned", "AwaitingConfirmation", "Scheduled", "Waitlist", "OptionsSent", "OptionSelected", "RegistrationPending", "BookingConfirmed"] }).notNull().default("New"),
   presentingIssues: text("presenting_issues").array().default(sql`ARRAY[]::text[]`),
   notes: text("notes"), // Clinical notes - restricted access
   // Assignment
@@ -170,6 +178,13 @@ export const clients = pgTable("clients", {
   stripePaymentMethodId: text("stripe_payment_method_id"), // Stripe PaymentMethod ID (pm_...)
   stripeCheckoutUrl: text("stripe_checkout_url"), // Checkout URL sent to client
   paymentStatus: text("payment_status", { enum: ["none", "setup_pending", "active"] }).default("none"),
+  // CY&A fields
+  contactPreference: text("contact_preference", { enum: ["email", "phone"] }),
+  needsAdminCall: boolean("needs_admin_call").default(false),
+  writeuppAppointmentConfirmed: boolean("writeup_appointment_confirmed").default(false),
+  writeuppDataTransferred: boolean("writeup_data_transferred").default(false),
+  paymentType: text("payment_type", { enum: ["self_pay", "insurer"] }),
+  insurerDetails: text("insurer_details"),
   // Timestamps
   intakeDate: timestamp("intake_date").defaultNow().notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -411,3 +426,34 @@ export const passwordResetTokens = pgTable("password_reset_tokens", {
 export const insertPasswordResetTokenSchema = createInsertSchema(passwordResetTokens).omit({ id: true, createdAt: true, usedAt: true });
 export type InsertPasswordResetToken = z.infer<typeof insertPasswordResetTokenSchema>;
 export type PasswordResetToken = typeof passwordResetTokens.$inferSelect;
+
+// ============ CLIENT CLINICIAN OPTIONS (CY&A multi-clinician allocation) ============
+export const clientClinicianOptions = pgTable("client_clinician_options", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  clientId: varchar("client_id").references(() => clients.id).notNull(),
+  clinicianId: varchar("clinician_id").references(() => clinicians.id).notNull(),
+  slotId: varchar("slot_id").references(() => timeSlots.id),
+  status: text("status", { enum: ["pending", "selected", "declined"] }).notNull().default("pending"),
+  selectionToken: text("selection_token").notNull().unique(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  tenantId: varchar("tenant_id").references(() => tenants.id).notNull(),
+});
+
+export const clientClinicianOptionsRelations = relations(clientClinicianOptions, ({ one }) => ({
+  client: one(clients, {
+    fields: [clientClinicianOptions.clientId],
+    references: [clients.id],
+  }),
+  clinician: one(clinicians, {
+    fields: [clientClinicianOptions.clinicianId],
+    references: [clinicians.id],
+  }),
+  slot: one(timeSlots, {
+    fields: [clientClinicianOptions.slotId],
+    references: [timeSlots.id],
+  }),
+}));
+
+export const insertClientClinicianOptionSchema = createInsertSchema(clientClinicianOptions).omit({ id: true, createdAt: true });
+export type InsertClientClinicianOption = z.infer<typeof insertClientClinicianOptionSchema>;
+export type ClientClinicianOption = typeof clientClinicianOptions.$inferSelect;

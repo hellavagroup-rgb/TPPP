@@ -3544,6 +3544,13 @@ export async function registerRoutes(
         dataExportEnabled: z.boolean().optional(),
         nonEngagementEnabled: z.boolean().optional(),
         gmailIntakeEnabled: z.boolean().optional(),
+        // CY&A feature flags
+        contactPreferenceEnabled: z.boolean().optional(),
+        multiClinicianAllocationEnabled: z.boolean().optional(),
+        autoAllocationEmailEnabled: z.boolean().optional(),
+        registrationFormEnabled: z.boolean().optional(),
+        bookingConfirmedEmailEnabled: z.boolean().optional(),
+        writeuppChecklistEnabled: z.boolean().optional(),
         clinicianProfileConfig: z.object({
           showTier: z.boolean().optional(),
           showTherapyMode: z.boolean().optional(),

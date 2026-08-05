@@ -134,6 +134,13 @@ interface TenantSummary {
   dataExportEnabled: boolean;
   nonEngagementEnabled: boolean;
   gmailIntakeEnabled: boolean;
+  // CY&A flags
+  contactPreferenceEnabled: boolean;
+  multiClinicianAllocationEnabled: boolean;
+  autoAllocationEmailEnabled: boolean;
+  registrationFormEnabled: boolean;
+  bookingConfirmedEmailEnabled: boolean;
+  writeuppChecklistEnabled: boolean;
   clinicianProfileConfig: { showTier?: boolean; showTherapyMode?: boolean } | null;
   createdAt: string;
 }
@@ -437,7 +444,7 @@ function BrandingTab({ tenant, adminKey, onSaved }: { tenant: TenantDetail; admi
 
 // ─── Features Tab ─────────────────────────────────────────────────────────────
 
-const FEATURE_FLAGS: { key: keyof TenantDetail; label: string; description: string }[] = [
+const FEATURE_FLAGS: { key: keyof TenantDetail; label: string; description: string; group?: string }[] = [
   { key: "paymentsEnabled", label: "Payments", description: "Payments dashboard/nav link (revenue & charge history). Payment-link generation on client records works independently, whenever a Stripe key is configured on the Stripe tab." },
   { key: "tasksEnabled", label: "Tasks", description: "Administrative task management" },
   { key: "analyticsEnabled", label: "Analytics", description: "Practice analytics dashboard" },
@@ -446,6 +453,13 @@ const FEATURE_FLAGS: { key: keyof TenantDetail; label: string; description: stri
   { key: "dataExportEnabled", label: "Data Export", description: "CSV/XLSX data exports" },
   { key: "nonEngagementEnabled", label: "Non-Engagement Tracking", description: "Archive reason categories for non-engaging clients" },
   { key: "gmailIntakeEnabled", label: "Intake Inbox / Gmail", description: "Gmail integration for intake email processing" },
+  // CY&A flags
+  { key: "contactPreferenceEnabled", label: "Contact Preference (CY&A)", description: "Captures client contact preference (email/phone) during intake", group: "cya" },
+  { key: "multiClinicianAllocationEnabled", label: "Multi-Clinician Allocation (CY&A)", description: "Enables offering multiple clinician/slot options to a client", group: "cya" },
+  { key: "autoAllocationEmailEnabled", label: "Auto Allocation Email (CY&A)", description: "Automatically triggers the options email on allocation", group: "cya" },
+  { key: "registrationFormEnabled", label: "Registration Form (CY&A)", description: "Enables the registration form + T&C step before booking is confirmed", group: "cya" },
+  { key: "bookingConfirmedEmailEnabled", label: "Booking Confirmed Email (CY&A)", description: "Automatically sends booking confirmation email on confirmation", group: "cya" },
+  { key: "writeuppChecklistEnabled", label: "WriteUpp Checklist (CY&A)", description: "Shows WriteUpp checklist fields on confirmed client records", group: "cya" },
 ];
 
 const CLINICIAN_PROFILE_FIELDS: { key: keyof NonNullable<TenantSummary["clinicianProfileConfig"]>; label: string; description: string; defaultOn: boolean }[] = [

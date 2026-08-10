@@ -64,6 +64,7 @@ import {
   AlertCircle,
   ChevronDown,
   ChevronRight,
+  X,
 } from "lucide-react";
 import { useState } from "react";
 import { useLocation } from "wouter";
@@ -760,6 +761,18 @@ export default function Clients() {
         {needsCall && (
           <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-red-100 text-red-700 px-1.5 py-0.5 rounded">
             <AlertCircle className="h-2.5 w-2.5" /> Needs Call
+            {isAdmin && (
+              <button
+                title="Mark as called"
+                className="ml-0.5 rounded hover:bg-red-200 transition-colors p-0.5"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  updateClientMutation.mutate({ id: client.id, updates: { needsAdminCall: false } });
+                }}
+              >
+                <X className="h-2.5 w-2.5" />
+              </button>
+            )}
           </span>
         )}
       </div>

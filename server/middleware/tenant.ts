@@ -21,6 +21,8 @@ export async function requireTenant(req: any, res: any, next: any) {
     req.path.startsWith('/auth/reset-password/') ||
     req.path.startsWith('/admin-users/invite/') ||
     req.path.startsWith('/clients/public/') ||
+    req.path.startsWith('/public/options/') ||
+    req.path.startsWith('/public/register/') ||
     (req.path.startsWith('/forms/') && !req.user?.id) ||
     req.path.startsWith('/form-submissions') ||
     req.path.startsWith('/form-drafts') ||

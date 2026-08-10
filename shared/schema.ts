@@ -185,6 +185,8 @@ export const clients = pgTable("clients", {
   writeuppDataTransferred: boolean("writeup_data_transferred").default(false),
   paymentType: text("payment_type", { enum: ["self_pay", "insurer"] }),
   insurerDetails: text("insurer_details"),
+  // CY&A registration token (for the registration form portal link)
+  registrationToken: text("registration_token"),
   // Timestamps
   intakeDate: timestamp("intake_date").defaultNow().notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),

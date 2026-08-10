@@ -25,6 +25,8 @@ import PaymentSuccess from "@/pages/payment-success";
 import PaymentCancel from "@/pages/payment-cancel";
 import Payments from "@/pages/payments";
 import SuperAdmin from "@/pages/super-admin";
+import OptionSelection from "@/pages/option-selection";
+import RegistrationForm from "@/pages/registration-form";
 import { useEffect } from "react";
 
 function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
@@ -91,6 +93,22 @@ function Router() {
 
   if (location.startsWith("/payment-cancel")) {
       return <PaymentCancel />;
+  }
+
+  if (location.startsWith("/options/")) {
+      return (
+        <Switch>
+          <Route path="/options/:selectionToken" component={OptionSelection} />
+        </Switch>
+      );
+  }
+
+  if (location.startsWith("/register/")) {
+      return (
+        <Switch>
+          <Route path="/register/:clientId/:registrationToken" component={RegistrationForm} />
+        </Switch>
+      );
   }
 
   if (location.startsWith("/super-admin")) {

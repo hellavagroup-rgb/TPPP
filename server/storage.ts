@@ -119,6 +119,7 @@ export interface IStorage {
   // ============ CLIENT CLINICIAN OPTIONS (CY&A) ============
   createClientClinicianOptions(options: InsertClientClinicianOption[]): Promise<ClientClinicianOption[]>;
   getClientClinicianOptions(clientId: string): Promise<ClientClinicianOption[]>;
+  getClientClinicianOptionByToken(token: string): Promise<ClientClinicianOption | undefined>;
 
   // ============ PAYMENT CHARGES ============
   createPaymentCharge(charge: InsertPaymentCharge): Promise<PaymentCharge>;
@@ -1028,6 +1029,11 @@ export class DatabaseStorage implements IStorage {
 
   async getClientClinicianOptions(clientId: string): Promise<ClientClinicianOption[]> {
     return await db.select().from(clientClinicianOptions).where(eq(clientClinicianOptions.clientId, clientId));
+  }
+
+  async getClientClinicianOptionByToken(token: string): Promise<ClientClinicianOption | undefined> {
+    const [row] = await db.select().from(clientClinicianOptions).where(eq(clientClinicianOptions.selectionToken, token)).limit(1);
+    return row;
   }
 
   async getClientsWithFailedPayments(tenantId?: string | null): Promise<{ clientId: string; failureReason: string | null }[]> {

@@ -1477,6 +1477,237 @@ export async function registerRoutes(
     }
   });
 
+  // ============ CY&A PUBLIC PORTAL ENDPOINTS ============
+
+  // GET /api/public/options/:selectionToken — return all options for a client identified by any of their selectionTokens
+  app.get("/api/public/options/:selectionToken", async (req, res) => {
+    try {
+      const optionRow = await storage.getClientClinicianOptionByToken(req.params.selectionToken);
+      if (!optionRow) return res.status(404).json({ error: "Options not found" });
+
+      const client = await storage.getClientById(optionRow.clientId);
+      if (!client) return res.status(404).json({ error: "Client not found" });
+
+      const tenant = await storage.getTenantById(optionRow.tenantId).catch(() => undefined);
+      const allOptions = await storage.getClientClinicianOptions(optionRow.clientId);
+
+      const optionsWithDetails = await Promise.all(
+        allOptions.map(async (opt) => {
+          const [clinicianRow] = await db.select().from(clinicians).where(eq(clinicians.id, opt.clinicianId)).limit(1);
+          const clinicianUser = clinicianRow?.userId
+            ? await db.select().from(users).where(eq(users.id, clinicianRow.userId)).limit(1).then(r => r[0])
+            : undefined;
+          const slotRow = opt.slotId
+            ? await db.select().from(timeSlots).where(eq(timeSlots.id, opt.slotId)).limit(1).then(r => r[0])
+            : undefined;
+          return {
+            id: opt.id,
+            status: opt.status,
+            clinicianName: clinicianUser?.name || "Clinician",
+            slot: slotRow
+              ? { day: slotRow.day, startTime: slotRow.startTime, endTime: slotRow.endTime, locationType: slotRow.locationType }
+              : null,
+          };
+        })
+      );
+
+      res.json({
+        options: optionsWithDetails,
+        clientStatus: client.status,
+        tenantName: tenant?.name || "",
+        primaryColor: tenant?.primaryColor || null,
+      });
+    } catch (error) {
+      console.error("Failed to fetch options:", error);
+      res.status(500).json({ error: "Failed to fetch options" });
+    }
+  });
+
+  // POST /api/public/options/:selectionToken/select — select one option or decline all
+  app.post("/api/public/options/:selectionToken/select", async (req, res) => {
+    try {
+      const { clinicianOptionId, decline } = req.body;
+      const optionRow = await storage.getClientClinicianOptionByToken(req.params.selectionToken);
+      if (!optionRow) return res.status(404).json({ error: "Options not found" });
+
+      const client = await storage.getClientById(optionRow.clientId);
+      if (!client) return res.status(404).json({ error: "Client not found" });
+
+      // State gate: only allow action when client is still in OptionsSent (i.e. not yet actioned)
+      if (client.status !== "OptionsSent") {
+        return res.status(409).json({ error: "Selection has already been submitted" });
+      }
+
+      const allOptions = await storage.getClientClinicianOptions(optionRow.clientId);
+
+      // Guard against replayed tokens when all options are already resolved
+      const alreadyActioned = allOptions.every(o => o.status !== "pending");
+      if (alreadyActioned) {
+        return res.status(409).json({ error: "Selection has already been submitted" });
+      }
+
+      if (decline) {
+        // Decline all — release all held slots, flag needsAdminCall
+        await db.transaction(async (tx) => {
+          for (const opt of allOptions) {
+            await tx.update(clientClinicianOptions)
+              .set({ status: "declined" })
+              .where(eq(clientClinicianOptions.id, opt.id));
+            if (opt.slotId) {
+              await tx.update(timeSlots).set({ isBooked: false }).where(eq(timeSlots.id, opt.slotId));
+            }
+          }
+          await tx.update(clients)
+            .set({ needsAdminCall: true, updatedAt: new Date() })
+            .where(eq(clients.id, optionRow.clientId));
+        });
+        return res.json({ declined: true });
+      }
+
+      if (!clinicianOptionId) return res.status(400).json({ error: "Missing clinicianOptionId" });
+      const selectedOption = allOptions.find(o => o.id === clinicianOptionId);
+      if (!selectedOption) return res.status(400).json({ error: "Option not found" });
+
+      const registrationToken = crypto.randomBytes(32).toString("hex");
+
+      await db.transaction(async (tx) => {
+        for (const opt of allOptions) {
+          if (opt.id === clinicianOptionId) {
+            await tx.update(clientClinicianOptions).set({ status: "selected" }).where(eq(clientClinicianOptions.id, opt.id));
+          } else {
+            await tx.update(clientClinicianOptions).set({ status: "declined" }).where(eq(clientClinicianOptions.id, opt.id));
+            if (opt.slotId) {
+              await tx.update(timeSlots).set({ isBooked: false }).where(eq(timeSlots.id, opt.slotId));
+            }
+          }
+        }
+        await tx.update(clients).set({
+          status: "OptionSelected",
+          assignedClinicianId: selectedOption.clinicianId,
+          assignedSlotId: selectedOption.slotId || null,
+          registrationToken,
+          updatedAt: new Date(),
+        }).where(eq(clients.id, optionRow.clientId));
+      });
+
+      res.json({
+        selected: true,
+        registrationUrl: `/register/${optionRow.clientId}/${registrationToken}`,
+      });
+    } catch (error) {
+      console.error("Failed to process option selection:", error);
+      res.status(500).json({ error: "Failed to process selection" });
+    }
+  });
+
+  // GET /api/public/register/:clientId/:registrationToken — return registration form data
+  app.get("/api/public/register/:clientId/:registrationToken", async (req, res) => {
+    try {
+      const client = await storage.getClientById(req.params.clientId);
+      if (!client) return res.status(404).json({ error: "Client not found" });
+      if (client.registrationToken !== req.params.registrationToken) return res.status(403).json({ error: "Invalid token" });
+
+      const tenant = client.tenantId ? await storage.getTenantById(client.tenantId).catch(() => undefined) : undefined;
+      const tcTemplate = tenant ? await storage.getEmailTemplateByKey("terms_and_conditions", tenant.id) : null;
+      const termsText = tcTemplate?.bodyText || "By proceeding you agree to our standard terms and conditions for therapy services. Sessions must be cancelled with at least 24 hours notice. Payment is due at the time of session booking.";
+
+      res.json({
+        tenantName: tenant?.name || "",
+        primaryColor: tenant?.primaryColor || null,
+        termsText,
+        agreedRatePence: client.agreedRatePence,
+        paymentsEnabled: tenant?.paymentsEnabled ?? true,
+        // Only treat as fully submitted once payment is confirmed — RegistrationPending
+        // means the client may have cancelled out of Stripe and needs to retry payment.
+        alreadySubmitted: client.status === "BookingConfirmed",
+        // Pre-fill form data if already saved (e.g. returning after Stripe cancel)
+        savedPaymentType: client.paymentType || null,
+        savedInsurerDetails: client.insurerDetails || null,
+      });
+    } catch (error) {
+      console.error("Failed to fetch registration data:", error);
+      res.status(500).json({ error: "Failed to fetch registration data" });
+    }
+  });
+
+  // POST /api/public/register/:clientId/:registrationToken — submit registration form
+  app.post("/api/public/register/:clientId/:registrationToken", async (req, res) => {
+    try {
+      const { paymentType, insurerDetails } = req.body;
+
+      // Validate paymentType against allowlist
+      const ALLOWED_PAYMENT_TYPES = ["self_pay", "insurer"] as const;
+      type AllowedPaymentType = typeof ALLOWED_PAYMENT_TYPES[number];
+      if (!paymentType || !ALLOWED_PAYMENT_TYPES.includes(paymentType as AllowedPaymentType)) {
+        return res.status(400).json({ error: "Payment type must be 'self_pay' or 'insurer'" });
+      }
+      const validatedPaymentType = paymentType as AllowedPaymentType;
+
+      const client = await storage.getClientById(req.params.clientId);
+      if (!client) return res.status(404).json({ error: "Client not found" });
+      if (client.registrationToken !== req.params.registrationToken) return res.status(403).json({ error: "Invalid token" });
+
+      // State gate: allow submission from OptionSelected (first attempt) and RegistrationPending
+      // (returning after a Stripe cancel). Block once payment is confirmed (BookingConfirmed).
+      const allowedRegistrationStatuses = ["OptionSelected", "RegistrationPending"];
+      if (!allowedRegistrationStatuses.includes(client.status)) {
+        return res.status(409).json({ error: "Registration has already been completed" });
+      }
+
+      await storage.updateClient(req.params.clientId, {
+        paymentType: validatedPaymentType,
+        insurerDetails: validatedPaymentType === "insurer" ? (insurerDetails || null) : null,
+        status: "RegistrationPending",
+      });
+
+      const tenant = client.tenantId ? await storage.getTenantById(client.tenantId).catch(() => undefined) : undefined;
+
+      // Create Stripe checkout session when payments are enabled, rate is set, and client is self-pay
+      if (validatedPaymentType === "self_pay" && tenant?.paymentsEnabled && client.agreedRatePence && client.agreedRatePence > 0) {
+        let tenantStripeKey: string | null = null;
+        if (tenant.stripeSecretKey) {
+          try { tenantStripeKey = decryptSecret(tenant.stripeSecretKey); } catch { /* key decryption failed — Stripe will reject below */ }
+        }
+
+        const protocol = (req.headers["x-forwarded-proto"] as string) || "https";
+        const host = (req.headers.host as string) || "localhost:5000";
+        const baseUrl = `${protocol}://${host}`;
+
+        let session: { url: string; customerId: string; sessionId: string } | null = null;
+        try {
+          session = await createCheckoutSession({
+            clientId: client.id,
+            clientEmail: client.email,
+            clientDisplayId: client.displayId,
+            amountPence: client.agreedRatePence,
+            successUrl: `${baseUrl}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+            cancelUrl: `${baseUrl}/register/${client.id}/${req.params.registrationToken}`,
+            tenantId: client.tenantId,
+            tenantStripeKey,
+            practiceName: tenant?.name || null,
+          });
+        } catch (stripeErr) {
+          console.error("Stripe session creation failed:", stripeErr);
+        }
+
+        if (!session) {
+          // Revert status so the client can retry
+          await storage.updateClient(req.params.clientId, { status: "OptionSelected" });
+          return res.status(502).json({ error: "Payment setup is unavailable. Please try again or contact the practice." });
+        }
+
+        await storage.updateClient(client.id, { stripeCheckoutUrl: session.url });
+        return res.json({ checkoutUrl: session.url });
+      }
+
+      // Insurer or payments not enabled — registration complete without Stripe
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Failed to submit registration:", error);
+      res.status(500).json({ error: "Failed to submit registration" });
+    }
+  });
+
   // Get existing draft for a client/form (public)
   app.get("/api/form-drafts/:clientId/:formId", async (req, res) => {
     try {
@@ -3101,6 +3332,15 @@ export async function registerRoutes(
                     notes: "Initial session payment via Checkout",
                     tenantId: client.tenantId,
                   });
+
+                  // CY&A: if this tenant has bookingConfirmedEmailEnabled, advance client to BookingConfirmed
+                  const paymentTenant = client.tenantId ? await storage.getTenantById(client.tenantId).catch(() => undefined) : undefined;
+                  if (paymentTenant?.bookingConfirmedEmailEnabled) {
+                    await db.update(clients).set({
+                      status: "BookingConfirmed",
+                      updatedAt: new Date(),
+                    }).where(eq(clients.id, clientId));
+                  }
                 }
               }
             }

@@ -3077,8 +3077,19 @@ export async function registerRoutes(
       res.json({ success: true, client: newClient });
     } catch (error: any) {
       console.error("[convert-to-client] error:", error?.code, error?.message, error);
-      if (error?.code === "23505") {
-        return res.status(409).json({ error: "A client with this email address already exists" });
+      // Drizzle wraps the underlying postgres error — the code may be on error.cause
+      // rather than the top-level error object, so check both and fall back to the
+      // message string (which Drizzle includes verbatim from postgres).
+      const pgCode = error?.code ?? error?.cause?.code;
+      const errMsg: string = error?.message ?? error?.cause?.message ?? "";
+      const isDuplicate = pgCode === "23505" || errMsg.includes("23505") || errMsg.includes("unique") || errMsg.includes("duplicate");
+      if (isDuplicate) {
+        const onEmail = errMsg.includes("email") || errMsg.includes("clients_email");
+        return res.status(409).json({
+          error: onEmail
+            ? "A client with this email address already exists. If this is the same person, locate their existing record and manually link the intake message."
+            : "A client with these details already exists.",
+        });
       }
       res.status(500).json({ error: "Failed to convert intake message to client" });
     }

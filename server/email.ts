@@ -74,11 +74,8 @@ function wrapInHtmlTemplate(text: string, headerTitle?: string, practiceName?: s
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <style>
-      body { margin:0; padding:0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:#ffffff; }
-    </style>
   </head>
-  <body style="margin:0;padding:0;background:#ffffff;">
+  <body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
     <div style="max-width:600px;margin:0 auto;padding:20px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#333333;line-height:1.6;">
       ${headerTitle ? `
       <div style="background-color:${solidBg};color:${textColor};padding:30px;text-align:center;border-radius:8px 8px 0 0;">
@@ -167,7 +164,6 @@ export async function generateFormInviteEmail(formName: string, formUrl: string,
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <style>body{margin:0;padding:0;}</style>
   </head>
   <body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#333333;line-height:1.6;">
     <div style="max-width:600px;margin:0 auto;padding:20px;">

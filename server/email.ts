@@ -54,6 +54,15 @@ function hexLuminance(hex: string): number {
   return 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b);
 }
 
+// Returns a solid hex colour suitable for backgrounds/buttons in email clients.
+// Email clients (especially Outlook) do not support CSS gradients, so we always
+// return a plain hex value here. The gradient is only kept for the CSS `background`
+// property used in the web preview if ever needed outside email.
+function solidHeaderColor(primaryColor?: string | null): string {
+  if (primaryColor && /^#[0-9a-fA-F]{6}$/.test(primaryColor)) return primaryColor;
+  return '#667eea'; // default brand blue
+}
+
 function headerStyles(primaryColor?: string | null): { bg: string; textColor: string } {
   if (!primaryColor || !/^#[0-9a-fA-F]{6}$/.test(primaryColor)) {
     return { bg: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', textColor: '#ffffff' };
@@ -66,35 +75,34 @@ function headerStyles(primaryColor?: string | null): { bg: string; textColor: st
 
 function wrapInHtmlTemplate(text: string, headerTitle?: string, practiceName?: string, primaryColor?: string | null): string {
   const footer = practiceName || GENERIC_PRACTICE_NAME;
-  const lines = text.split('\n').map(line => line ? `<p>${linkifyUrls(line)}</p>` : '<br>').join('\n');
-  const { bg, textColor } = headerStyles(primaryColor);
-  return `
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <meta charset="utf-8">
-        <style>
-          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }
-          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-          .header { background: ${bg}; color: ${textColor}; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
-          .content { background: #f8f9fa; padding: 30px; border-radius: 0 0 8px 8px; }
-          .button { display: inline-block; background: ${bg}; color: ${textColor}; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 20px 0; }
-          .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          ${headerTitle ? `<div class="header"><h1>${headerTitle}</h1></div>` : ''}
-          <div class="content">
-            ${lines}
-          </div>
-          <div class="footer">
-            <p>${footer}</p>
-          </div>
-        </div>
-      </body>
-    </html>
-  `;
+  const lines = text.split('\n').map(line => line ? `<p style="margin:0 0 12px 0;">${linkifyUrls(line)}</p>` : '<br>').join('\n');
+  const solidBg = solidHeaderColor(primaryColor);
+  const textColor = hexLuminance(solidBg) > 0.35 ? '#1a1a1a' : '#ffffff';
+
+  return `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>
+      body { margin:0; padding:0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:#ffffff; }
+    </style>
+  </head>
+  <body style="margin:0;padding:0;background:#ffffff;">
+    <div style="max-width:600px;margin:0 auto;padding:20px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#333333;line-height:1.6;">
+      ${headerTitle ? `
+      <div style="background-color:${solidBg};color:${textColor};padding:30px;text-align:center;border-radius:8px 8px 0 0;">
+        <h1 style="margin:0;font-size:24px;">${headerTitle}</h1>
+      </div>` : ''}
+      <div style="background-color:#f8f9fa;padding:30px;border-radius:${headerTitle ? '0 0 8px 8px' : '8px'};">
+        ${lines}
+      </div>
+      <div style="text-align:center;color:#666666;font-size:12px;margin-top:20px;">
+        <p style="margin:0;">${footer}</p>
+      </div>
+    </div>
+  </body>
+</html>`;
 }
 
 function replacePlaceholders(text: string, placeholders: Record<string, string>): string {
@@ -158,48 +166,45 @@ export async function generateFormInviteEmail(formName: string, formUrl: string,
     };
   }
 
+  const solidBg = solidHeaderColor(tenant?.primaryColor);
+  const solidText = hexLuminance(solidBg) > 0.35 ? '#1a1a1a' : '#ffffff';
+
   return {
     to: '',
     subject: `Please Complete: ${formName} - ${practiceName}`,
-    html: `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="utf-8">
-          <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }
-            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-            .header { background: ${headerStyles(tenant?.primaryColor).bg}; color: ${headerStyles(tenant?.primaryColor).textColor}; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
-            .content { background: #f8f9fa; padding: 30px; border-radius: 0 0 8px 8px; }
-            .button { display: inline-block; background: ${headerStyles(tenant?.primaryColor).bg}; color: ${headerStyles(tenant?.primaryColor).textColor}; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 20px 0; }
-            .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <div class="header">
-              <h1>${practiceName}</h1>
-            </div>
-            <div class="content">
-              <p>Dear Client,</p>
-              <p>We have a form for you to complete as part of your intake process:</p>
-              <p><strong>${formName}</strong></p>
-              <p>Please click the button below to access and complete the form:</p>
-              <p style="text-align: center;">
-                <a href="${formUrl}" class="button">Complete Form</a>
-              </p>
-              <p>If the button doesn't work, copy and paste this link into your browser:</p>
-              <p style="word-break: break-all; font-size: 12px; color: #666;">${formUrl}</p>
-              <p>If you have any questions, please don't hesitate to contact us.</p>
-              <p>Best regards,<br>${practiceName} Team</p>
-            </div>
-            <div class="footer">
-              <p>This email was sent by ${practiceName}. Please do not reply directly to this email.</p>
-            </div>
-          </div>
-        </body>
-      </html>
-    `,
+    html: `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>body{margin:0;padding:0;}</style>
+  </head>
+  <body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#333333;line-height:1.6;">
+    <div style="max-width:600px;margin:0 auto;padding:20px;">
+      <div style="background-color:${solidBg};color:${solidText};padding:30px;text-align:center;border-radius:8px 8px 0 0;">
+        <h1 style="margin:0;font-size:24px;">${practiceName}</h1>
+      </div>
+      <div style="background-color:#f8f9fa;padding:30px;border-radius:0 0 8px 8px;">
+        <p style="margin:0 0 12px 0;">Dear Client,</p>
+        <p style="margin:0 0 12px 0;">We have a form for you to complete as part of your intake process:</p>
+        <p style="margin:0 0 12px 0;"><strong>${formName}</strong></p>
+        <p style="margin:0 0 12px 0;">Please click the button below to access and complete the form:</p>
+        <p style="text-align:center;margin:24px 0;">
+          <a href="${formUrl}" style="display:inline-block;background-color:${solidBg};color:${solidText};padding:14px 28px;text-decoration:none;border-radius:6px;font-weight:600;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">Complete Form</a>
+        </p>
+        <p style="margin:0 0 8px 0;">If the button doesn't work, copy and paste this link into your browser:</p>
+        <p style="margin:0 0 12px 0;word-break:break-all;font-size:12px;">
+          <a href="${formUrl}" style="color:${solidBg};">${formUrl}</a>
+        </p>
+        <p style="margin:0 0 12px 0;">If you have any questions, please don't hesitate to contact us.</p>
+        <p style="margin:0;">Best regards,<br>${practiceName} Team</p>
+      </div>
+      <div style="text-align:center;color:#666666;font-size:12px;margin-top:20px;">
+        <p style="margin:0;">This email was sent by ${practiceName}. Please do not reply directly to this email.</p>
+      </div>
+    </div>
+  </body>
+</html>`,
     text: `Dear Client,\n\nPlease complete the following form: ${formName}\n\nAccess it here: ${formUrl}\n\nBest regards,\n${practiceName} Team`,
     from: buildFromAddress(tenant),
   };

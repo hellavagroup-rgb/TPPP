@@ -1532,7 +1532,7 @@ export async function registerRoutes(
       if (client.email) {
         try {
           const completionTenant = client.tenantId ? await storage.getTenantById(client.tenantId) : null;
-          const tcC = completionTenant ? { id: completionTenant.id, name: completionTenant.name, fromEmail: completionTenant.fromEmail } : undefined;
+          const tcC = completionTenant ? { id: completionTenant.id, name: completionTenant.name, fromEmail: completionTenant.fromEmail, primaryColor: completionTenant.primaryColor } : undefined;
           const emailOptions = await generateFormCompletionEmail(tcC);
           emailOptions.to = client.email;
           await sendEmail(emailOptions);

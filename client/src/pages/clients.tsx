@@ -2097,6 +2097,9 @@ export default function Clients() {
                 {paymentStatusBadge(client) && (
                   <div className="mt-2">{paymentStatusBadge(client)}</div>
                 )}
+                {contactPreferenceBadge(client) && (
+                  <div className="mt-2">{contactPreferenceBadge(client)}</div>
+                )}
                 {showArchivedState && ((client as any).archiveCategory || (client as any).archiveReason) && (
                   <div className="mt-2 p-2 bg-slate-50 rounded border border-slate-200">
                     {(client as any).archiveCategory && (

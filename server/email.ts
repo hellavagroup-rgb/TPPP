@@ -63,16 +63,6 @@ function solidHeaderColor(primaryColor?: string | null): string {
   return '#667eea'; // default brand blue
 }
 
-function headerStyles(primaryColor?: string | null): { bg: string; textColor: string } {
-  if (!primaryColor || !/^#[0-9a-fA-F]{6}$/.test(primaryColor)) {
-    return { bg: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', textColor: '#ffffff' };
-  }
-  return {
-    bg: primaryColor,
-    textColor: hexLuminance(primaryColor) > 0.35 ? '#1a1a1a' : '#ffffff',
-  };
-}
-
 function wrapInHtmlTemplate(text: string, headerTitle?: string, practiceName?: string, primaryColor?: string | null): string {
   const footer = practiceName || GENERIC_PRACTICE_NAME;
   const lines = text.split('\n').map(line => line ? `<p style="margin:0 0 12px 0;">${linkifyUrls(line)}</p>` : '<br>').join('\n');
@@ -227,48 +217,41 @@ export async function generatePasswordResetEmail(userName: string, resetUrl: str
     };
   }
 
+  const solidBg = solidHeaderColor(tenant?.primaryColor);
+  const solidText = hexLuminance(solidBg) > 0.35 ? '#1a1a1a' : '#ffffff';
+
   return {
     to: '',
     subject: `Password Reset - ${practiceName}`,
-    html: `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="utf-8">
-          <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }
-            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-            .header { background: ${headerStyles(tenant?.primaryColor).bg}; color: ${headerStyles(tenant?.primaryColor).textColor}; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
-            .content { background: #f8f9fa; padding: 30px; border-radius: 0 0 8px 8px; }
-            .button { display: inline-block; background: ${headerStyles(tenant?.primaryColor).bg}; color: ${headerStyles(tenant?.primaryColor).textColor}; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 20px 0; }
-            .warning { background: #fff3cd; border: 1px solid #ffc107; padding: 12px; border-radius: 4px; margin: 15px 0; }
-            .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <div class="header">
-              <h1>Password Reset</h1>
-            </div>
-            <div class="content">
-              <p>Hello ${userName},</p>
-              <p>We received a request to reset your password. Click the button below to set a new password:</p>
-              <p style="text-align: center;">
-                <a href="${resetUrl}" class="button">Reset Password</a>
-              </p>
-              <div class="warning">
-                <strong>Security Notice:</strong> This link will expire in 1 hour. If you didn't request this reset, please ignore this email.
-              </div>
-              <p>If the button doesn't work, copy and paste this link into your browser:</p>
-              <p style="word-break: break-all; font-size: 12px; color: #666;">${resetUrl}</p>
-            </div>
-            <div class="footer">
-              <p>${practiceName}</p>
-            </div>
-          </div>
-        </body>
-      </html>
-    `,
+    html: `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+  </head>
+  <body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#333333;line-height:1.6;">
+    <div style="max-width:600px;margin:0 auto;padding:20px;">
+      <div style="background-color:${solidBg};color:${solidText};padding:30px;text-align:center;border-radius:8px 8px 0 0;">
+        <h1 style="margin:0;font-size:24px;">Password Reset</h1>
+      </div>
+      <div style="background-color:#f8f9fa;padding:30px;border-radius:0 0 8px 8px;">
+        <p style="margin:0 0 12px 0;">Hello ${userName},</p>
+        <p style="margin:0 0 12px 0;">We received a request to reset your password. Click the button below to set a new password:</p>
+        <p style="text-align:center;margin:24px 0;">
+          <a href="${resetUrl}" style="display:inline-block;background-color:${solidBg};color:${solidText};padding:14px 28px;text-decoration:none;border-radius:6px;font-weight:600;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">Reset Password</a>
+        </p>
+        <div style="background:#fff3cd;border:1px solid #ffc107;padding:12px;border-radius:4px;margin:15px 0;">
+          <strong>Security Notice:</strong> This link will expire in 1 hour. If you didn't request this reset, please ignore this email.
+        </div>
+        <p style="margin:0 0 8px 0;">If the button doesn't work, copy and paste this link into your browser:</p>
+        <p style="margin:0 0 12px 0;word-break:break-all;font-size:12px;color:#666666;">${resetUrl}</p>
+      </div>
+      <div style="text-align:center;color:#666666;font-size:12px;margin-top:20px;">
+        <p style="margin:0;">${practiceName}</p>
+      </div>
+    </div>
+  </body>
+</html>`,
     text: `Hello ${userName},\n\nWe received a request to reset your password.\n\nReset your password here: ${resetUrl}\n\nThis link will expire in 1 hour. If you didn't request this reset, please ignore this email.\n\n${practiceName}`,
     from: buildFromAddress(tenant),
   };
@@ -297,46 +280,39 @@ export async function generateTaskReminderEmail(assigneeName: string, taskTitle:
     };
   }
 
+  const solidBg = solidHeaderColor(tenant?.primaryColor);
+  const solidText = hexLuminance(solidBg) > 0.35 ? '#1a1a1a' : '#ffffff';
+
   return {
     to: '',
     subject: `Task Reminder: ${taskTitle} - Due ${dueDate}`,
-    html: `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="utf-8">
-          <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }
-            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-            .header { background: ${headerStyles(tenant?.primaryColor).bg}; color: ${headerStyles(tenant?.primaryColor).textColor}; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
-            .content { background: #f8f9fa; padding: 30px; border-radius: 0 0 8px 8px; }
-            .task-box { background: white; border: 1px solid #ddd; border-radius: 6px; padding: 20px; margin: 15px 0; }
-            .due-date { color: #dc3545; font-weight: bold; }
-            .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <div class="header">
-              <h1>Task Reminder</h1>
-            </div>
-            <div class="content">
-              <p>Hello ${assigneeName},</p>
-              <p>This is a reminder about an upcoming task:</p>
-              <div class="task-box">
-                <h3 style="margin-top: 0;">${taskTitle}</h3>
-                <p>${taskDescription}</p>
-                <p class="due-date">Due: ${dueDate}</p>
-              </div>
-              <p>Please log in to the practice management system to view and complete this task.</p>
-            </div>
-            <div class="footer">
-              <p>${practiceName}</p>
-            </div>
-          </div>
-        </body>
-      </html>
-    `,
+    html: `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+  </head>
+  <body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#333333;line-height:1.6;">
+    <div style="max-width:600px;margin:0 auto;padding:20px;">
+      <div style="background-color:${solidBg};color:${solidText};padding:30px;text-align:center;border-radius:8px 8px 0 0;">
+        <h1 style="margin:0;font-size:24px;">Task Reminder</h1>
+      </div>
+      <div style="background-color:#f8f9fa;padding:30px;border-radius:0 0 8px 8px;">
+        <p style="margin:0 0 12px 0;">Hello ${assigneeName},</p>
+        <p style="margin:0 0 12px 0;">This is a reminder about an upcoming task:</p>
+        <div style="background:#ffffff;border:1px solid #dddddd;border-radius:6px;padding:20px;margin:15px 0;">
+          <h3 style="margin:0 0 12px 0;">${taskTitle}</h3>
+          <p style="margin:0 0 12px 0;">${taskDescription}</p>
+          <p style="margin:0;color:#dc3545;font-weight:bold;">Due: ${dueDate}</p>
+        </div>
+        <p style="margin:0 0 12px 0;">Please log in to the practice management system to view and complete this task.</p>
+      </div>
+      <div style="text-align:center;color:#666666;font-size:12px;margin-top:20px;">
+        <p style="margin:0;">${practiceName}</p>
+      </div>
+    </div>
+  </body>
+</html>`,
     text: `Hello ${assigneeName},\n\nThis is a reminder about an upcoming task:\n\nTask: ${taskTitle}\nDescription: ${taskDescription}\nDue: ${dueDate}\n\nPlease log in to complete this task.\n\n${practiceName}`,
     from: buildFromAddress(tenant),
   };
@@ -359,47 +335,41 @@ export async function generateAvailabilityReminderEmail(clinicianName: string, l
     };
   }
 
+  const solidBg = solidHeaderColor(tenant?.primaryColor);
+  const solidText = hexLuminance(solidBg) > 0.35 ? '#1a1a1a' : '#ffffff';
+
   return {
     to: '',
     subject: `Please Update Your Availability - ${practiceName}`,
-    html: `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="utf-8">
-          <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }
-            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-            .header { background: ${headerStyles(tenant?.primaryColor).bg}; color: ${headerStyles(tenant?.primaryColor).textColor}; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
-            .content { background: #f8f9fa; padding: 30px; border-radius: 0 0 8px 8px; }
-            .button { display: inline-block; background: ${headerStyles(tenant?.primaryColor).bg}; color: ${headerStyles(tenant?.primaryColor).textColor}; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 20px 0; }
-            .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <div class="header">
-              <h1>Availability Update Request</h1>
-            </div>
-            <div class="content">
-              <p>Hello ${clinicianName},</p>
-              <p>This is a friendly reminder to update your availability in the practice management system.</p>
-              <p>Keeping your availability current helps us efficiently allocate new clients and ensures accurate capacity planning.</p>
-              <p style="text-align: center;">
-                <a href="${loginUrl}" class="button">Update My Availability</a>
-              </p>
-              <p>If the button doesn't work, copy and paste this link into your browser:</p>
-              <p style="word-break: break-all; font-size: 12px; color: #666;">${loginUrl}</p>
-              <p>Thank you for your cooperation!</p>
-              <p>Best regards,<br>${practiceName}</p>
-            </div>
-            <div class="footer">
-              <p>${practiceName}</p>
-            </div>
-          </div>
-        </body>
-      </html>
-    `,
+    html: `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+  </head>
+  <body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#333333;line-height:1.6;">
+    <div style="max-width:600px;margin:0 auto;padding:20px;">
+      <div style="background-color:${solidBg};color:${solidText};padding:30px;text-align:center;border-radius:8px 8px 0 0;">
+        <h1 style="margin:0;font-size:24px;">Availability Update Request</h1>
+      </div>
+      <div style="background-color:#f8f9fa;padding:30px;border-radius:0 0 8px 8px;">
+        <p style="margin:0 0 12px 0;">Hello ${clinicianName},</p>
+        <p style="margin:0 0 12px 0;">This is a friendly reminder to update your availability in the practice management system.</p>
+        <p style="margin:0 0 12px 0;">Keeping your availability current helps us efficiently allocate new clients and ensures accurate capacity planning.</p>
+        <p style="text-align:center;margin:24px 0;">
+          <a href="${loginUrl}" style="display:inline-block;background-color:${solidBg};color:${solidText};padding:14px 28px;text-decoration:none;border-radius:6px;font-weight:600;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">Update My Availability</a>
+        </p>
+        <p style="margin:0 0 8px 0;">If the button doesn't work, copy and paste this link into your browser:</p>
+        <p style="margin:0 0 12px 0;word-break:break-all;font-size:12px;color:#666666;">${loginUrl}</p>
+        <p style="margin:0 0 12px 0;">Thank you for your cooperation!</p>
+        <p style="margin:0;">Best regards,<br>${practiceName}</p>
+      </div>
+      <div style="text-align:center;color:#666666;font-size:12px;margin-top:20px;">
+        <p style="margin:0;">${practiceName}</p>
+      </div>
+    </div>
+  </body>
+</html>`,
     text: `Hello ${clinicianName},\n\nThis is a friendly reminder to update your availability in the practice management system.\n\nPlease log in at: ${loginUrl}\n\nKeeping your availability current helps us efficiently allocate new clients.\n\nThank you!\n${practiceName}`,
     from: buildFromAddress(tenant),
   };
@@ -661,27 +631,29 @@ ${practiceName} Team`;
 
   const finalSubject = subject.replace(/\{\{practice_name\}\}/g, practiceName);
 
+  const solidBg = solidHeaderColor(tenant?.primaryColor);
+  const solidText = hexLuminance(solidBg) > 0.35 ? '#1a1a1a' : '#ffffff';
+
   const html = `<!DOCTYPE html>
 <html>
   <head>
     <meta charset="utf-8">
-    <style>
-      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }
-      .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-      .header { background: ${headerStyles(tenant?.primaryColor).bg}; color: ${headerStyles(tenant?.primaryColor).textColor}; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
-      .content { background: #f8f9fa; padding: 30px; border-radius: 0 0 8px 8px; }
-      .pay-button { display: inline-block; background: ${headerStyles(tenant?.primaryColor).bg}; color: ${headerStyles(tenant?.primaryColor).textColor}; padding: 14px 28px; border-radius: 6px; text-decoration: none; font-weight: bold; margin: 20px 0; }
-      .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
-    </style>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
   </head>
-  <body>
-    <div class="container">
-      <div class="header"><h1>Complete Your Session Payment</h1></div>
-      <div class="content">
-        <p>${bodyText.replace(/\n/g, '<br>')}</p>
-        <p style="text-align:center;"><a href="${paymentUrl}" class="pay-button">Pay Securely Now</a></p>
+  <body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#333333;line-height:1.6;">
+    <div style="max-width:600px;margin:0 auto;padding:20px;">
+      <div style="background-color:${solidBg};color:${solidText};padding:30px;text-align:center;border-radius:8px 8px 0 0;">
+        <h1 style="margin:0;font-size:24px;">Complete Your Session Payment</h1>
       </div>
-      <div class="footer">${practiceName}</div>
+      <div style="background-color:#f8f9fa;padding:30px;border-radius:0 0 8px 8px;">
+        <p style="margin:0 0 12px 0;">${bodyText.replace(/\n/g, '<br>')}</p>
+        <p style="text-align:center;margin:24px 0;">
+          <a href="${paymentUrl}" style="display:inline-block;background-color:${solidBg};color:${solidText};padding:14px 28px;border-radius:6px;text-decoration:none;font-weight:bold;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">Pay Securely Now</a>
+        </p>
+      </div>
+      <div style="text-align:center;color:#666666;font-size:12px;margin-top:20px;">
+        <p style="margin:0;">${practiceName}</p>
+      </div>
     </div>
   </body>
 </html>`;
@@ -788,28 +760,24 @@ export function generatePaymentFailureEmail(clientDisplayId: string, clientName:
 <html>
   <head>
     <meta charset="utf-8">
-    <style>
-      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }
-      .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-      .header { background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
-      .content { background: #f8f9fa; padding: 30px; border-radius: 0 0 8px 8px; }
-      .detail-row { margin: 8px 0; }
-      .label { font-weight: bold; }
-      .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
-    </style>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
   </head>
-  <body>
-    <div class="container">
-      <div class="header"><h1>Payment Failed</h1></div>
-      <div class="content">
-        <p>A payment has failed for a client and may require your attention.</p>
-        <div class="detail-row"><span class="label">Client ID:</span> ${clientDisplayId}</div>
-        <div class="detail-row"><span class="label">Client Name:</span> ${clientName}</div>
-        <div class="detail-row"><span class="label">Amount:</span> £${amountPounds}</div>
-        <div class="detail-row"><span class="label">Failure Reason:</span> ${failureReason}</div>
-        <p>Please log in to the practice management system to review this client's payment status and take action if required.</p>
+  <body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#333333;line-height:1.6;">
+    <div style="max-width:600px;margin:0 auto;padding:20px;">
+      <div style="background-color:#e53e3e;color:#ffffff;padding:30px;text-align:center;border-radius:8px 8px 0 0;">
+        <h1 style="margin:0;font-size:24px;">Payment Failed</h1>
       </div>
-      <div class="footer">${practiceName}</div>
+      <div style="background-color:#f8f9fa;padding:30px;border-radius:0 0 8px 8px;">
+        <p style="margin:0 0 12px 0;">A payment has failed for a client and may require your attention.</p>
+        <div style="margin:8px 0;"><span style="font-weight:bold;">Client ID:</span> ${clientDisplayId}</div>
+        <div style="margin:8px 0;"><span style="font-weight:bold;">Client Name:</span> ${clientName}</div>
+        <div style="margin:8px 0;"><span style="font-weight:bold;">Amount:</span> £${amountPounds}</div>
+        <div style="margin:8px 0;"><span style="font-weight:bold;">Failure Reason:</span> ${failureReason}</div>
+        <p style="margin:12px 0 0 0;">Please log in to the practice management system to review this client's payment status and take action if required.</p>
+      </div>
+      <div style="text-align:center;color:#666666;font-size:12px;margin-top:20px;">
+        <p style="margin:0;">${practiceName}</p>
+      </div>
     </div>
   </body>
 </html>`;

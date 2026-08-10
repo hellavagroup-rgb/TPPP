@@ -14,7 +14,7 @@ import {
   type InsertFormTemplate
 } from "@shared/schema";
 import { z } from "zod";
-import { sendEmail, buildFromAddress, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail, generateClinicianWelcomeEmail, generateAdminInviteEmail, getFormCompletionPageContent, GENERIC_PRACTICE_NAME } from "./email";
+import { sendEmail, buildFromAddress, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail, generateClinicianWelcomeEmail, generateAdminInviteEmail, generateAllocationOptionsEmail, generateBookingConfirmedEmail, getFormCompletionPageContent, GENERIC_PRACTICE_NAME } from "./email";
 import { forceReseedDatabase } from "./seed";
 import { seedDemoData } from "./seedDemo";
 import { parseIntakeEmailBody } from "./intakeParser";
@@ -1164,6 +1164,33 @@ export async function registerRoutes(
         }
       }
 
+      // CY&A: auto-send booking confirmed email when manually advancing to BookingConfirmed
+      if (req.body.status === "BookingConfirmed" && oldStatus !== "BookingConfirmed" && req.tenant?.bookingConfirmedEmailEnabled && updated.email) {
+        try {
+          const confirmedClinician = updated.assignedClinicianId
+            ? await db.select().from(clinicians).where(eq(clinicians.id, updated.assignedClinicianId)).limit(1).then(r => r[0])
+            : undefined;
+          const clinicianUser = confirmedClinician?.userId
+            ? await db.select({ name: users.name }).from(users).where(eq(users.id, confirmedClinician.userId)).limit(1).then(r => r[0])
+            : undefined;
+          const slotRow = updated.assignedSlotId
+            ? await db.select().from(timeSlots).where(eq(timeSlots.id, updated.assignedSlotId)).limit(1).then(r => r[0])
+            : undefined;
+          const tcBook = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor } : undefined;
+          const bookEmail = await generateBookingConfirmedEmail({
+            clinicianName: clinicianUser?.name || 'Your Clinician',
+            day: slotRow?.day || null,
+            startTime: slotRow?.startTime || '',
+            endTime: slotRow?.endTime || '',
+            zoomLink: confirmedClinician?.zoomLink || null,
+          }, tcBook);
+          await sendEmail({ ...bookEmail, to: updated.email });
+          console.log(`Booking confirmed email sent to client ${req.params.id} (manual advance)`);
+        } catch (bookEmailErr) {
+          console.error('Failed to send booking confirmed email (manual advance):', bookEmailErr);
+        }
+      }
+
       // Send waitlist update notification if status changed
       if (req.body.status && oldStatus && req.body.status !== oldStatus) {
         try {
@@ -1291,6 +1318,48 @@ export async function registerRoutes(
       });
 
       const updated = await storage.getClientById(req.params.clientId);
+
+      // Auto-send allocation email if enabled
+      if (req.tenant?.autoAllocationEmailEnabled && updated?.email) {
+        try {
+          const allOptions = await storage.getClientClinicianOptions(req.params.clientId);
+          const optionDetails = await Promise.all(
+            allOptions.map(async (opt) => {
+              const [clinRow] = await db.select().from(clinicians).where(eq(clinicians.id, opt.clinicianId)).limit(1);
+              const clinUser = clinRow?.userId
+                ? await db.select({ name: users.name }).from(users).where(eq(users.id, clinRow.userId)).limit(1).then(r => r[0])
+                : undefined;
+              const slotRow = opt.slotId
+                ? await db.select().from(timeSlots).where(eq(timeSlots.id, opt.slotId)).limit(1).then(r => r[0])
+                : undefined;
+              return {
+                clinicianName: clinUser?.name || 'Clinician',
+                day: slotRow?.day || null,
+                startTime: slotRow?.startTime || '',
+                endTime: slotRow?.endTime || '',
+                selectionToken: opt.selectionToken,
+                locationType: slotRow?.locationType || null,
+              };
+            })
+          );
+          // Use the first option's token as the portal entry point (any token gets all options)
+          const firstToken = allOptions[0]?.selectionToken;
+          const appBase = process.env.APP_BASE_URL;
+          if (!appBase || !firstToken) {
+            console.warn(`Allocation email skipped: APP_BASE_URL not set or no selection token available for client ${req.params.clientId}`);
+            // Skip email — do not fall back to Host header (bearer-token disclosure risk)
+          } else {
+            const portalUrl = `${appBase}/options/${firstToken}`;
+            const tcAlloc = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor } : undefined;
+            const allocEmail = await generateAllocationOptionsEmail(optionDetails, portalUrl, tcAlloc);
+            await sendEmail({ ...allocEmail, to: updated.email });
+            console.log(`Allocation options email sent to client ${req.params.clientId}`);
+          }
+        } catch (emailErr) {
+          console.error('Failed to send allocation options email:', emailErr);
+        }
+      }
+
       res.json(updated);
     } catch (error) {
       console.error("Failed to allocate options:", error);
@@ -1700,7 +1769,36 @@ export async function registerRoutes(
         return res.json({ checkoutUrl: session.url });
       }
 
-      // Insurer or payments not enabled — registration complete without Stripe
+      // Insurer or payments not enabled — advance directly to BookingConfirmed
+      await storage.updateClient(req.params.clientId, { status: "BookingConfirmed" });
+
+      // Send booking confirmed email if the tenant flag is on
+      if (tenant?.bookingConfirmedEmailEnabled && client.email) {
+        try {
+          const confirmedClinician = client.assignedClinicianId
+            ? await db.select().from(clinicians).where(eq(clinicians.id, client.assignedClinicianId)).limit(1).then(r => r[0])
+            : undefined;
+          const clinicianUser = confirmedClinician?.userId
+            ? await db.select({ name: users.name }).from(users).where(eq(users.id, confirmedClinician.userId)).limit(1).then(r => r[0])
+            : undefined;
+          const slotRow = client.assignedSlotId
+            ? await db.select().from(timeSlots).where(eq(timeSlots.id, client.assignedSlotId)).limit(1).then(r => r[0])
+            : undefined;
+          const tcBook = tenant ? { id: tenant.id, name: tenant.name, fromEmail: tenant.fromEmail, primaryColor: tenant.primaryColor } : undefined;
+          const bookEmail = await generateBookingConfirmedEmail({
+            clinicianName: clinicianUser?.name || 'Your Clinician',
+            day: slotRow?.day || null,
+            startTime: slotRow?.startTime || '',
+            endTime: slotRow?.endTime || '',
+            zoomLink: confirmedClinician?.zoomLink || null,
+          }, tcBook);
+          await sendEmail({ ...bookEmail, to: client.email });
+          console.log(`Booking confirmed email sent to client ${req.params.clientId} (non-Stripe registration)`);
+        } catch (bookEmailErr) {
+          console.error('Failed to send booking confirmed email (non-Stripe registration):', bookEmailErr);
+        }
+      }
+
       res.json({ success: true });
     } catch (error) {
       console.error("Failed to submit registration:", error);
@@ -3296,52 +3394,77 @@ export async function registerRoutes(
           : null;
 
         if (!existingCharge) {
-          // Get the payment intent to find the payment method
+          // Validate tenant ownership before any mutation
+          const clientForUpdate = await storage.getClientById(clientId);
+          if (!clientForUpdate) return res.json({ received: true });
+          if (clientForUpdate.tenantId !== metaTenantId) {
+            console.error(`Webhook: tenant mismatch for client ${clientId}`);
+            return res.json({ received: true });
+          }
+
+          const client = clientForUpdate;
           const paymentIntentId = session.payment_intent;
+
+          // Persist paymentStatus = active; opportunistically save payment method if retrievable
+          const clientUpdate: Record<string, unknown> = { paymentStatus: "active", updatedAt: new Date() };
           if (paymentIntentId) {
-            const stripeInstance = getStripeInstance(tenantStripeKey);
-            if (stripeInstance) {
-              const pi = await stripeInstance.paymentIntents.retrieve(paymentIntentId);
-              const paymentMethodId = typeof pi.payment_method === "string" ? pi.payment_method : pi.payment_method?.id;
+            try {
+              const stripeInstance = getStripeInstance(tenantStripeKey);
+              if (stripeInstance) {
+                const pi = await stripeInstance.paymentIntents.retrieve(paymentIntentId);
+                const paymentMethodId = typeof pi.payment_method === "string" ? pi.payment_method : pi.payment_method?.id;
+                if (paymentMethodId) clientUpdate.stripePaymentMethodId = paymentMethodId;
+              }
+            } catch (pmErr) {
+              console.error("Webhook: failed to retrieve payment method:", pmErr);
+            }
+          }
+          await db.update(clients).set(clientUpdate as any).where(eq(clients.id, clientId));
 
-              if (paymentMethodId) {
-                // Validate tenant ownership before mutating
-                const clientForUpdate = await storage.getClientById(clientId);
-                if (!clientForUpdate) {
-                  return res.json({ received: true });
-                }
-                if (clientForUpdate.tenantId !== metaTenantId) {
-                  console.error(`Webhook: tenant mismatch for client ${clientId}`);
-                  return res.json({ received: true });
-                }
+          // Record the initial charge (idempotent — existingCharge was null above)
+          if (paymentIntentId) {
+            await storage.createPaymentCharge({
+              clientId,
+              amountPence: session.amount_total,
+              stripePaymentIntentId: paymentIntentId,
+              status: "succeeded",
+              notes: "Initial session payment via Checkout",
+              tenantId: client.tenantId,
+            });
+          }
 
-                await db.update(clients).set({
-                  stripePaymentMethodId: paymentMethodId,
-                  paymentStatus: "active",
-                  updatedAt: new Date(),
-                }).where(eq(clients.id, clientId));
+          // CY&A: advance to BookingConfirmed when client came through the CY&A registration flow
+          const paymentTenant = client.tenantId ? await storage.getTenantById(client.tenantId).catch(() => undefined) : undefined;
+          if (client.status === "RegistrationPending") {
+            await db.update(clients).set({
+              status: "BookingConfirmed",
+              updatedAt: new Date(),
+            }).where(eq(clients.id, clientId));
 
-                // Record the initial charge (idempotent — checked above)
-                const client = clientForUpdate;
-                if (client) {
-                  await storage.createPaymentCharge({
-                    clientId,
-                    amountPence: session.amount_total,
-                    stripePaymentIntentId: paymentIntentId,
-                    status: "succeeded",
-                    notes: "Initial session payment via Checkout",
-                    tenantId: client.tenantId,
-                  });
-
-                  // CY&A: if this tenant has bookingConfirmedEmailEnabled, advance client to BookingConfirmed
-                  const paymentTenant = client.tenantId ? await storage.getTenantById(client.tenantId).catch(() => undefined) : undefined;
-                  if (paymentTenant?.bookingConfirmedEmailEnabled) {
-                    await db.update(clients).set({
-                      status: "BookingConfirmed",
-                      updatedAt: new Date(),
-                    }).where(eq(clients.id, clientId));
-                  }
-                }
+            // Send booking confirmed email if the tenant flag is on
+            if (paymentTenant?.bookingConfirmedEmailEnabled && client.email) {
+              try {
+                const confirmedClinician = client.assignedClinicianId
+                  ? await db.select().from(clinicians).where(eq(clinicians.id, client.assignedClinicianId)).limit(1).then(r => r[0])
+                  : undefined;
+                const clinicianUser = confirmedClinician?.userId
+                  ? await db.select({ name: users.name }).from(users).where(eq(users.id, confirmedClinician.userId)).limit(1).then(r => r[0])
+                  : undefined;
+                const slotRow = client.assignedSlotId
+                  ? await db.select().from(timeSlots).where(eq(timeSlots.id, client.assignedSlotId)).limit(1).then(r => r[0])
+                  : undefined;
+                const tcBook = paymentTenant ? { id: paymentTenant.id, name: paymentTenant.name, fromEmail: paymentTenant.fromEmail, primaryColor: paymentTenant.primaryColor } : undefined;
+                const bookEmail = await generateBookingConfirmedEmail({
+                  clinicianName: clinicianUser?.name || 'Your Clinician',
+                  day: slotRow?.day || null,
+                  startTime: slotRow?.startTime || '',
+                  endTime: slotRow?.endTime || '',
+                  zoomLink: confirmedClinician?.zoomLink || null,
+                }, tcBook);
+                await sendEmail({ ...bookEmail, to: client.email });
+                console.log(`Booking confirmed email sent to client ${clientId}`);
+              } catch (bookEmailErr) {
+                console.error('Failed to send booking confirmed email (Stripe webhook):', bookEmailErr);
               }
             }
           }

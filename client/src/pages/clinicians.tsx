@@ -205,6 +205,7 @@ export default function Clinicians() {
       isActive: clinician.isActive !== false,
       email: clinician.email || "",
       sessionRatePence: clinician.sessionRatePence ?? null,
+      zoomLink: clinician.zoomLink || "",
     });
     setEditRateStr(clinician.sessionRatePence != null ? String(clinician.sessionRatePence / 100) : "");
     setIsEditOpen(true);
@@ -240,6 +241,7 @@ export default function Clinicians() {
     if (editedClinician.isActive !== undefined) updates.isActive = editedClinician.isActive;
     if (editedClinician.email !== undefined) updates.email = editedClinician.email;
     if (editedClinician.sessionRatePence !== undefined) updates.sessionRatePence = editedClinician.sessionRatePence;
+    if (editedClinician.zoomLink !== undefined) updates.zoomLink = editedClinician.zoomLink;
     
     updateClinicianMutation.mutate({
       id: selectedClinician.id,
@@ -645,6 +647,18 @@ export default function Clinicians() {
                   />
                   <Label htmlFor="bupa" className="font-medium cursor-pointer">Allocate for Bupa</Label>
                 </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Zoom Link</Label>
+                <Input
+                  type="url"
+                  value={editedClinician.zoomLink || ""}
+                  onChange={(e) => setEditedClinician({...editedClinician, zoomLink: e.target.value})}
+                  placeholder="https://zoom.us/j/..."
+                  data-testid="input-zoom-link"
+                />
+                <p className="text-[10px] text-muted-foreground">Personal Zoom link sent to clients in booking confirmation emails.</p>
               </div>
 
               <div className="flex items-center justify-between border p-3 rounded-md bg-amber-50/50">

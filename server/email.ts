@@ -466,6 +466,133 @@ export async function generateNewReferralEmail(clientDisplayId: string, clientNa
   };
 }
 
+// ============ CY&A EMAIL TEMPLATES ============
+
+export interface AllocationOption {
+  clinicianName: string;
+  day: string | null;
+  startTime: string;
+  endTime: string;
+  selectionToken: string;
+  locationType?: string | null;
+}
+
+export async function generateAllocationOptionsEmail(
+  options: AllocationOption[],
+  portalUrl: string,
+  tenant?: TenantContext
+): Promise<EmailOptions> {
+  const practiceName = tenant?.name || GENERIC_PRACTICE_NAME;
+  const storedTemplate = await getStoredTemplate('allocation_options', tenant?.id);
+
+  const optionsList = options.map((opt, i) => {
+    const modeLabel = opt.locationType === 'in_person' ? ' (In Person)' : ' (Online)';
+    const slot = opt.day
+      ? `${opt.day} ${opt.startTime}–${opt.endTime}${modeLabel}`
+      : `${opt.startTime}–${opt.endTime}${modeLabel}`;
+    return `Option ${i + 1}: ${slot}`;
+  }).join('\n');
+
+  if (storedTemplate) {
+    const bodyText = replacePlaceholders(storedTemplate.bodyText, {
+      options_list: optionsList,
+      portal_link: portalUrl,
+      practice_name: practiceName,
+    });
+    const subject = replacePlaceholders(storedTemplate.subject, { practice_name: practiceName });
+    return {
+      to: '',
+      subject,
+      html: wrapInHtmlTemplate(bodyText, 'Your Match Options', practiceName, tenant?.primaryColor),
+      text: bodyText,
+      from: buildFromAddress(tenant),
+    };
+  }
+
+  const defaultBody = `We are pleased to let you know that we have found a match for you.
+
+Please review your appointment options below and select the one that works best for you:
+
+${optionsList}
+
+To view full details and make your selection, please visit the link below:
+
+${portalUrl}
+
+If none of these options suit you, you can also decline and our team will be in touch to find an alternative.
+
+Warm regards,
+${practiceName} Team`;
+
+  return {
+    to: '',
+    subject: `Your Match Options - ${practiceName}`,
+    html: wrapInHtmlTemplate(defaultBody, 'Your Match Options', practiceName, tenant?.primaryColor),
+    text: defaultBody,
+    from: buildFromAddress(tenant),
+  };
+}
+
+export interface BookingConfirmedDetails {
+  clinicianName: string;
+  day: string | null;
+  startTime: string;
+  endTime: string;
+  zoomLink?: string | null;
+}
+
+export async function generateBookingConfirmedEmail(
+  details: BookingConfirmedDetails,
+  tenant?: TenantContext
+): Promise<EmailOptions> {
+  const practiceName = tenant?.name || GENERIC_PRACTICE_NAME;
+  const storedTemplate = await getStoredTemplate('booking_confirmed', tenant?.id);
+
+  const slotDisplay = details.day
+    ? `${details.day} ${details.startTime}–${details.endTime}`
+    : `${details.startTime}–${details.endTime}`;
+
+  if (storedTemplate) {
+    const bodyText = replacePlaceholders(storedTemplate.bodyText, {
+      clinician_name: details.clinicianName,
+      appointment_time: slotDisplay,
+      zoom_link: details.zoomLink || 'To be provided by your clinician',
+      practice_name: practiceName,
+    });
+    const subject = replacePlaceholders(storedTemplate.subject, { practice_name: practiceName });
+    return {
+      to: '',
+      subject,
+      html: wrapInHtmlTemplate(bodyText, 'Booking Confirmed', practiceName, tenant?.primaryColor),
+      text: bodyText,
+      from: buildFromAddress(tenant),
+    };
+  }
+
+  const zoomSection = details.zoomLink
+    ? `\nJoin your session here: ${details.zoomLink}\n`
+    : '';
+
+  const defaultBody = `Your booking is confirmed.
+
+Appointment Details:
+Clinician: ${details.clinicianName}
+Time: ${slotDisplay}
+${zoomSection}
+If you have any questions or need to make changes, please don't hesitate to contact us.
+
+Warm regards,
+${practiceName} Team`;
+
+  return {
+    to: '',
+    subject: `Booking Confirmed - ${practiceName}`,
+    html: wrapInHtmlTemplate(defaultBody, 'Booking Confirmed', practiceName, tenant?.primaryColor),
+    text: defaultBody,
+    from: buildFromAddress(tenant),
+  };
+}
+
 export async function generateWaitlistUpdateEmail(clientDisplayId: string, clientName: string, oldStatus: string, newStatus: string, tenant?: TenantContext): Promise<EmailOptions> {
   const practiceName = tenant?.name || GENERIC_PRACTICE_NAME;
   const storedTemplate = await getStoredTemplate('waitlist_update', tenant?.id);

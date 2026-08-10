@@ -65,6 +65,9 @@ export async function comparePasswords(
 declare global {
   namespace Express {
     interface User extends Omit<import("@shared/schema").User, "password"> {}
+    interface Request {
+      tenant?: import("@shared/schema").Tenant;
+    }
   }
 }
 

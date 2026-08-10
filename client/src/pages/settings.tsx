@@ -210,6 +210,42 @@ Warm regards,
 
 {{practice_name}} Team`,
   },
+  {
+    templateKey: "allocation_options",
+    name: "Match Options (CY&A)",
+    subject: "Your Match Options - {{practice_name}}",
+    bodyText: `We are pleased to let you know that we have found a match for you.
+
+Please review your appointment options below and select the one that works best for you:
+
+{{options_list}}
+
+To view full details and make your selection, please visit the link below:
+
+{{portal_link}}
+
+If none of these options suit you, you can also decline and our team will be in touch to find an alternative.
+
+Warm regards,
+{{practice_name}} Team`,
+  },
+  {
+    templateKey: "booking_confirmed",
+    name: "Booking Confirmed (CY&A)",
+    subject: "Booking Confirmed - {{practice_name}}",
+    bodyText: `Your booking is confirmed.
+
+Appointment Details:
+Clinician: {{clinician_name}}
+Time: {{appointment_time}}
+
+Join your session here: {{zoom_link}}
+
+If you have any questions or need to make changes, please don't hesitate to contact us.
+
+Warm regards,
+{{practice_name}} Team`,
+  },
 ];
 
 function NotificationsTab() {

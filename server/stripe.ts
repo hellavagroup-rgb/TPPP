@@ -20,6 +20,7 @@ export async function createCheckoutSession(opts: {
   clientId: string;
   clientEmail: string;
   clientDisplayId: string;
+  clientName?: string | null;
   amountPence: number;
   successUrl: string;
   cancelUrl: string;
@@ -30,15 +31,25 @@ export async function createCheckoutSession(opts: {
   const stripe = getStripeInstance(opts.tenantStripeKey);
   if (!stripe) return null;
 
+  // Use the client's name if available; fall back to their W-number so Zapier/Xero
+  // always has a usable identifier when creating the Xero contact and invoice.
+  const customerName = opts.clientName?.trim() || opts.clientDisplayId;
+
   const customer = await stripe.customers.create({
     email: opts.clientEmail,
+    name: customerName,
     metadata: { clientId: opts.clientId, displayId: opts.clientDisplayId },
   });
+
+  // Set expiry to 30 days from now (maximum allowed on recent Stripe API versions).
+  // The default is 24 hours, which caused links to silently expire before clients used them.
+  const expiresAt = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60;
 
   const session = await stripe.checkout.sessions.create({
     customer: customer.id,
     payment_method_types: ["card"],
     mode: "payment",
+    expires_at: expiresAt,
     line_items: [
       {
         price_data: {

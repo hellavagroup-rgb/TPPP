@@ -7,7 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Mail, UserPlus, EyeOff, Eye, RefreshCw } from "lucide-react";
 import { format } from "date-fns";
 
@@ -91,8 +93,21 @@ export default function IntakeInbox() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [viewingMessage, setViewingMessage] = useState<IntakeMessage | null>(null);
+  const [convertingMessage, setConvertingMessage] = useState<IntakeMessage | null>(null);
+  const [overrideNextStep, setOverrideNextStep] = useState<"email" | "phone" | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [showIgnored, setShowIgnored] = useState(false);
+
+  const { data: tenant } = useQuery<{ contactPreferenceEnabled?: boolean }>({
+    queryKey: ["/api/tenant"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/tenant");
+      if (!res.ok) throw new Error("Failed to load tenant");
+      return res.json();
+    },
+  });
+
+  const contactPreferenceEnabled = tenant?.contactPreferenceEnabled === true;
 
   const { data: messages = [], isLoading } = useQuery<IntakeMessage[]>({
     queryKey: ["/api/intake-messages"],
@@ -125,8 +140,17 @@ export default function IntakeInbox() {
   }
 
   const convertMutation = useMutation({
-    mutationFn: async (id: string) => {
-      const res = await apiRequest("POST", `/api/intake-messages/${id}/convert-to-client`);
+    mutationFn: async ({ id, contactPreference }: { id: string; contactPreference?: "email" | "phone" | null }) => {
+      const body: Record<string, string> = {};
+      if (contactPreference === "email" || contactPreference === "phone") {
+        body.contactPreference = contactPreference;
+      }
+      const res = await fetch(`/api/intake-messages/${id}/convert-to-client`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(body),
+      });
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error || "Failed to convert");
@@ -138,6 +162,7 @@ export default function IntakeInbox() {
         title: "Client record created",
         description: `Created with pending ID ${data.client?.displayId}. Assign a WriteUpp W-number once allocated.`,
       });
+      setConvertingMessage(null);
       queryClient.invalidateQueries({ queryKey: ["/api/intake-messages"] });
       queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
     },
@@ -349,11 +374,18 @@ export default function IntakeInbox() {
                               <Button
                                 size="sm"
                                 data-testid={`button-convert-${msg.id}`}
-                                onClick={() => convertMutation.mutate(msg.id)}
-                                disabled={convertMutation.isPending && convertMutation.variables === msg.id}
+                                onClick={() => {
+                                  // Derive the parser's detected next step from extractedData to pre-fill the dialog
+                                  const nextStepValue = extractedField(msg.extractedData, "next step", "helpful next", "most helpful", "what would");
+                                  const detectedNextStep: "email" | "phone" | null = nextStepValue
+                                    ? (/call/i.test(nextStepValue) ? "phone" : "email")
+                                    : null;
+                                  setOverrideNextStep(detectedNextStep);
+                                  setConvertingMessage(msg);
+                                }}
                               >
                                 <UserPlus className="h-3.5 w-3.5 mr-1" />
-                                {convertMutation.isPending && convertMutation.variables === msg.id ? "Converting…" : "Convert"}
+                                Convert
                               </Button>
                               <Button
                                 size="sm"
@@ -397,6 +429,117 @@ export default function IntakeInbox() {
           onClose={() => setViewingMessage(null)}
         />
       )}
+
+      {convertingMessage && (
+        <ConvertConfirmDialog
+          message={convertingMessage}
+          open={!!convertingMessage}
+          contactPreferenceEnabled={contactPreferenceEnabled}
+          overrideNextStep={overrideNextStep}
+          onChangeNextStep={setOverrideNextStep}
+          isPending={convertMutation.isPending}
+          onConfirm={() =>
+            convertMutation.mutate({ id: convertingMessage.id, contactPreference: overrideNextStep })
+          }
+          onClose={() => setConvertingMessage(null)}
+        />
+      )}
     </div>
+  );
+}
+
+interface ConvertConfirmDialogProps {
+  message: IntakeMessage;
+  open: boolean;
+  contactPreferenceEnabled: boolean;
+  overrideNextStep: "email" | "phone" | null;
+  onChangeNextStep: (v: "email" | "phone") => void;
+  isPending: boolean;
+  onConfirm: () => void;
+  onClose: () => void;
+}
+
+function ConvertConfirmDialog({
+  message,
+  open,
+  contactPreferenceEnabled,
+  overrideNextStep,
+  onChangeNextStep,
+  isPending,
+  onConfirm,
+  onClose,
+}: ConvertConfirmDialogProps) {
+  const displayName =
+    message.extractedName || extractedField(message.extractedData, "name") || null;
+  const displayEmail =
+    extractedField(message.extractedData, "email") || message.fromAddress || null;
+  const displayPhone =
+    message.extractedPhone || extractedField(message.extractedData, "phone", "mobile", "telephone") || null;
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <UserPlus className="h-4 w-4" />
+            Convert to client
+          </DialogTitle>
+          <DialogDescription>
+            Review the details below before creating the client record.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-1 my-1">
+          {[
+            { label: "Name", value: displayName },
+            { label: "Email", value: displayEmail },
+            { label: "Phone", value: displayPhone },
+          ].map(({ label, value }) => (
+            <div
+              key={label}
+              className="grid grid-cols-[80px_1fr] gap-2 py-1.5 border-b border-border/50 last:border-0"
+            >
+              <span className="text-sm font-medium text-muted-foreground">{label}</span>
+              <span className="text-sm break-words">
+                {value ?? <span className="text-muted-foreground italic">—</span>}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        {contactPreferenceEnabled && (
+          <div className="mt-2">
+            <p className="text-sm font-medium mb-2">Next step</p>
+            <RadioGroup
+              value={overrideNextStep ?? ""}
+              onValueChange={(v) => onChangeNextStep(v as "email" | "phone")}
+              className="flex flex-col gap-2"
+            >
+              <div className="flex items-center gap-2">
+                <RadioGroupItem value="email" id="cp-email" data-testid="radio-next-step-email" />
+                <Label htmlFor="cp-email">Send intake form</Label>
+              </div>
+              <div className="flex items-center gap-2">
+                <RadioGroupItem value="phone" id="cp-phone" data-testid="radio-next-step-phone" />
+                <Label htmlFor="cp-phone">Call client</Label>
+              </div>
+            </RadioGroup>
+          </div>
+        )}
+
+        <DialogFooter className="mt-4">
+          <Button variant="outline" onClick={onClose} disabled={isPending}>
+            Cancel
+          </Button>
+          <Button
+            onClick={onConfirm}
+            disabled={isPending}
+            data-testid="button-confirm-convert"
+          >
+            {isPending ? "Converting…" : "Confirm"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -3062,10 +3062,16 @@ export async function registerRoutes(
       }
       const notes = notesLines.join("\n").slice(0, 4000) || undefined;
 
-      // Contact preference — derived from the parsed "next step" answer
+      // Contact preference — use override from request body if supplied by the admin,
+      // otherwise derive from the parsed "next step" answer in the intake form.
       const parsedNextStep = reparsed.nextStep;
+      const bodyOverride = req.body?.contactPreference;
       const contactPreference: "email" | "phone" | undefined =
-        parsedNextStep === "phone" || parsedNextStep === "email" ? parsedNextStep : undefined;
+        bodyOverride === "phone" || bodyOverride === "email"
+          ? bodyOverride
+          : parsedNextStep === "phone" || parsedNextStep === "email"
+          ? parsedNextStep
+          : undefined;
 
       const [newClient] = await db.insert(clients).values({
         displayId,

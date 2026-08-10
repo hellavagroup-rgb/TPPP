@@ -195,7 +195,8 @@ export default function Clients() {
         referralSource: "Web Form",
         referralSourceDetails: "",
         presentingIssue: "",
-        notes: ""
+        notes: "",
+        contactPreference: "email",
       });
     },
     onError: async (error: any) => {
@@ -281,7 +282,8 @@ export default function Clients() {
     referralSource: "Web Form",
     referralSourceDetails: "",
     presentingIssue: "",
-    notes: ""
+    notes: "",
+    contactPreference: "email" as "email" | "phone",
   });
 
   // Manual Allocation State (for phone intake flow)
@@ -424,6 +426,7 @@ export default function Clients() {
     notes: "",
     status: "New" as ClientType["status"],
     agreedRatePence: null as number | null,
+    contactPreference: null as "email" | "phone" | null,
   });
 
   // Edit Status State
@@ -871,6 +874,7 @@ export default function Clients() {
       notes: client.notes || "",
       status: client.status,
       agreedRatePence: client.agreedRatePence ?? null,
+      contactPreference: (client as any).contactPreference ?? null,
     });
     // Fetch linked intake message in background for Enquiry Details section
     setEditEnquiryMessage(null);
@@ -896,6 +900,9 @@ export default function Clients() {
             notes: editClientData.notes || null,
             status: editClientData.status,
           };
+          if (contactPreferenceEnabled && editClientData.contactPreference !== null) {
+            updates.contactPreference = editClientData.contactPreference;
+          }
           // For PENDING clients: only send displayId if the user typed a new value
           // For regular clients: send if it changed
           const isPending = editingClient.displayId?.startsWith("PENDING-");
@@ -1034,7 +1041,7 @@ export default function Clients() {
         return;
     }
 
-    const clientData = {
+    const clientData: Record<string, unknown> = {
         displayId: newClientData.wNumber.toUpperCase().startsWith("W") ? newClientData.wNumber.toUpperCase() : `W${newClientData.wNumber.toUpperCase()}`,
         email: newClientData.email,
         phone: newClientData.phone,
@@ -1045,8 +1052,11 @@ export default function Clients() {
         status: "New",
         intakeDate: new Date(),
         presentingIssues: newClientData.presentingIssue ? [newClientData.presentingIssue] : [],
-        notes: newClientData.notes || null
+        notes: newClientData.notes || null,
     };
+    if (contactPreferenceEnabled) {
+        clientData.contactPreference = newClientData.contactPreference;
+    }
 
     createClientMutation.mutate(clientData);
   };
@@ -1321,6 +1331,28 @@ export default function Clients() {
                             onChange={e => setNewClientData({...newClientData, notes: e.target.value})}
                         />
                     </div>
+
+                    {contactPreferenceEnabled && (
+                        <div className="grid gap-2">
+                            <Label>Next Step</Label>
+                            <div className="flex gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setNewClientData({...newClientData, contactPreference: "email"})}
+                                    className={`flex-1 rounded-md border px-3 py-2 text-sm font-medium transition-colors ${newClientData.contactPreference === "email" ? "border-primary bg-primary/10 text-primary" : "border-border bg-background text-muted-foreground hover:bg-muted"}`}
+                                >
+                                    Send intake form
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setNewClientData({...newClientData, contactPreference: "phone"})}
+                                    className={`flex-1 rounded-md border px-3 py-2 text-sm font-medium transition-colors ${newClientData.contactPreference === "phone" ? "border-primary bg-primary/10 text-primary" : "border-border bg-background text-muted-foreground hover:bg-muted"}`}
+                                >
+                                    Call client
+                                </button>
+                            </div>
+                        </div>
+                    )}
                 </div>
                 <DialogFooter>
                     <Button onClick={handleCreateClient}>Create Referral</Button>
@@ -2606,6 +2638,28 @@ export default function Clients() {
                 rows={3}
               />
             </div>
+
+            {contactPreferenceEnabled && (
+              <div className="grid gap-2">
+                <Label>Next Step</Label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditClientData({...editClientData, contactPreference: "email"})}
+                    className={`flex-1 rounded-md border px-3 py-2 text-sm font-medium transition-colors ${editClientData.contactPreference === "email" ? "border-primary bg-primary/10 text-primary" : "border-border bg-background text-muted-foreground hover:bg-muted"}`}
+                  >
+                    Send intake form
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditClientData({...editClientData, contactPreference: "phone"})}
+                    className={`flex-1 rounded-md border px-3 py-2 text-sm font-medium transition-colors ${editClientData.contactPreference === "phone" ? "border-primary bg-primary/10 text-primary" : "border-border bg-background text-muted-foreground hover:bg-muted"}`}
+                  >
+                    Call client
+                  </button>
+                </div>
+              </div>
+            )}
 
             {(editEnquiryLoading || editEnquiryMessage) && (
               <div className="grid gap-1.5">

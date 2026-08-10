@@ -454,7 +454,7 @@ const FEATURE_FLAGS: { key: keyof TenantDetail; label: string; description: stri
   { key: "nonEngagementEnabled", label: "Non-Engagement Tracking", description: "Archive reason categories for non-engaging clients" },
   { key: "gmailIntakeEnabled", label: "Intake Inbox / Gmail", description: "Gmail integration for intake email processing" },
   // CY&A flags
-  { key: "contactPreferenceEnabled", label: "Contact Preference (CY&A)", description: "Captures client contact preference (email/phone) during intake", group: "cya" },
+  { key: "contactPreferenceEnabled", label: "Next Step Routing (CY&A)", description: "Shows a 'Send intake form' / 'Call client' selector when creating or editing clients, and routes incoming intake form answers to the correct workflow (email or phone call)", group: "cya" },
   { key: "multiClinicianAllocationEnabled", label: "Multi-Clinician Allocation (CY&A)", description: "Enables offering multiple clinician/slot options to a client", group: "cya" },
   { key: "autoAllocationEmailEnabled", label: "Auto Allocation Email (CY&A)", description: "Automatically triggers the options email on allocation", group: "cya" },
   { key: "registrationFormEnabled", label: "Registration Form (CY&A)", description: "Enables the registration form + T&C step before booking is confirmed", group: "cya" },

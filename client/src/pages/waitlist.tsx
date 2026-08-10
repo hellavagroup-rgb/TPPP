@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { apiRequest } from "@/lib/queryClient";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,12 +26,22 @@ import { CalendarClock, MoreHorizontal, Edit, CalendarCheck, Eye, Clock } from "
 import { formatDateUK } from "@/lib/dateUtils";
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest } from "@/lib/queryClient";
 import type { Client as ClientType } from "@shared/schema";
 
 export default function Waitlist() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+
+  const { data: tenant } = useQuery({
+    queryKey: ["/api/tenant"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/tenant");
+      if (!res.ok) return null;
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+  const contactPreferenceEnabled = tenant?.contactPreferenceEnabled === true;
 
   const { data: clients = [] } = useQuery<ClientType[]>({
     queryKey: ["/api/clients"],
@@ -49,6 +60,7 @@ export default function Waitlist() {
     phone: "",
     notes: "",
     insurer: "",
+    contactPreference: null as "email" | "phone" | null,
   });
 
   const handleOpenEditStatus = (client: ClientType) => {
@@ -64,6 +76,7 @@ export default function Waitlist() {
       phone: client.phone || "",
       notes: client.notes || "",
       insurer: client.insurer || "",
+      contactPreference: (client as any).contactPreference ?? null,
     });
     setIsEditClientOpen(true);
   };
@@ -85,7 +98,7 @@ export default function Waitlist() {
   });
 
   const updateClientMutation = useMutation({
-    mutationFn: async ({ clientId, data }: { clientId: string; data: Record<string, string> }) => {
+    mutationFn: async ({ clientId, data }: { clientId: string; data: Record<string, unknown> }) => {
       const response = await apiRequest("PATCH", `/api/clients/${clientId}`, data);
       return response.json();
     },
@@ -253,11 +266,44 @@ export default function Waitlist() {
               <Label htmlFor="edit-notes">Notes</Label>
               <Textarea id="edit-notes" value={editClientData.notes} onChange={(e) => setEditClientData(d => ({ ...d, notes: e.target.value }))} data-testid="input-edit-notes" />
             </div>
+            {contactPreferenceEnabled && (
+              <div className="grid gap-2">
+                <Label>Next Step</Label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditClientData(d => ({ ...d, contactPreference: "email" }))}
+                    className={`flex-1 rounded-md border px-3 py-2 text-sm font-medium transition-colors ${editClientData.contactPreference === "email" ? "border-primary bg-primary/10 text-primary" : "border-border bg-background text-muted-foreground hover:bg-muted"}`}
+                  >
+                    Send intake form
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditClientData(d => ({ ...d, contactPreference: "phone" }))}
+                    className={`flex-1 rounded-md border px-3 py-2 text-sm font-medium transition-colors ${editClientData.contactPreference === "phone" ? "border-primary bg-primary/10 text-primary" : "border-border bg-background text-muted-foreground hover:bg-muted"}`}
+                  >
+                    Call client
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsEditClientOpen(false)}>Cancel</Button>
             <Button
-              onClick={() => editingClient && updateClientMutation.mutate({ clientId: editingClient.id, data: editClientData })}
+              onClick={() => {
+                if (!editingClient) return;
+                const payload: Record<string, unknown> = {
+                  email: editClientData.email,
+                  phone: editClientData.phone,
+                  notes: editClientData.notes,
+                  insurer: editClientData.insurer,
+                };
+                if (contactPreferenceEnabled && editClientData.contactPreference !== null) {
+                  payload.contactPreference = editClientData.contactPreference;
+                }
+                updateClientMutation.mutate({ clientId: editingClient.id, data: payload });
+              }}
               disabled={updateClientMutation.isPending}
               data-testid="btn-save-details"
             >

@@ -1046,6 +1046,10 @@ export async function registerRoutes(
       
       // Add workflow timestamps based on status change
       const updateData = { ...req.body };
+      // CY&A: auto-set needsAdminCall when contactPreference changes to/from phone
+      if ("contactPreference" in updateData) {
+        updateData.needsAdminCall = updateData.contactPreference === "phone";
+      }
       if (req.body.status && req.body.status !== oldStatus) {
         const now = new Date();
         if (req.body.status === "Forms Sent") {
@@ -3058,6 +3062,11 @@ export async function registerRoutes(
       }
       const notes = notesLines.join("\n").slice(0, 4000) || undefined;
 
+      // Contact preference — derived from the parsed "next step" answer
+      const parsedNextStep = reparsed.nextStep;
+      const contactPreference: "email" | "phone" | undefined =
+        parsedNextStep === "phone" || parsedNextStep === "email" ? parsedNextStep : undefined;
+
       const [newClient] = await db.insert(clients).values({
         displayId,
         email: clientEmail,
@@ -3068,6 +3077,8 @@ export async function registerRoutes(
         status: "New",
         tenantId: req.tenant.id,
         notes: notes ?? null,
+        contactPreference: contactPreference ?? null,
+        needsAdminCall: contactPreference === "phone" ? true : false,
       }).returning();
 
       await db

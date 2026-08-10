@@ -29,6 +29,7 @@ export interface ParsedIntakeEmail {
   name: string | null;
   email: string | null;
   phone: string | null;
+  nextStep: "email" | "phone" | null;
 }
 
 const NAME_LABELS = [
@@ -54,6 +55,18 @@ const PHONE_LABELS = [
   "contact number",
 ];
 
+/**
+ * Labels that ask "what would feel most helpful next?" or similar.
+ * Matched by substring so label variants are caught.
+ */
+const NEXT_STEP_LABELS = [
+  "what would feel most helpful",
+  "helpful next",
+  "most helpful next",
+  "next step",
+  "what would be most helpful",
+];
+
 function normalise(label: string): string {
   return label.toLowerCase().trim();
 }
@@ -63,16 +76,26 @@ function matchesAny(label: string, candidates: string[]): boolean {
   return candidates.some((c) => norm === c || norm.startsWith(c));
 }
 
+function matchesNextStep(label: string): boolean {
+  const norm = normalise(label);
+  return NEXT_STEP_LABELS.some((c) => norm.includes(c));
+}
+
 function buildResult(fields: Record<string, string>): ParsedIntakeEmail {
   let name: string | null = null;
   let email: string | null = null;
   let phone: string | null = null;
+  let nextStep: "email" | "phone" | null = null;
   for (const [label, value] of Object.entries(fields)) {
     if (matchesAny(label, NAME_LABELS) && !name) name = value;
     if (matchesAny(label, EMAIL_LABELS) && !email) email = value;
     if (matchesAny(label, PHONE_LABELS) && !phone) phone = value;
+    if (matchesNextStep(label) && !nextStep) {
+      // Answer containing "call" → phone workflow; anything else → email (send intake form)
+      nextStep = /call/i.test(value) ? "phone" : "email";
+    }
   }
-  return { fields, name, email, phone };
+  return { fields, name, email, phone, nextStep };
 }
 
 /**
@@ -373,7 +396,7 @@ function invertFields(fields: Record<string, string>): Record<string, string> {
 
 export function parseIntakeEmailBody(rawBody: string): ParsedIntakeEmail {
   if (!rawBody || !rawBody.trim()) {
-    return { fields: {}, name: null, email: null, phone: null };
+    return { fields: {}, name: null, email: null, phone: null, nextStep: null };
   }
 
   // Strip the forwarded wrapper and any trailing signature ONCE here.

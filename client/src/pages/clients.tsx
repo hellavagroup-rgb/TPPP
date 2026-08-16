@@ -2413,7 +2413,11 @@ export default function Clients() {
                             {isPending && <span className="absolute -top-1 -right-1 bg-amber-500 text-white text-[8px] px-1 rounded">Pending</span>}
                             <CalendarCheck className={`h-3 w-3 mr-2 ${slotIsMatch && !isPending ? "text-emerald-600" : isPending ? "text-amber-600" : ""}`} />
                             <div className="text-left">
-                              <div className={`font-medium ${slotIsMatch && !isPending ? "text-emerald-700" : isPending ? "text-amber-700" : ""}`}>{slot.day || format(parseISO(slot.date!), "EEE")}</div>
+                              <div className={`font-medium ${slotIsMatch && !isPending ? "text-emerald-700" : isPending ? "text-amber-700" : ""}`}>
+                                {slot.type === "SpecificDate" && slot.date
+                                  ? format(parseISO(slot.date), "d MMM yyyy")
+                                  : slot.day || format(parseISO(slot.date!), "EEE")}
+                              </div>
                               <div className={`text-[10px] ${slotIsMatch && !isPending ? "text-emerald-600" : isPending ? "text-amber-600" : "text-muted-foreground"}`}>
                                 {slot.startTime} - {slot.endTime}
                                 {slot.type === "Recurring" && (
@@ -2821,7 +2825,11 @@ export default function Clients() {
                                 {isPending && <span className="absolute -top-1 -right-1 bg-amber-500 text-white text-[8px] px-1 rounded">Pending</span>}
                                 <CalendarCheck className={`h-3 w-3 mr-2 ${isPending && !isSelected ? "text-amber-600" : ""}`} />
                                 <div className="text-left">
-                                  <div className={`font-medium ${isPending && !isSelected ? "text-amber-700" : ""}`}>{slot.day || (slot.date && format(parseISO(slot.date), "EEE"))}</div>
+                                  <div className={`font-medium ${isPending && !isSelected ? "text-amber-700" : ""}`}>
+                                    {slot.type === "SpecificDate" && slot.date
+                                      ? format(parseISO(slot.date), "d MMM yyyy")
+                                      : slot.day || (slot.date && format(parseISO(slot.date), "EEE"))}
+                                  </div>
                                   <div className={`text-[10px] ${isPending && !isSelected ? "text-amber-600" : "text-muted-foreground"}`}>
                                     {slot.startTime} - {slot.endTime}
                                     {slot.type === "Recurring" && (
@@ -2967,7 +2975,11 @@ export default function Clients() {
                           >
                             <CalendarCheck className="h-3 w-3 mr-2" />
                             <div className="text-left">
-                              <div className="font-medium">{slot.day || format(parseISO(slot.date!), "EEE")}</div>
+                              <div className="font-medium">
+                                {slot.type === "SpecificDate" && slot.date
+                                  ? format(parseISO(slot.date), "d MMM yyyy")
+                                  : slot.day || format(parseISO(slot.date!), "EEE")}
+                              </div>
                               <div className="text-[10px] text-muted-foreground">{slot.startTime} - {slot.endTime}</div>
                               <div className="mt-0.5">
                                 {(slot as any).locationType === "in_person" ? (

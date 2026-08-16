@@ -1214,7 +1214,9 @@ export async function registerRoutes(
           const tcBook = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor } : undefined;
           const bookEmail = await generateBookingConfirmedEmail({
             clinicianName: clinicianUser?.name || 'Your Clinician',
+            type: slotRow?.type || null,
             day: slotRow?.day || null,
+            date: slotRow?.date || null,
             startTime: slotRow?.startTime || '',
             endTime: slotRow?.endTime || '',
             zoomLink: confirmedClinician?.zoomLink || null,
@@ -1369,7 +1371,9 @@ export async function registerRoutes(
                 : undefined;
               return {
                 clinicianName: clinUser?.name || 'Clinician',
+                type: slotRow?.type || null,
                 day: slotRow?.day || null,
+                date: slotRow?.date || null,
                 startTime: slotRow?.startTime || '',
                 endTime: slotRow?.endTime || '',
                 selectionToken: opt.selectionToken,
@@ -1609,7 +1613,7 @@ export async function registerRoutes(
             status: opt.status,
             clinicianName: clinicianUser?.name || "Clinician",
             slot: slotRow
-              ? { day: slotRow.day, startTime: slotRow.startTime, endTime: slotRow.endTime, locationType: slotRow.locationType }
+              ? { type: slotRow.type, day: slotRow.day, date: slotRow.date, startTime: slotRow.startTime, endTime: slotRow.endTime, locationType: slotRow.locationType }
               : null,
           };
         })
@@ -1822,7 +1826,9 @@ export async function registerRoutes(
           const tcBook = tenant ? { id: tenant.id, name: tenant.name, fromEmail: tenant.fromEmail, primaryColor: tenant.primaryColor } : undefined;
           const bookEmail = await generateBookingConfirmedEmail({
             clinicianName: clinicianUser?.name || 'Your Clinician',
+            type: slotRow?.type || null,
             day: slotRow?.day || null,
+            date: slotRow?.date || null,
             startTime: slotRow?.startTime || '',
             endTime: slotRow?.endTime || '',
             zoomLink: confirmedClinician?.zoomLink || null,
@@ -3524,7 +3530,9 @@ export async function registerRoutes(
                 const tcBook = paymentTenant ? { id: paymentTenant.id, name: paymentTenant.name, fromEmail: paymentTenant.fromEmail, primaryColor: paymentTenant.primaryColor } : undefined;
                 const bookEmail = await generateBookingConfirmedEmail({
                   clinicianName: clinicianUser?.name || 'Your Clinician',
+                  type: slotRow?.type || null,
                   day: slotRow?.day || null,
+                  date: slotRow?.date || null,
                   startTime: slotRow?.startTime || '',
                   endTime: slotRow?.endTime || '',
                   zoomLink: confirmedClinician?.zoomLink || null,

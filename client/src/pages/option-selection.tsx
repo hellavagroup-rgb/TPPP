@@ -11,7 +11,9 @@ interface OptionDetail {
   status: string;
   clinicianName: string;
   slot: {
+    type: string | null;
     day: string | null;
+    date: string | null;
     startTime: string;
     endTime: string;
     locationType: string;
@@ -174,7 +176,13 @@ export default function OptionSelection() {
                   <CardDescription className="flex flex-col gap-1 mt-1">
                     <span className="flex items-center gap-1.5">
                       <Clock className="h-3.5 w-3.5" />
-                      {option.slot.day} {formatTime(option.slot.startTime)} – {formatTime(option.slot.endTime)}
+                      {option.slot.type === "SpecificDate" && option.slot.date
+                        ? (() => {
+                            const [y, m, d] = option.slot.date.split("-").map(Number);
+                            return new Date(y, m - 1, d).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+                          })()
+                        : option.slot.day}{" "}
+                      {formatTime(option.slot.startTime)} – {formatTime(option.slot.endTime)}
                     </span>
                     <span className="flex items-center gap-1.5">
                       <MapPin className="h-3.5 w-3.5" />

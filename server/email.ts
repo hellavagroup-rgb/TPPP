@@ -441,7 +441,9 @@ export async function generateNewReferralEmail(clientDisplayId: string, clientNa
 
 export interface AllocationOption {
   clinicianName: string;
+  type?: string | null;
   day: string | null;
+  date?: string | null;
   startTime: string;
   endTime: string;
   selectionToken: string;
@@ -458,8 +460,17 @@ export async function generateAllocationOptionsEmail(
 
   const optionsList = options.map((opt, i) => {
     const modeLabel = opt.locationType === 'in_person' ? ' (In Person)' : ' (Online)';
-    const slot = opt.day
-      ? `${opt.day} ${opt.startTime}–${opt.endTime}${modeLabel}`
+    let dayLabel: string;
+    if (opt.type === 'SpecificDate' && opt.date) {
+      // Format as "16 Aug 2026" for one-off slots
+      const [y, m, d] = opt.date.split('-').map(Number);
+      const dateObj = new Date(y, m - 1, d);
+      dayLabel = dateObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    } else {
+      dayLabel = opt.day || '';
+    }
+    const slot = dayLabel
+      ? `${dayLabel} ${opt.startTime}–${opt.endTime}${modeLabel}`
       : `${opt.startTime}–${opt.endTime}${modeLabel}`;
     return `Option ${i + 1}: ${slot}`;
   }).join('\n');
@@ -506,7 +517,9 @@ ${practiceName} Team`;
 
 export interface BookingConfirmedDetails {
   clinicianName: string;
+  type?: string | null;
   day: string | null;
+  date?: string | null;
   startTime: string;
   endTime: string;
   zoomLink?: string | null;
@@ -519,8 +532,16 @@ export async function generateBookingConfirmedEmail(
   const practiceName = tenant?.name || GENERIC_PRACTICE_NAME;
   const storedTemplate = await getStoredTemplate('booking_confirmed', tenant?.id);
 
-  const slotDisplay = details.day
-    ? `${details.day} ${details.startTime}–${details.endTime}`
+  let dayLabel: string;
+  if (details.type === 'SpecificDate' && details.date) {
+    const [y, m, d] = details.date.split('-').map(Number);
+    const dateObj = new Date(y, m - 1, d);
+    dayLabel = dateObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  } else {
+    dayLabel = details.day || '';
+  }
+  const slotDisplay = dayLabel
+    ? `${dayLabel} ${details.startTime}–${details.endTime}`
     : `${details.startTime}–${details.endTime}`;
 
   if (storedTemplate) {

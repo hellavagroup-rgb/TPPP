@@ -79,11 +79,11 @@ function splitIntoHourlySlots(startTime: string, endTime: string): { start: stri
 function addOneHour(time: string): string {
   const [hour, min] = time.split(":").map(Number);
   const newHour = hour + 1;
-  if (newHour > 20) return "20:00";
+  if (newHour > 21 || (newHour === 21 && min > 0)) return "21:00";
   return `${String(newHour).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
 }
 
-const TIME_OPTIONS = Array.from({ length: 13 * 4 + 1 }, (_, i) => {
+const TIME_OPTIONS = Array.from({ length: 14 * 4 + 1 }, (_, i) => {
   const hour = Math.floor(i / 4) + 7;
   const minute = (i % 4) * 15;
   const date = new Date();
@@ -777,7 +777,7 @@ export default function Availability() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent className="max-h-[200px]">
-                          {TIME_OPTIONS.map(time => (
+                          {TIME_OPTIONS.filter(t => t <= "20:00").map(time => (
                             <SelectItem key={`start-${time}`} value={time}>{time}</SelectItem>
                           ))}
                         </SelectContent>

@@ -732,6 +732,12 @@ export async function registerRoutes(
 
       const newSlots = req.body; // Array of new slots to add
 
+      // Gate SpecificDate slots behind the per-tenant feature flag
+      const hasSpecificDate = Array.isArray(newSlots) && newSlots.some((s: any) => s.type === "SpecificDate");
+      if (hasSpecificDate && !req.tenant?.oneOffSlotsEnabled) {
+        return res.status(403).json({ error: "One-off slots are not enabled for this practice" });
+      }
+
       // Prevent duplicate recurring slots (same day + startTime)
       // Uses the same legacy-enrichment logic as the calendar so the check
       // matches exactly what is visible as "open" on the availability calendar.
@@ -4045,6 +4051,7 @@ export async function registerRoutes(
         registrationFormEnabled: z.boolean().optional(),
         bookingConfirmedEmailEnabled: z.boolean().optional(),
         writeuppChecklistEnabled: z.boolean().optional(),
+        oneOffSlotsEnabled: z.boolean().optional(),
         clinicianProfileConfig: z.object({
           showTier: z.boolean().optional(),
           showTherapyMode: z.boolean().optional(),

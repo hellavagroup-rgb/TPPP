@@ -34,7 +34,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import type { Clinician, TimeSlot, Client } from "@shared/schema";
 
-type SlotType = "Recurring" | "Vacation";
+type SlotType = "Recurring" | "Vacation" | "SpecificDate";
 
 interface ClinicianWithSlots extends Clinician {
   name: string;
@@ -116,7 +116,7 @@ export default function Availability() {
   const [newEndTime, setNewEndTime] = useState("10:00");
   const [dialogClinicianId, setDialogClinicianId] = useState<string>("");
 
-  const { data: tenant } = useQuery<{ defaultLocationType?: string }>({
+  const { data: tenant } = useQuery<{ defaultLocationType?: string; oneOffSlotsEnabled?: boolean }>({
     queryKey: ["/api/tenant"],
     enabled: user?.role === "admin",
   });
@@ -371,6 +371,10 @@ export default function Availability() {
         if (slot.date === dateStr) {
           results.push({ slot, isActive: true, isFuture: false });
         }
+      } else if (slot.type === "SpecificDate") {
+        if (slot.date === dateStr) {
+          results.push({ slot, isActive: true, isFuture: false });
+        }
       }
     });
 
@@ -445,6 +449,25 @@ export default function Availability() {
           } as any);
         });
       });
+    } else if (newSlotType === "SpecificDate") {
+      const hourlySlots = splitIntoHourlySlots(newStartTime, newEndTime);
+      hourlySlots.forEach((timeSlot) => {
+        newSlots.push({
+          clinicianId: dialogClinicianId,
+          type: "SpecificDate",
+          day: format(parseISO(newDate), "EEEE"),
+          date: newDate,
+          startDate: null,
+          endDate: null,
+          startTime: timeSlot.start,
+          endTime: timeSlot.end,
+          isBooked: false,
+          batchId: null,
+          frequency: "weekly",
+          isOngoing: false,
+          locationType: newLocationType,
+        } as any);
+      });
     } else {
       const vacStart = parseISO(newDate);
       const vacEnd = parseISO(vacationEndDate);
@@ -497,6 +520,25 @@ export default function Availability() {
         toast({
           title: "Duplicate Slot",
           description: `This clinician already has an active slot on ${dupDesc}. Delete the existing slot first.`,
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
+    // Prevent duplicate one-off slots (same date + startTime)
+    if (newSlotType === "SpecificDate") {
+      const existingClinician = cliniciansWithSlots.data.find((c: any) => c.id === dialogClinicianId);
+      const existingSlots: any[] = existingClinician?.slots || [];
+      const existingSpecific = existingSlots.filter((s: any) => s.type === "SpecificDate");
+      const duplicates = newSlots.filter(ns =>
+        existingSpecific.some((es: any) => es.date === (ns as any).date && es.startTime === (ns as any).startTime)
+      );
+      if (duplicates.length > 0) {
+        const dupDesc = duplicates.map(d => `${(d as any).date} at ${(d as any).startTime}`).join(", ");
+        toast({
+          title: "Duplicate Slot",
+          description: `This clinician already has a one-off slot on ${dupDesc}. Delete the existing slot first.`,
           variant: "destructive",
         });
         return;
@@ -651,6 +693,9 @@ export default function Availability() {
                     <SelectContent>
                       <SelectItem value="Recurring">Availability</SelectItem>
                       <SelectItem value="Vacation">Time Off / Vacation</SelectItem>
+                      {tenant?.oneOffSlotsEnabled && (
+                        <SelectItem value="SpecificDate">One-off Slot</SelectItem>
+                      )}
                     </SelectContent>
                   </Select>
                 </div>
@@ -750,6 +795,13 @@ export default function Availability() {
                       </div>
                     </div>
                   </>
+                )}
+
+                {newSlotType === "SpecificDate" && (
+                  <div className="grid gap-2">
+                    <Label>Date</Label>
+                    <DatePicker value={newDate} onChange={setNewDate} placeholder="Select date" />
+                  </div>
                 )}
 
                 {newSlotType === "Vacation" && (
@@ -910,7 +962,10 @@ export default function Availability() {
                                 <div className="font-medium">OFF</div>
                               ) : (
                                 <>
-                                  <div className="font-semibold">{slot.startTime} - {slot.endTime} <span className="font-normal text-[9px] opacity-70">{(slot as any).frequency === "fortnightly" ? "F" : "W"}</span></div>
+                                  <div className="font-semibold">{slot.startTime} - {slot.endTime} {slot.type !== "SpecificDate" && <span className="font-normal text-[9px] opacity-70">{(slot as any).frequency === "fortnightly" ? "F" : "W"}</span>}</div>
+                                  {slot.type === "SpecificDate" && slot.date && (
+                                    <span className="text-[9px] text-muted-foreground">{format(parseISO(slot.date), "d MMM yyyy")}</span>
+                                  )}
                                   {isFuture && (
                                     <div className="text-[9px] leading-tight mt-0.5 italic">
                                       Available from {validFrom}{validUntil ? ` to ${validUntil}` : ""}

@@ -40,6 +40,7 @@ export const tenants = pgTable("tenants", {
   registrationFormEnabled: boolean("registration_form_enabled").default(false),
   bookingConfirmedEmailEnabled: boolean("booking_confirmed_email_enabled").default(false),
   writeuppChecklistEnabled: boolean("writeup_checklist_enabled").default(false),
+  oneOffSlotsEnabled: boolean("one_off_slots_enabled").default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

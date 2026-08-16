@@ -141,6 +141,7 @@ interface TenantSummary {
   registrationFormEnabled: boolean;
   bookingConfirmedEmailEnabled: boolean;
   writeuppChecklistEnabled: boolean;
+  oneOffSlotsEnabled: boolean;
   clinicianProfileConfig: { showTier?: boolean; showTherapyMode?: boolean } | null;
   createdAt: string;
 }
@@ -460,6 +461,8 @@ const FEATURE_FLAGS: { key: keyof TenantDetail; label: string; description: stri
   { key: "registrationFormEnabled", label: "Registration Form (CY&A)", description: "Enables the registration form + T&C step before booking is confirmed", group: "cya" },
   { key: "bookingConfirmedEmailEnabled", label: "Booking Confirmed Email (CY&A)", description: "Automatically sends booking confirmation email on confirmation", group: "cya" },
   { key: "writeuppChecklistEnabled", label: "WriteUpp Checklist (CY&A)", description: "Shows WriteUpp checklist fields on confirmed client records", group: "cya" },
+  // Availability flags
+  { key: "oneOffSlotsEnabled", label: "One-off Slots", description: "Allows clinicians to have availability slots on a specific calendar date rather than a recurring day of the week", group: "general" },
 ];
 
 const CLINICIAN_PROFILE_FIELDS: { key: keyof NonNullable<TenantSummary["clinicianProfileConfig"]>; label: string; description: string; defaultOn: boolean }[] = [

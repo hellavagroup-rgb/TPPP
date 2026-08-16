@@ -33,6 +33,7 @@ import { DatePicker } from "@/components/ui/date-picker";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import type { Clinician, TimeSlot, Client } from "@shared/schema";
+import { addOneHour, splitIntoHourlySlots, TIME_OPTIONS } from "@/lib/availability-utils";
 
 type SlotType = "Recurring" | "Vacation" | "SpecificDate";
 
@@ -52,44 +53,6 @@ interface SlotForDate {
 }
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-
-function splitIntoHourlySlots(startTime: string, endTime: string): { start: string; end: string }[] {
-  const slots: { start: string; end: string }[] = [];
-  const [startHour, startMin] = startTime.split(":").map(Number);
-  const [endHour, endMin] = endTime.split(":").map(Number);
-  
-  const startMinutes = startHour * 60 + startMin;
-  const endMinutes = endHour * 60 + endMin;
-  
-  for (let mins = startMinutes; mins + 60 <= endMinutes; mins += 60) {
-    const slotStartHour = Math.floor(mins / 60);
-    const slotStartMin = mins % 60;
-    const slotEndHour = Math.floor((mins + 60) / 60);
-    const slotEndMin = (mins + 60) % 60;
-    
-    slots.push({
-      start: `${String(slotStartHour).padStart(2, "0")}:${String(slotStartMin).padStart(2, "0")}`,
-      end: `${String(slotEndHour).padStart(2, "0")}:${String(slotEndMin).padStart(2, "0")}`,
-    });
-  }
-  
-  return slots;
-}
-
-function addOneHour(time: string): string {
-  const [hour, min] = time.split(":").map(Number);
-  const newHour = hour + 1;
-  if (newHour > 21 || (newHour === 21 && min > 0)) return "21:00";
-  return `${String(newHour).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
-}
-
-const TIME_OPTIONS = Array.from({ length: 14 * 4 + 1 }, (_, i) => {
-  const hour = Math.floor(i / 4) + 7;
-  const minute = (i % 4) * 15;
-  const date = new Date();
-  date.setHours(hour, minute);
-  return format(date, "HH:mm");
-});
 
 export default function Availability() {
   const queryClient = useQueryClient();

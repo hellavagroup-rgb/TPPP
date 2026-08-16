@@ -80,8 +80,8 @@ export default function Availability() {
   const [dialogClinicianId, setDialogClinicianId] = useState<string>("");
 
   const { data: tenant } = useQuery<{ defaultLocationType?: string; oneOffSlotsEnabled?: boolean }>({
-    queryKey: ["/api/tenant"],
-    enabled: user?.role === "admin",
+    queryKey: ["/api/tenant/features"],
+    enabled: user?.role === "admin" || user?.role === "clinician",
   });
 
   const [newLocationType, setNewLocationType] = useState<"online" | "in_person">("online");

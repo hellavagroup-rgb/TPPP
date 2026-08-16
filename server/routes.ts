@@ -2739,6 +2739,20 @@ export async function registerRoutes(
     }
   });
 
+  // Narrow endpoint — returns only non-sensitive feature flags needed by the UI.
+  // Safe for both admin and clinician roles; never includes credentials or secrets.
+  app.get("/api/tenant/features", requireAuth, async (req, res) => {
+    try {
+      if (!req.tenant) return res.status(403).json({ error: "No tenant" });
+      res.json({
+        defaultLocationType: req.tenant.defaultLocationType ?? null,
+        oneOffSlotsEnabled: req.tenant.oneOffSlotsEnabled ?? false,
+      });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch tenant features" });
+    }
+  });
+
   // Public endpoint — returns only branding fields, no auth required.
   // Pass ?clientId=<id> to resolve the tenant from a specific client record.
   app.get("/api/tenant/branding", async (req, res) => {

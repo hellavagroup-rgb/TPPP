@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -10,7 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Mail, UserPlus, EyeOff, Eye, RefreshCw } from "lucide-react";
+import { Mail, UserPlus, EyeOff, Eye, RefreshCw, AlertTriangle } from "lucide-react";
 import { format } from "date-fns";
 
 interface IntakeMessage {
@@ -476,6 +476,56 @@ function ConvertConfirmDialog({
   const displayPhone =
     message.extractedPhone || extractedField(message.extractedData, "phone", "mobile", "telephone") || null;
 
+  // Duplicate-email pre-flight check
+  const [dupMatches, setDupMatches] = useState<{ displayId: string; id: string }[]>([]);
+  const [dupChecked, setDupChecked] = useState(false);
+  const [dupConfirmed, setDupConfirmed] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setDupMatches([]);
+      setDupChecked(false);
+      setDupConfirmed(false);
+      return;
+    }
+    if (!displayEmail) { setDupChecked(true); return; }
+    fetch(`/api/clients/check-email?email=${encodeURIComponent(displayEmail)}`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : { matches: [] })
+      .then(data => { setDupMatches(data.matches ?? []); setDupChecked(true); })
+      .catch(() => setDupChecked(true));
+  }, [open, displayEmail]);
+
+  // Show a blocking duplicate-email warning before the main confirm step
+  if (dupChecked && dupMatches.length > 0 && !dupConfirmed) {
+    return (
+      <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <UserPlus className="h-4 w-4" />
+              Duplicate email detected
+            </DialogTitle>
+            <DialogDescription>
+              This email is already linked to an existing client.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-md border border-amber-400 bg-amber-50 dark:bg-amber-950 p-3 text-sm text-amber-900 dark:text-amber-200 flex gap-2 items-start my-2">
+            <AlertTriangle className="h-4 w-4 mt-0.5 text-amber-500 shrink-0" />
+            <span>
+              This email is already linked to{" "}
+              <span className="font-semibold">{dupMatches.map(m => m.displayId).join(", ")}</span>.
+              Is this a different person?
+            </span>
+          </div>
+          <DialogFooter className="mt-4">
+            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button onClick={() => setDupConfirmed(true)}>Yes, create anyway</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-sm">
@@ -533,10 +583,10 @@ function ConvertConfirmDialog({
           </Button>
           <Button
             onClick={onConfirm}
-            disabled={isPending}
+            disabled={isPending || !dupChecked}
             data-testid="button-confirm-convert"
           >
-            {isPending ? "Converting…" : "Confirm"}
+            {isPending ? "Converting…" : !dupChecked ? "Checking…" : "Confirm"}
           </Button>
         </DialogFooter>
       </DialogContent>

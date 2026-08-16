@@ -35,6 +35,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { 
   MoreHorizontal, 
   Search, 
@@ -66,7 +67,7 @@ import {
   ChevronRight,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useLocation } from "wouter";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -275,6 +276,18 @@ export default function Clients() {
 
   // New Client Form State
   const [isNewClientOpen, setIsNewClientOpen] = useState(false);
+  const [newClientEmailWarning, setNewClientEmailWarning] = useState<{ displayId: string; id: string }[]>([]);
+  // Tracks the email value the in-flight onBlur check was issued for.
+  // When the field changes before the response arrives, we discard the stale result.
+  const newClientEmailCheckRef = useRef<string>("");
+  // Reset email warning whenever the dialog closes
+  const handleNewClientOpenChange = (open: boolean) => {
+    setIsNewClientOpen(open);
+    if (!open) {
+      setNewClientEmailWarning([]);
+      newClientEmailCheckRef.current = "";
+    }
+  };
   const [newClientData, setNewClientData] = useState({
     wNumber: "",
     email: "",
@@ -1225,7 +1238,7 @@ export default function Clients() {
           <p className="text-muted-foreground mt-1">Anonymized client management.</p>
         </div>
         
-        <Dialog open={isNewClientOpen} onOpenChange={setIsNewClientOpen}>
+        <Dialog open={isNewClientOpen} onOpenChange={handleNewClientOpenChange}>
             <DialogTrigger asChild>
                 <Button className="gap-2">
                     <UserPlus className="h-4 w-4" />
@@ -1260,7 +1273,25 @@ export default function Clients() {
                                 type="email" 
                                 placeholder="client@example.com"
                                 value={newClientData.email}
-                                onChange={e => setNewClientData({...newClientData, email: e.target.value})}
+                                onChange={e => {
+                                  setNewClientData({...newClientData, email: e.target.value});
+                                  // Clear stale warning and cancel any pending check on every keystroke
+                                  setNewClientEmailWarning([]);
+                                  newClientEmailCheckRef.current = "";
+                                }}
+                                onBlur={async e => {
+                                  const val = e.target.value.trim();
+                                  if (!val) { setNewClientEmailWarning([]); return; }
+                                  // Record the email this check is for; discard the result if the field changed
+                                  newClientEmailCheckRef.current = val;
+                                  try {
+                                    const res = await fetch(`/api/clients/check-email?email=${encodeURIComponent(val)}`, { credentials: "include" });
+                                    if (res.ok && newClientEmailCheckRef.current === val) {
+                                      const data = await res.json();
+                                      setNewClientEmailWarning(data.matches ?? []);
+                                    }
+                                  } catch {}
+                                }}
                             />
                         </div>
                         <div className="grid gap-2">
@@ -1272,6 +1303,17 @@ export default function Clients() {
                             />
                         </div>
                     </div>
+
+                    {newClientEmailWarning.length > 0 && (
+                      <Alert className="border-amber-400 bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+                        <AlertTriangle className="h-4 w-4 text-amber-500" />
+                        <AlertDescription>
+                          This email is already linked to{" "}
+                          {newClientEmailWarning.map(m => m.displayId).join(", ")}.{" "}
+                          Please confirm this is a different person before continuing.
+                        </AlertDescription>
+                      </Alert>
+                    )}
 
                     <div className="grid gap-2">
                         <Label>Insurer</Label>

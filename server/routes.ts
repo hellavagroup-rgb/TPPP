@@ -26,7 +26,7 @@ import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissi
 import { isStripeConfigured, getStripeInstance, createCheckoutSession, chargeOffSession, constructWebhookEvent } from "./stripe";
 import { encryptSecret, decryptSecret, isEncryptionConfigured } from "./encryption";
 import { getAuthUrl, exchangeCodeForTokens, syncConnection, buildRedirectUri } from "./gmailSync";
-import { isNull, isNotNull, eq, and, inArray, desc, like } from "drizzle-orm";
+import { isNull, isNotNull, eq, and, inArray, desc, like, sql as drizzleSql } from "drizzle-orm";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -952,6 +952,29 @@ export async function registerRoutes(
     }
   });
 
+  // Check if an email address already belongs to any client within this tenant.
+  // Returns { matches: [{ displayId, id }] } — empty array if no duplicates.
+  // Must be registered BEFORE the /:id route to prevent "check-email" being treated as an id.
+  app.get("/api/clients/check-email", requireAdmin, async (req, res) => {
+    try {
+      const email = String(req.query.email || "").trim().toLowerCase();
+      if (!email) return res.json({ matches: [] });
+      const tenantId = req.tenant?.id;
+      if (!tenantId) return res.json({ matches: [] });
+      const rows = await db
+        .select({ id: clients.id, displayId: clients.displayId })
+        .from(clients)
+        .where(and(
+          eq(clients.tenantId, tenantId),
+          drizzleSql`lower(${clients.email}) = ${email}`,
+        ));
+      res.json({ matches: rows });
+    } catch (error) {
+      console.error("[check-email] error:", error);
+      res.status(500).json({ error: "Failed to check email" });
+    }
+  });
+
   app.get("/api/clients/:id", requireAdmin, auditLog("view", "client"), async (req, res) => {
     try {
       const client = await storage.getClientById(req.params.id);
@@ -1001,9 +1024,6 @@ export async function registerRoutes(
       // Surface unique constraint violations with a helpful message
       const msg = error instanceof Error ? error.message : String(error);
       if (msg.includes("unique") || msg.includes("duplicate") || msg.includes("23505")) {
-        if (msg.includes("email")) {
-          return res.status(409).json({ error: "A client with this email address already exists." });
-        }
         if (msg.includes("display_id")) {
           return res.status(409).json({ error: "A client with this W-Number already exists." });
         }
@@ -3101,12 +3121,7 @@ export async function registerRoutes(
       const errMsg: string = error?.message ?? error?.cause?.message ?? "";
       const isDuplicate = pgCode === "23505" || errMsg.includes("23505") || errMsg.includes("unique") || errMsg.includes("duplicate");
       if (isDuplicate) {
-        const onEmail = errMsg.includes("email") || errMsg.includes("clients_email");
-        return res.status(409).json({
-          error: onEmail
-            ? "A client with this email address already exists. If this is the same person, locate their existing record and manually link the intake message."
-            : "A client with these details already exists.",
-        });
+        return res.status(409).json({ error: "A client with these details already exists." });
       }
       res.status(500).json({ error: "Failed to convert intake message to client" });
     }

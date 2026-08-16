@@ -148,7 +148,7 @@ export const clients = pgTable("clients", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   displayId: text("display_id").notNull().unique(), // W12345678 - anonymized identifier
   // PII - Encrypted and access-controlled
-  email: text("email").notNull().unique(),
+  email: text("email").notNull(),
   phone: text("phone"),
   // Clinical Data
   referralSource: text("referral_source"),

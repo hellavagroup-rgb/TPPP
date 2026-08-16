@@ -967,13 +967,18 @@ export async function registerRoutes(
       if (!email) return res.json({ matches: [] });
       const tenantId = req.tenant?.id;
       if (!tenantId) return res.json({ matches: [] });
+      const excludeId = String(req.query.excludeId || "").trim() || null;
+      const conditions: any[] = [
+        eq(clients.tenantId, tenantId),
+        drizzleSql`lower(${clients.email}) = ${email}`,
+      ];
+      if (excludeId) {
+        conditions.push(drizzleSql`${clients.id} != ${excludeId}`);
+      }
       const rows = await db
         .select({ id: clients.id, displayId: clients.displayId })
         .from(clients)
-        .where(and(
-          eq(clients.tenantId, tenantId),
-          drizzleSql`lower(${clients.email}) = ${email}`,
-        ));
+        .where(and(...conditions));
       res.json({ matches: rows });
     } catch (error) {
       console.error("[check-email] error:", error);

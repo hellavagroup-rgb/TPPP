@@ -430,6 +430,9 @@ export default function Clients() {
   const [isEditClientOpen, setIsEditClientOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<ClientType | null>(null);
   const [editClientRateStr, setEditClientRateStr] = useState("");
+  const [editClientEmailWarning, setEditClientEmailWarning] = useState<{ displayId: string; id: string }[]>([]);
+  // Tracks the email value the in-flight onBlur check was issued for (edit dialog).
+  const editClientEmailCheckRef = useRef<string>("");
   const [editClientData, setEditClientData] = useState({
     displayId: "",
     email: "",
@@ -890,6 +893,8 @@ export default function Clients() {
   const handleOpenEditClient = (client: ClientType) => {
     setEditingClient(client);
     setEditClientRateStr(client.agreedRatePence != null ? String(client.agreedRatePence / 100) : "");
+    setEditClientEmailWarning([]);
+    editClientEmailCheckRef.current = "";
     setEditClientData({
       displayId: client.displayId?.startsWith("PENDING-") ? "" : client.displayId,
       email: client.email,
@@ -2507,7 +2512,26 @@ export default function Clients() {
                 <Input 
                   type="email"
                   value={editClientData.email}
-                  onChange={e => setEditClientData({...editClientData, email: e.target.value})}
+                  onChange={e => {
+                    setEditClientData({...editClientData, email: e.target.value});
+                    // Clear stale warning and cancel any pending check on every keystroke
+                    setEditClientEmailWarning([]);
+                    editClientEmailCheckRef.current = "";
+                  }}
+                  onBlur={async e => {
+                    const val = e.target.value.trim();
+                    if (!val) { setEditClientEmailWarning([]); return; }
+                    // Record the email this check is for; discard the result if the field changed
+                    editClientEmailCheckRef.current = val;
+                    try {
+                      const excludeId = editingClient?.id ? `&excludeId=${encodeURIComponent(editingClient.id)}` : "";
+                      const res = await fetch(`/api/clients/check-email?email=${encodeURIComponent(val)}${excludeId}`, { credentials: "include" });
+                      if (res.ok && editClientEmailCheckRef.current === val) {
+                        const data = await res.json();
+                        setEditClientEmailWarning(data.matches ?? []);
+                      }
+                    } catch {}
+                  }}
                 />
               </div>
               <div className="grid gap-2">
@@ -2518,6 +2542,17 @@ export default function Clients() {
                 />
               </div>
             </div>
+
+            {editClientEmailWarning.length > 0 && (
+              <Alert className="border-amber-400 bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+                <AlertTriangle className="h-4 w-4 text-amber-500" />
+                <AlertDescription>
+                  This email is already linked to{" "}
+                  {editClientEmailWarning.map(m => m.displayId).join(", ")}.{" "}
+                  Please confirm this is a different person before continuing.
+                </AlertDescription>
+              </Alert>
+            )}
 
             <div className="grid grid-cols-2 gap-4">
               <div className="grid gap-2">

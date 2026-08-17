@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Client, ClientStatus, FormTemplate } from "@/lib/mockData";
-import { formatDateUK } from "@/lib/dateUtils";
+import { formatDateUK, formatAssignedSlot } from "@/lib/dateUtils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -1748,7 +1748,7 @@ export default function Clients() {
                         )}
                         {client.assignedSlot && (
                           <div className="space-y-0.5">
-                            <p className="text-[10px] text-muted-foreground font-mono">{client.assignedSlot}</p>
+                            <p className="text-[10px] text-muted-foreground font-mono">{formatAssignedSlot(client.assignedSlot)}</p>
                             {(client as any).slotLocationType === "in_person" ? (
                               <span className="inline-block text-[9px] px-1.5 py-0 rounded-full bg-amber-100 text-amber-700 border border-amber-300 leading-tight">In-Person</span>
                             ) : (client as any).slotLocationType === "online" ? (
@@ -1900,7 +1900,7 @@ export default function Clients() {
                           )}
                           {client.assignedSlot && (
                             <div className="space-y-0.5">
-                              <p className="text-[10px] text-muted-foreground font-mono">{client.assignedSlot}</p>
+                              <p className="text-[10px] text-muted-foreground font-mono">{formatAssignedSlot(client.assignedSlot)}</p>
                               {(client as any).slotLocationType === "in_person" ? (
                                 <span className="inline-block text-[9px] px-1.5 py-0 rounded-full bg-amber-100 text-amber-700 border border-amber-300 leading-tight">In-Person</span>
                               ) : (client as any).slotLocationType === "online" ? (
@@ -2749,7 +2749,7 @@ export default function Clients() {
                   {clinicians.find(c => c.id === editStatusClient.assignedClinicianId)?.name?.split(",")[0] || "None"}
                 </div>
                 <div className="text-sm flex items-center gap-2 flex-wrap">
-                  <span><span className="font-medium">Slot:</span>{" "}{editStatusClient.assignedSlot || "None"}</span>
+                  <span><span className="font-medium">Slot:</span>{" "}{editStatusClient.assignedSlot ? formatAssignedSlot(editStatusClient.assignedSlot) : "None"}</span>
                   {editStatusClient.assignedSlot && (
                     (editStatusClient as any).slotLocationType === "in_person" ? (
                       <span className="inline-block text-[10px] px-1.5 py-0 rounded-full bg-amber-100 text-amber-700 border border-amber-300 leading-tight">In-Person</span>

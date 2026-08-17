@@ -517,8 +517,18 @@ export default function Availability() {
         setIsDialogOpen(false);
         resetForm();
       },
-      onError: () => {
-        toast({ title: "Error", description: "Failed to add availability.", variant: "destructive" });
+      onError: (error: Error) => {
+        // Extract the server's error message from the "STATUS: {json}" format
+        // thrown by apiRequest's throwIfResNotOk helper.
+        let description = "Failed to add availability.";
+        try {
+          const match = error.message.match(/^\d+: (.+)$/);
+          if (match) {
+            const parsed = JSON.parse(match[1]);
+            if (parsed?.error) description = parsed.error;
+          }
+        } catch {}
+        toast({ title: "Error", description, variant: "destructive" });
       },
     });
   };

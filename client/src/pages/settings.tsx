@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useAuth } from "@/lib/auth";
 import { useLocation } from "wouter";
+import { useManagedInsurers, useAddInsurer, useDeleteInsurer } from "@/hooks/use-insurers";
 
 interface EmailTemplate {
   id: string;
@@ -1042,6 +1043,79 @@ function DataExportTab() {
   );
 }
 
+function InsurerManagementSection() {
+  const [newInsurerName, setNewInsurerName] = useState("");
+  const { data: insurers = [], isLoading } = useManagedInsurers();
+  const addMutation = useAddInsurer();
+  const deleteMutation = useDeleteInsurer();
+
+  const handleAdd = () => {
+    const trimmed = newInsurerName.trim();
+    if (!trimmed) return;
+    addMutation.mutate(trimmed, {
+      onSuccess: () => setNewInsurerName(""),
+      onError: (error: any) => {
+        if (error?.message?.includes("409") || error?.message?.includes("already exists")) {
+          toast.error("This insurer already exists");
+        } else {
+          toast.error("Failed to add insurer");
+        }
+      },
+    });
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Insurers</CardTitle>
+        <CardDescription>
+          Manage the insurers your practice accepts. This list drives the "Insurers Accepted" options on each clinician's profile.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex gap-2">
+          <Input
+            placeholder="New insurer name"
+            value={newInsurerName}
+            onChange={(e) => setNewInsurerName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); }}
+          />
+          <Button onClick={handleAdd} disabled={!newInsurerName.trim() || addMutation.isPending}>
+            {addMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Add"}
+          </Button>
+        </div>
+
+        {isLoading ? (
+          <div className="flex justify-center py-8">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : insurers.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-4 text-center">
+            No insurers yet. Add the insurers your practice accepts (e.g. Bupa, Aviva, Vitality).
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {insurers.map(ins => (
+              <div key={ins.id} className="flex items-center justify-between p-3 border rounded-lg">
+                <span className="text-sm font-medium">{ins.name}</span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                  onClick={() => deleteMutation.mutate(ins.id)}
+                  disabled={deleteMutation.isPending}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function NonEngagementCategoriesTab() {
   const queryClient = useQueryClient();
   const [newCategoryName, setNewCategoryName] = useState("");
@@ -1453,7 +1527,7 @@ export default function Settings() {
         <TabsList className="flex-wrap h-auto">
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
           <TabsTrigger value="email-templates">Message Templates</TabsTrigger>
-          {nonEngagementEnabled && <TabsTrigger value="non-engagement">Non-Engagement</TabsTrigger>}
+          {nonEngagementEnabled && <TabsTrigger value="non-engagement">Categories</TabsTrigger>}
           {dataExportEnabled && <TabsTrigger value="data-export">Data Export</TabsTrigger>}
           <TabsTrigger value="account">Account</TabsTrigger>
           <TabsTrigger value="team">Team Members</TabsTrigger>
@@ -1469,7 +1543,8 @@ export default function Settings() {
         </TabsContent>
 
         {nonEngagementEnabled && (
-          <TabsContent value="non-engagement">
+          <TabsContent value="non-engagement" className="space-y-6">
+            <InsurerManagementSection />
             <NonEngagementCategoriesTab />
           </TabsContent>
         )}

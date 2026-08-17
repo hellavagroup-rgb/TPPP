@@ -115,6 +115,7 @@ export interface IStorage {
   // ============ CUSTOM INSURERS ============
   getCustomInsurers(tenantId?: string | null): Promise<CustomInsurer[]>;
   addCustomInsurer(name: string, tenantId?: string | null): Promise<CustomInsurer>;
+  deleteCustomInsurer(id: string, tenantId?: string | null): Promise<boolean>;
 
   // ============ CLIENT CLINICIAN OPTIONS (CY&A) ============
   createClientClinicianOptions(options: InsertClientClinicianOption[]): Promise<ClientClinicianOption[]>;
@@ -976,6 +977,14 @@ export class DatabaseStorage implements IStorage {
   async addCustomInsurer(name: string, tenantId?: string | null): Promise<CustomInsurer> {
     const [result] = await db.insert(customInsurers).values({ name, ...(tenantId ? { tenantId } : {}) }).returning();
     return result;
+  }
+
+  async deleteCustomInsurer(id: string, tenantId?: string | null): Promise<boolean> {
+    const where = tenantId
+      ? and(eq(customInsurers.id, id), eq(customInsurers.tenantId, tenantId))
+      : eq(customInsurers.id, id);
+    const result = await db.delete(customInsurers).where(where).returning();
+    return result.length > 0;
   }
 
   // ============ PAYMENT CHARGES ============

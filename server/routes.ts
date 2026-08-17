@@ -2632,11 +2632,39 @@ export async function registerRoutes(
   // ============ CUSTOM INSURERS ============
   const BUILTIN_INSURERS = ["Aviva", "Axa", "Bupa", "Bupa Global", "Cigna", "Other", "Vitality", "WPA"];
 
+  // Auto-seed built-in + clinician-used insurers into the DB for a tenant that
+  // has never explicitly managed their insurer list before.
+  async function seedInsurersIfEmpty(tenantId: string) {
+    const existing = await storage.getCustomInsurers(tenantId);
+    if (existing.length > 0) return;
+    const allClinicians = await storage.getAllClinicians(tenantId);
+    const clinicianUsed = new Set<string>();
+    allClinicians.forEach(c => (c.insurers || []).forEach(i => clinicianUsed.add(i)));
+    const toSeed = [...new Set([...BUILTIN_INSURERS, ...clinicianUsed])].sort();
+    for (const name of toSeed) {
+      try { await storage.addCustomInsurer(name, tenantId); } catch { /* skip duplicates */ }
+    }
+  }
+
+  // Returns the managed insurer names (string[]) — consumed by clinician profiles.
   app.get("/api/insurers", requireAuth, async (req, res) => {
     try {
-      const custom = await storage.getCustomInsurers(req.tenant?.id);
-      const customNames = custom.map(c => c.name).filter(n => !BUILTIN_INSURERS.includes(n));
-      res.json([...BUILTIN_INSURERS, ...customNames]);
+      const tenantId = req.tenant?.id;
+      if (tenantId) await seedInsurersIfEmpty(tenantId);
+      const custom = await storage.getCustomInsurers(tenantId);
+      res.json(custom.map(c => c.name));
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch insurers" });
+    }
+  });
+
+  // Returns full objects {id, name} — consumed by the Settings insurer manager.
+  app.get("/api/insurers/managed", requireAdmin, async (req, res) => {
+    try {
+      const tenantId = req.tenant?.id;
+      if (tenantId) await seedInsurersIfEmpty(tenantId);
+      const custom = await storage.getCustomInsurers(tenantId);
+      res.json(custom);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch insurers" });
     }
@@ -2650,9 +2678,6 @@ export async function registerRoutes(
       }
       const trimmed = name.trim();
       const normalised = trimmed.toLowerCase();
-      if (BUILTIN_INSURERS.some(i => i.toLowerCase() === normalised)) {
-        return res.status(409).json({ error: "This insurer already exists" });
-      }
       const existing = await storage.getCustomInsurers(req.tenant?.id);
       if (existing.some(c => c.name.toLowerCase() === normalised)) {
         return res.status(409).json({ error: "This insurer already exists" });
@@ -2664,6 +2689,16 @@ export async function registerRoutes(
         return res.status(409).json({ error: "This insurer already exists" });
       }
       res.status(500).json({ error: "Failed to add insurer" });
+    }
+  });
+
+  app.delete("/api/insurers/:id", requireAdmin, async (req, res) => {
+    try {
+      const deleted = await storage.deleteCustomInsurer(req.params.id, req.tenant?.id);
+      if (!deleted) return res.status(404).json({ error: "Insurer not found" });
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete insurer" });
     }
   });
 

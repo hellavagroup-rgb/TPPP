@@ -345,12 +345,12 @@ export default function Clinicians() {
                   <div>
                     <span className="font-medium block text-slate-700">Insurers</span>
                     <div className="flex flex-wrap gap-1 mt-1">
-                      {clinician.insurers?.map(insurer => (
+                      {clinician.insurers?.filter(i => insurerList.includes(i)).map(insurer => (
                         <span key={insurer} className="text-[10px] bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded border border-emerald-100">
                           {insurer}
                         </span>
                       ))}
-                      {(!clinician.insurers || clinician.insurers.length === 0) && (
+                      {(!clinician.insurers || clinician.insurers.filter(i => insurerList.includes(i)).length === 0) && (
                         <span className="text-slate-400 italic">None listed</span>
                       )}
                     </div>

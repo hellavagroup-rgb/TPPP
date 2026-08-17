@@ -1527,7 +1527,7 @@ export default function Settings() {
         <TabsList className="flex-wrap h-auto">
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
           <TabsTrigger value="email-templates">Message Templates</TabsTrigger>
-          {nonEngagementEnabled && <TabsTrigger value="non-engagement">Categories</TabsTrigger>}
+          <TabsTrigger value="non-engagement">Categories</TabsTrigger>
           {dataExportEnabled && <TabsTrigger value="data-export">Data Export</TabsTrigger>}
           <TabsTrigger value="account">Account</TabsTrigger>
           <TabsTrigger value="team">Team Members</TabsTrigger>
@@ -1542,12 +1542,10 @@ export default function Settings() {
           <EmailTemplatesTab />
         </TabsContent>
 
-        {nonEngagementEnabled && (
-          <TabsContent value="non-engagement" className="space-y-6">
-            <InsurerManagementSection />
-            <NonEngagementCategoriesTab />
-          </TabsContent>
-        )}
+        <TabsContent value="non-engagement" className="space-y-6">
+          <InsurerManagementSection />
+          {nonEngagementEnabled && <NonEngagementCategoriesTab />}
+        </TabsContent>
 
         {dataExportEnabled && (
           <TabsContent value="data-export">

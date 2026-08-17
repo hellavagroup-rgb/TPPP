@@ -111,7 +111,7 @@ function Router() {
       );
   }
 
-  if (location.startsWith("/super-admin")) {
+  if (location.toLowerCase().startsWith("/super-admin")) {
       return <SuperAdmin />;
   }
 

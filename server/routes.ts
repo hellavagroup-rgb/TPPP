@@ -23,7 +23,7 @@ import { requireTenant } from './middleware/tenant';
 import { requireSuperAdmin } from './middleware/superAdmin';
 import { db } from "./db";
 import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs, intakeMessages, gmailConnections, paymentCharges, clientClinicianOptions } from "@shared/schema";
-import { isStripeConfigured, getStripeInstance, createCheckoutSession, chargeOffSession, constructWebhookEvent } from "./stripe";
+import { isStripeConfigured, getStripeInstance, createPaymentLink, chargeOffSession, constructWebhookEvent } from "./stripe";
 import { encryptSecret, decryptSecret, isEncryptionConfigured } from "./encryption";
 import { getAuthUrl, exchangeCodeForTokens, syncConnection, buildRedirectUri } from "./gmailSync";
 import { isNull, isNotNull, eq, and, inArray, desc, like, sql as drizzleSql } from "drizzle-orm";
@@ -1166,22 +1166,20 @@ export async function registerRoutes(
             console.warn(`AwaitingConfirmation: client ${updated.id} has no agreed rate and no clinician default — checkout skipped`);
           } else {
             const appBase = process.env.APP_BASE_URL || `${req.protocol}://${req.get("host")}`;
-            const checkoutResult = await createCheckoutSession({
+            const checkoutResult = await createPaymentLink({
               clientId: updated.id,
-              clientEmail: updated.email,
               clientDisplayId: updated.displayId,
-              clientName: [updated.firstName, updated.lastName].filter(Boolean).join(" ") || null,
               amountPence,
               successUrl: `${appBase}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-              cancelUrl: `${appBase}/payment-cancel`,
               tenantId: req.tenant?.id,
               tenantStripeKey: req.tenant?.stripeSecretKey,
               practiceName: req.tenant?.name,
+              previousPaymentLinkId: updated.stripePaymentLinkId,
             });
             if (checkoutResult) {
               await db.update(clients).set({
-                stripeCustomerId: checkoutResult.customerId,
                 stripeCheckoutUrl: checkoutResult.url,
+                stripePaymentLinkId: checkoutResult.paymentLinkId,
                 paymentStatus: "setup_pending",
                 updatedAt: new Date(),
               }).where(eq(clients.id, updated.id));
@@ -1781,21 +1779,20 @@ export async function registerRoutes(
         const host = (req.headers.host as string) || "localhost:5000";
         const baseUrl = `${protocol}://${host}`;
 
-        let session: { url: string; customerId: string; sessionId: string } | null = null;
+        let session: { url: string; paymentLinkId: string } | null = null;
         try {
-          session = await createCheckoutSession({
+          session = await createPaymentLink({
             clientId: client.id,
-            clientEmail: client.email,
             clientDisplayId: client.displayId,
             amountPence: client.agreedRatePence,
             successUrl: `${baseUrl}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-            cancelUrl: `${baseUrl}/register/${client.id}/${req.params.registrationToken}`,
             tenantId: client.tenantId,
             tenantStripeKey,
             practiceName: tenant?.name || null,
+            previousPaymentLinkId: client.stripePaymentLinkId,
           });
         } catch (stripeErr) {
-          console.error("Stripe session creation failed:", stripeErr);
+          console.error("Stripe payment link creation failed:", stripeErr);
         }
 
         if (!session) {
@@ -1804,7 +1801,7 @@ export async function registerRoutes(
           return res.status(502).json({ error: "Payment setup is unavailable. Please try again or contact the practice." });
         }
 
-        await storage.updateClient(client.id, { stripeCheckoutUrl: session.url });
+        await storage.updateClient(client.id, { stripeCheckoutUrl: session.url, stripePaymentLinkId: session.paymentLinkId });
         return res.json({ checkoutUrl: session.url });
       }
 
@@ -3378,25 +3375,24 @@ export async function registerRoutes(
       }
 
       const appBase = process.env.APP_BASE_URL || `${req.protocol}://${req.get("host")}`;
-      const result = await createCheckoutSession({
+      const result = await createPaymentLink({
         clientId: client.id,
-        clientEmail: client.email,
         clientDisplayId: client.displayId,
-        clientName: [client.firstName, client.lastName].filter(Boolean).join(" ") || null,
         amountPence,
         successUrl: `${appBase}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-        cancelUrl: `${appBase}/payment-cancel`,
         tenantId: req.tenant?.id,
         tenantStripeKey: req.tenant?.stripeSecretKey,
         practiceName: req.tenant?.name,
+        previousPaymentLinkId: client.stripePaymentLinkId,
       });
 
-      if (!result) return res.status(500).json({ error: "Failed to create checkout session" });
+      if (!result) return res.status(500).json({ error: "Failed to create payment link" });
 
-      // Store customer ID and checkout URL on client; mark as setup_pending
+      // Store payment link URL/ID on client; mark as setup_pending.
+      // stripeCustomerId is written by the webhook after the client pays.
       await db.update(clients).set({
-        stripeCustomerId: result.customerId,
         stripeCheckoutUrl: result.url,
+        stripePaymentLinkId: result.paymentLinkId,
         paymentStatus: "setup_pending",
         updatedAt: new Date(),
       }).where(eq(clients.id, clientId));
@@ -3413,7 +3409,7 @@ export async function registerRoutes(
         console.error("Failed to send payment link email:", emailError);
       }
 
-      res.json({ url: result.url, customerId: result.customerId, emailSent });
+      res.json({ url: result.url, emailSent });
     } catch (error: any) {
       console.error("Stripe checkout error:", error?.message);
       res.status(500).json({ error: error?.message || "Failed to create checkout session" });
@@ -3502,6 +3498,23 @@ export async function registerRoutes(
               .then(rows => rows[0])
           : null;
 
+        // Deactivate the payment link so it can't be paid again. Runs on every
+        // delivery (including webhook retries) so a transient Stripe failure here
+        // is retried — deliberately outside the existingCharge idempotency guard.
+        // The link is also created with a completed_sessions limit of 1, so this
+        // is defense in depth. The key used belongs to the signature-verified tenant.
+        const completedPaymentLinkId = typeof session.payment_link === "string" ? session.payment_link : session.payment_link?.id;
+        if (completedPaymentLinkId) {
+          const stripeForLink = getStripeInstance(tenantStripeKey);
+          if (stripeForLink) {
+            try {
+              await stripeForLink.paymentLinks.update(completedPaymentLinkId, { active: false });
+            } catch (plErr: any) {
+              console.error("Webhook: failed to deactivate payment link:", plErr?.message);
+            }
+          }
+        }
+
         if (!existingCharge) {
           // Validate tenant ownership before any mutation
           const clientForUpdate = await storage.getClientById(clientId);
@@ -3513,12 +3526,31 @@ export async function registerRoutes(
 
           const client = clientForUpdate;
           const paymentIntentId = session.payment_intent;
+          const stripeInstance = getStripeInstance(tenantStripeKey);
 
           // Persist paymentStatus = active; opportunistically save payment method if retrievable
           const clientUpdate: Record<string, unknown> = { paymentStatus: "active", updatedAt: new Date() };
+
+          // Payment Links create the Stripe Customer at checkout time — record it now
+          const sessionCustomerId = typeof session.customer === "string" ? session.customer : session.customer?.id;
+          if (sessionCustomerId) {
+            clientUpdate.stripeCustomerId = sessionCustomerId;
+            // Tag the customer with our identifiers for Zapier/Xero lookup.
+            // Do NOT override name/email — the client entered their real details
+            // at checkout, which is exactly what the Xero contact needs.
+            if (stripeInstance) {
+              try {
+                await stripeInstance.customers.update(sessionCustomerId, {
+                  metadata: { clientId, displayId: client.displayId },
+                });
+              } catch (custErr) {
+                console.error("Webhook: failed to tag Stripe customer metadata:", custErr);
+              }
+            }
+          }
+
           if (paymentIntentId) {
             try {
-              const stripeInstance = getStripeInstance(tenantStripeKey);
               if (stripeInstance) {
                 const pi = await stripeInstance.paymentIntents.retrieve(paymentIntentId);
                 const paymentMethodId = typeof pi.payment_method === "string" ? pi.payment_method : pi.payment_method?.id;

@@ -16,61 +16,74 @@ export function isStripeConfigured(tenantKey?: string | null): boolean {
   return !!getStripeKey(tenantKey);
 }
 
-export async function createCheckoutSession(opts: {
+// Creates a persistent (non-expiring) Stripe Payment Link for the client's initial
+// session payment. Unlike Checkout Sessions (which Stripe hard-caps at 24h expiry),
+// Payment Links never expire. No Stripe Customer is pre-created — Stripe creates one
+// from the details the client types at checkout, which gives Zapier/Xero a real
+// contact name instead of a bare W-number. The webhook tags the customer with our
+// identifiers after payment.
+export async function createPaymentLink(opts: {
   clientId: string;
-  clientEmail: string;
   clientDisplayId: string;
-  clientName?: string | null;
   amountPence: number;
   successUrl: string;
-  cancelUrl: string;
   tenantId?: string | null;
   tenantStripeKey?: string | null;
   practiceName?: string | null;
-}): Promise<{ url: string; customerId: string; sessionId: string } | null> {
+  // If the client already has an active link, pass its ID so it is deactivated first
+  previousPaymentLinkId?: string | null;
+}): Promise<{ url: string; paymentLinkId: string } | null> {
   const stripe = getStripeInstance(opts.tenantStripeKey);
   if (!stripe) return null;
 
-  // Use the client's name if available; fall back to their W-number so Zapier/Xero
-  // always has a usable identifier when creating the Xero contact and invoice.
-  const customerName = opts.clientName?.trim() || opts.clientDisplayId;
+  // Deactivate any previous link so the client can't pay against a stale rate
+  if (opts.previousPaymentLinkId) {
+    try {
+      await stripe.paymentLinks.update(opts.previousPaymentLinkId, { active: false });
+    } catch (e: any) {
+      console.warn(`Failed to deactivate previous payment link ${opts.previousPaymentLinkId}:`, e?.message);
+    }
+  }
 
-  const customer = await stripe.customers.create({
-    email: opts.clientEmail,
-    name: customerName,
-    metadata: { clientId: opts.clientId, displayId: opts.clientDisplayId },
+  // Payment Links require a Price object (inline price_data is not supported)
+  const price = await stripe.prices.create({
+    currency: "gbp",
+    unit_amount: opts.amountPence,
+    product_data: {
+      name: `Initial Therapy Session — ${opts.practiceName || "PsychPortal"}`,
+    },
   });
 
-  const session = await stripe.checkout.sessions.create({
-    customer: customer.id,
+  const metadata = {
+    clientId: opts.clientId,
+    displayId: opts.clientDisplayId,
+    ...(opts.tenantId ? { tenantId: opts.tenantId } : {}),
+  };
+
+  const link = await stripe.paymentLinks.create({
+    line_items: [{ price: price.id, quantity: 1 }],
     payment_method_types: ["card"],
-    mode: "payment",
-    line_items: [
-      {
-        price_data: {
-          currency: "gbp",
-          unit_amount: opts.amountPence,
-          product_data: {
-            name: "Initial Therapy Session",
-            description: opts.practiceName || "PsychPortal",
-          },
-        },
-        quantity: 1,
-      },
-    ],
+    customer_creation: "always",
+    // Stripe-enforced single use: the link deactivates itself after one completed
+    // checkout, so a rapid double-payment race is impossible. Webhook deactivation
+    // below remains as defense in depth.
+    restrictions: { completed_sessions: { limit: 1 } },
+    // Explicitly collect the payer's full name so the Stripe Customer always has
+    // a real name — Zapier/Xero contact creation depends on it. Card checkout
+    // alone does not guarantee the Customer name field is populated.
+    name_collection: { individual: { enabled: true } },
     payment_intent_data: {
       setup_future_usage: "off_session",
+      metadata,
     },
-    success_url: opts.successUrl,
-    cancel_url: opts.cancelUrl,
-    metadata: {
-      clientId: opts.clientId,
-      displayId: opts.clientDisplayId,
-      ...(opts.tenantId ? { tenantId: opts.tenantId } : {}),
+    after_completion: {
+      type: "redirect",
+      redirect: { url: opts.successUrl },
     },
+    metadata, // propagates to the checkout session created when the client pays
   });
 
-  return { url: session.url!, customerId: customer.id, sessionId: session.id };
+  return { url: link.url, paymentLinkId: link.id };
 }
 
 export async function chargeOffSession(opts: {

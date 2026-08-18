@@ -177,7 +177,8 @@ export const clients = pgTable("clients", {
   agreedRatePence: integer("agreed_rate_pence"), // Agreed session rate in pence
   stripeCustomerId: text("stripe_customer_id"), // Stripe Customer ID (cus_...)
   stripePaymentMethodId: text("stripe_payment_method_id"), // Stripe PaymentMethod ID (pm_...)
-  stripeCheckoutUrl: text("stripe_checkout_url"), // Checkout URL sent to client
+  stripeCheckoutUrl: text("stripe_checkout_url"), // Payment link URL sent to client
+  stripePaymentLinkId: text("stripe_payment_link_id"), // Stripe Payment Link ID (plink_...) for deactivation
   paymentStatus: text("payment_status", { enum: ["none", "setup_pending", "active"] }).default("none"),
   // CY&A fields
   contactPreference: text("contact_preference", { enum: ["email", "phone"] }),

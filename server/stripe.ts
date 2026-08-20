@@ -38,10 +38,36 @@ export async function createPaymentLink(opts: {
 
   // Deactivate any previous link so the client can't pay against a stale rate
   if (opts.previousPaymentLinkId) {
+    let previousLinkDeactivated = false;
     try {
       await stripe.paymentLinks.update(opts.previousPaymentLinkId, { active: false });
+      previousLinkDeactivated = true;
     } catch (e: any) {
       console.warn(`Failed to deactivate previous payment link ${opts.previousPaymentLinkId}:`, e?.message);
+    }
+
+    // Each generated link has its own one-off Price. Once the link is inactive,
+    // archive that Price too so repeated regeneration does not leave a growing
+    // list of active, unused prices in the Stripe dashboard.
+    if (previousLinkDeactivated) {
+      try {
+        const previousLink = await stripe.paymentLinks.retrieve(opts.previousPaymentLinkId, {
+          expand: ["line_items"],
+        });
+        const lineItems = (previousLink as Stripe.PaymentLink & {
+          line_items?: { data?: Array<{ price?: string | Stripe.Price | null }> };
+        }).line_items?.data || [];
+
+        for (const item of lineItems) {
+          const priceId = typeof item.price === "string" ? item.price : item.price?.id;
+          if (priceId) {
+            await stripe.prices.update(priceId, { active: false });
+          }
+        }
+      } catch (e: any) {
+        // Price cleanup is housekeeping; never prevent creation of the new link.
+        console.warn(`Failed to archive the previous payment link price for ${opts.previousPaymentLinkId}:`, e?.message);
+      }
     }
   }
 

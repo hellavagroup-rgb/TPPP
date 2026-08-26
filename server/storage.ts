@@ -99,7 +99,7 @@ export interface IStorage {
   // ============ AUDIT LOGS (GDPR) ============
   createAuditLog(log: InsertAuditLog): Promise<AuditLog>;
   getAuditLogsByUserId(userId: string): Promise<AuditLog[]>;
-  getRecentAuditLogs(limit?: number, action?: string): Promise<AuditLog[]>;
+  getRecentAuditLogs(limit?: number, action?: string, tenantId?: string | null): Promise<AuditLog[]>;
 
   // ============ EMAIL TEMPLATES ============
   getAllEmailTemplates(tenantId?: string | null): Promise<EmailTemplate[]>;
@@ -887,7 +887,31 @@ export class DatabaseStorage implements IStorage {
   async getRecentAuditLogs(limit: number = 10, action?: string, tenantId?: string | null): Promise<AuditLog[]> {
     const conditions = [];
     if (action) conditions.push(eq(auditLogs.action, action));
-    if (tenantId) conditions.push(eq(auditLogs.tenantId, tenantId));
+    if (tenantId) {
+      const tenantMatch = eq(auditLogs.tenantId, tenantId);
+
+      // Older slot audit records were written before tenantId was included.
+      // Their resourceId is the clinician ID, so recover their tenant safely
+      // from that parent record instead of dropping valid activity or guessing
+      // based on tenant creation order.
+      if (action === "add_slots") {
+        conditions.push(or(
+          tenantMatch,
+          and(
+            isNull(auditLogs.tenantId),
+            eq(auditLogs.resourceType, "timeslot"),
+            sql`EXISTS (
+              SELECT 1
+              FROM clinicians AS audit_clinician
+              WHERE audit_clinician.id = ${auditLogs.resourceId}
+                AND audit_clinician.tenant_id = ${tenantId}
+            )`,
+          ),
+        ));
+      } else {
+        conditions.push(tenantMatch);
+      }
+    }
     return await db.select().from(auditLogs)
       .where(conditions.length > 0 ? and(...conditions) : undefined)
       .orderBy(desc(auditLogs.timestamp))

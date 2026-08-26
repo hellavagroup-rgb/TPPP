@@ -799,6 +799,7 @@ export async function registerRoutes(
       
       await storage.createAuditLog({
         userId: req.user!.id,
+        tenantId: req.tenant?.id || null,
         action: "add_slots",
         resourceType: "timeslot",
         resourceId: req.params.clinicianId,

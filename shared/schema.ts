@@ -58,7 +58,8 @@ export const users = pgTable("users", {
     newReferrals?: boolean;
     waitlistUpdates?: boolean;
     taskAssignments?: boolean;
-  }>().default({ newReferrals: true, waitlistUpdates: true, taskAssignments: true }),
+    formCompletions?: boolean;
+  }>().default({ newReferrals: true, waitlistUpdates: true, taskAssignments: true, formCompletions: true }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   tenantId: varchar("tenant_id").references(() => tenants.id),
 });
@@ -297,6 +298,7 @@ export const auditLogs = pgTable("audit_logs", {
   resourceType: text("resource_type").notNull(), // "client", "clinician", "form"
   resourceId: varchar("resource_id"),
   ipAddress: text("ip_address"),
+  details: json("details").$type<Record<string, unknown>>(),
   timestamp: timestamp("timestamp").defaultNow().notNull(),
   tenantId: varchar("tenant_id").references(() => tenants.id),
 });

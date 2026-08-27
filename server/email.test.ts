@@ -28,6 +28,7 @@ import {
   generateTaskReminderEmail,
   generateAvailabilityReminderEmail,
   generateFormCompletionEmail,
+  generateFormCompletedNotificationEmail,
   generateNewReferralEmail,
   generateAllocationOptionsEmail,
   generateBookingConfirmedEmail,
@@ -129,6 +130,16 @@ describe('Email Outlook rendering — no <style> blocks or class= attributes', (
     it('is Outlook-safe with no tenant', async () => {
       const email = await generateFormCompletionEmail(tenantNone);
       assertOutlookSafe('generateFormCompletionEmail (no tenant)', email.html);
+    });
+  });
+
+  describe('generateFormCompletedNotificationEmail', () => {
+    it('is Outlook-safe and contains only the safe client reference', async () => {
+      const email = await generateFormCompletedNotificationEmail('W12345', 'Intake Form', tenant);
+      assertOutlookSafe('generateFormCompletedNotificationEmail', email.html);
+      expect(email.subject).toContain('W12345');
+      expect(email.html).toContain('Intake Form');
+      expect(email.html).not.toContain('responses');
     });
   });
 

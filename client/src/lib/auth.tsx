@@ -10,6 +10,7 @@ export interface NotificationPrefs {
   newReferrals?: boolean;
   waitlistUpdates?: boolean;
   taskAssignments?: boolean;
+  formCompletions?: boolean;
 }
 
 export interface User {

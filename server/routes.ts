@@ -14,7 +14,7 @@ import {
   type InsertFormTemplate
 } from "@shared/schema";
 import { z } from "zod";
-import { sendEmail, buildFromAddress, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail, generateClinicianWelcomeEmail, generateAdminInviteEmail, generateAllocationOptionsEmail, generateBookingConfirmedEmail, getFormCompletionPageContent, GENERIC_PRACTICE_NAME } from "./email";
+import { sendEmail, buildFromAddress, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateFormCompletedNotificationEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail, generateClinicianWelcomeEmail, generateAdminInviteEmail, generateAllocationOptionsEmail, generateBookingConfirmedEmail, getFormCompletionPageContent, GENERIC_PRACTICE_NAME } from "./email";
 import { forceReseedDatabase } from "./seed";
 import { seedDemoData } from "./seedDemo";
 import { parseIntakeEmailBody } from "./intakeParser";
@@ -27,11 +27,51 @@ import { isStripeConfigured, getStripeInstance, createPaymentLink, chargeOffSess
 import { encryptSecret, decryptSecret, isEncryptionConfigured } from "./encryption";
 import { getAuthUrl, exchangeCodeForTokens, syncConnection, buildRedirectUri } from "./gmailSync";
 import { isNull, isNotNull, eq, and, inArray, desc, like, sql as drizzleSql } from "drizzle-orm";
+import { toRecentActivityItem } from "./activity";
+
+function formatActivitySlot(slot: { type?: string | null; day?: string | null; date?: string | null; startTime?: string | null; endTime?: string | null; locationType?: string | null }): string {
+  const day = slot.type === "SpecificDate" ? slot.date : slot.day;
+  const time = [slot.startTime, slot.endTime].filter(Boolean).join("–");
+  const location = slot.locationType === "in_person" ? "in person" : "online";
+  return [day, time, location].filter(Boolean).join(" · ");
+}
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  const recordActivity = async (
+    req: Request,
+    action: string,
+    resourceType: string,
+    resourceId: string | null,
+    details: Record<string, unknown>,
+    tenantId: string | null | undefined = req.tenant?.id,
+  ) => {
+    try {
+      await storage.createAuditLog({
+        userId: req.user?.id || null,
+        tenantId: tenantId || null,
+        action,
+        resourceType,
+        resourceId,
+        ipAddress: req.ip || req.socket.remoteAddress || null,
+        details: {
+          actorName: req.user?.name || details.actorName || "Practice user",
+          ...details,
+        },
+      });
+    } catch (error) {
+      console.error("Recent activity log failed:", error);
+    }
+  };
+
+  const getClinicianActivityName = async (clinicianId: string | null | undefined) => {
+    if (!clinicianId) return "a clinician";
+    const clinician = await storage.getClinicianById(clinicianId);
+    if (!clinician?.userId) return "a clinician";
+    return (await storage.getUserById(clinician.userId))?.name || "a clinician";
+  };
   // Health check endpoint for deployment
   app.get("/api/health", (_req, res) => {
     res.status(200).json({ status: "ok" });
@@ -278,6 +318,9 @@ export async function registerRoutes(
       }
 
       const updated = await storage.updateClinician(clinician.id, clinicianUpdates);
+      await recordActivity(req, "activity_clinician_updated", "clinician", clinician.id, {
+        clinicianName: await getClinicianActivityName(clinician.id),
+      }, clinician.tenantId);
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "Failed to update clinician" });
@@ -288,6 +331,9 @@ export async function registerRoutes(
     try {
       const validated = insertClinicianSchema.parse(req.body);
       const clinician = await storage.createClinician(validated, req.tenant?.id);
+      await recordActivity(req, "activity_clinician_created", "clinician", clinician.id, {
+        clinicianName: await getClinicianActivityName(clinician.id),
+      });
       res.json(clinician);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -339,6 +385,9 @@ export async function registerRoutes(
         specialties: specialties || [],
       }, req.tenant?.id);
 
+      await recordActivity(req, "activity_clinician_created", "clinician", clinician.id, {
+        clinicianName: name,
+      });
       res.json({ clinician });
     } catch (error) {
       console.error("Failed to create clinician with user:", error);
@@ -385,6 +434,9 @@ export async function registerRoutes(
         return res.status(500).json({ error: "Failed to send email" });
       }
 
+      await recordActivity(req, "activity_clinician_login_generated", "clinician", clinician.id, {
+        clinicianName: user.name,
+      });
       res.json({ success: true, message: "Login credentials sent to clinician's email" });
     } catch (error) {
       console.error("Failed to generate login:", error);
@@ -414,6 +466,9 @@ export async function registerRoutes(
       }
 
       const updated = await storage.updateClinician(req.params.id, clinicianUpdates);
+      await recordActivity(req, "activity_clinician_updated", "clinician", clinician.id, {
+        clinicianName: name || await getClinicianActivityName(clinician.id),
+      });
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "Failed to update clinician" });
@@ -430,6 +485,9 @@ export async function registerRoutes(
         return res.status(403).json({ error: "Access denied" });
       }
       await storage.deleteClinician(req.params.id);
+      await recordActivity(req, "activity_clinician_deleted", "clinician", clinician.id, {
+        clinicianName: await getClinicianActivityName(clinician.id),
+      });
       res.json({ success: true, message: "Clinician permanently deleted" });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete clinician" });
@@ -499,6 +557,9 @@ export async function registerRoutes(
         return res.status(500).json({ error: "Failed to send invite email" });
       }
 
+      await recordActivity(req, "activity_admin_invited", "user", user.id, {
+        teamMemberName: name,
+      });
       res.json({ success: true, message: "Invite sent successfully" });
     } catch (error) {
       console.error("Failed to invite admin user:", error);
@@ -623,6 +684,9 @@ export async function registerRoutes(
       }
 
       await storage.deleteUser(req.params.id);
+      await recordActivity(req, "activity_admin_deleted", "user", user.id, {
+        teamMemberName: user.name,
+      });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete admin user" });
@@ -653,6 +717,9 @@ export async function registerRoutes(
       }
 
       await storage.updateUser(req.params.id, { linkedClinicianId: clinicianId || null });
+      await recordActivity(req, "activity_admin_clinician_link_updated", "user", user.id, {
+        teamMemberName: user.name,
+      });
       res.json({ success: true });
     } catch (error) {
       console.error("Failed to link admin to clinician:", error);
@@ -687,6 +754,9 @@ export async function registerRoutes(
         linkedClinicianId: clinician.id
       });
 
+      await recordActivity(req, "activity_admin_promoted", "clinician", clinician.id, {
+        clinicianName: user.name,
+      }, clinician.tenantId);
       res.json({ success: true, message: "Clinician promoted to admin" });
     } catch (error) {
       console.error("Failed to promote clinician to admin:", error);
@@ -797,13 +867,10 @@ export async function registerRoutes(
         ? `${newSlots[0].day} ${newSlots[0].startTime}-${newSlots[0].endTime}${slotCount > 1 ? ` (+${slotCount - 1} more)` : ''}`
         : '';
       
-      await storage.createAuditLog({
-        userId: req.user!.id,
-        tenantId: req.tenant?.id || null,
-        action: "add_slots",
-        resourceType: "timeslot",
-        resourceId: req.params.clinicianId,
-        ipAddress: `${clinicianName}|${slotCount} slot${slotCount > 1 ? 's' : ''}|${slotDetails}`,
+      await recordActivity(req, "activity_slot_added", "timeslot", req.params.clinicianId, {
+        clinicianName,
+        slotCount,
+        slotDescription: slotDetails,
       });
 
       const allSlots = await storage.getTimeSlotsByClinicianId(req.params.clinicianId);
@@ -841,6 +908,10 @@ export async function registerRoutes(
       }
 
       await storage.deleteTimeSlotById(req.params.slotId);
+      await recordActivity(req, "activity_slot_removed", "timeslot", req.params.clinicianId, {
+        clinicianName: await getClinicianActivityName(req.params.clinicianId),
+        slotDescription: formatActivitySlot(slot),
+      });
       const allSlots = await storage.getTimeSlotsByClinicianId(req.params.clinicianId);
       res.json(allSlots);
     } catch (error: any) {
@@ -856,12 +927,19 @@ export async function registerRoutes(
       if (locationType !== "online" && locationType !== "in_person") {
         return res.status(400).json({ error: "Invalid locationType" });
       }
+      const slotBeforeUpdate = await storage.getTimeSlotById(req.params.slotId);
       const updated = await storage.updateTimeSlotLocationType(
         req.params.slotId,
         req.tenant!.id,
         locationType,
       );
       if (!updated) return res.status(404).json({ error: "Slot not found or access denied" });
+      await recordActivity(req, "activity_slot_location_changed", "timeslot", updated.clinicianId, {
+        clinicianName: await getClinicianActivityName(updated.clinicianId),
+        slotDescription: formatActivitySlot(updated),
+        oldLocationType: slotBeforeUpdate?.locationType === "in_person" ? "in person" : "online",
+        newLocationType: locationType === "in_person" ? "in person" : "online",
+      });
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "Failed to update slot location type" });
@@ -878,6 +956,9 @@ export async function registerRoutes(
       await db.update(tenants)
         .set({ defaultLocationType })
         .where(eq(tenants.id, req.tenant!.id));
+      await recordActivity(req, "activity_practice_availability_updated", "tenant", req.tenant!.id, {
+        defaultLocationType,
+      });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to update availability settings" });
@@ -913,6 +994,9 @@ export async function registerRoutes(
       if (!restored) {
         return res.status(404).json({ error: "Client not found" });
       }
+      await recordActivity(req, "activity_client_restored", "client", restored.id, {
+        clientDisplayId: restored.displayId,
+      });
       res.json(restored);
     } catch (error) {
       res.status(500).json({ error: "Failed to restore client" });
@@ -952,6 +1036,9 @@ export async function registerRoutes(
       if (!deleted) {
         return res.status(404).json({ error: "Client not found" });
       }
+      await recordActivity(req, "activity_client_deleted", "client", client.id, {
+        clientDisplayId: client.displayId,
+      });
       res.json({ success: true });
     } catch (error: any) {
       console.error("[delete-permanently] error:", error?.code, error?.message, error);
@@ -1027,6 +1114,9 @@ export async function registerRoutes(
         console.error("Failed to send new referral notifications:", emailError);
       }
 
+      await recordActivity(req, "activity_client_created", "client", client.id, {
+        clientDisplayId: client.displayId,
+      });
       res.json(client);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -1139,6 +1229,26 @@ export async function registerRoutes(
       }
       if (!updated) {
         return res.status(404).json({ error: "Client not found" });
+      }
+
+      if (req.body.status && req.body.status !== oldStatus) {
+        const clinicianName = await getClinicianActivityName(currentClient.assignedClinicianId);
+        await recordActivity(
+          req,
+          isDeallocation ? "activity_client_deallocated" : "activity_client_status_changed",
+          "client",
+          updated.id,
+          {
+            clientDisplayId: updated.displayId,
+            oldStatus,
+            newStatus: req.body.status,
+            clinicianName,
+          },
+        );
+      } else if (Object.keys(req.body).length > 0) {
+        await recordActivity(req, "activity_client_details_updated", "client", updated.id, {
+          clientDisplayId: updated.displayId,
+        });
       }
 
       // Auto-create Stripe checkout and email payment link when moving to AwaitingConfirmation
@@ -1273,6 +1383,12 @@ export async function registerRoutes(
       await storage.assignClinicianToClient(req.params.clientId, clinicianId, slotId, allocationMethod, allocationReason);
       
       const updated = await storage.getClientById(req.params.clientId);
+      const slot = await storage.getTimeSlotById(slotId);
+      await recordActivity(req, "activity_client_allocated", "client", req.params.clientId, {
+        clientDisplayId: updated?.displayId || clientToAssign.displayId,
+        clinicianName: await getClinicianActivityName(clinicianId),
+        slotDescription: slot ? formatActivitySlot(slot) : "",
+      });
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "Failed to assign clinician" });
@@ -1354,6 +1470,10 @@ export async function registerRoutes(
       });
 
       const updated = await storage.getClientById(req.params.clientId);
+      await recordActivity(req, "activity_client_options_sent", "client", req.params.clientId, {
+        clientDisplayId: updated?.displayId || client.displayId,
+        optionCount: selections.length,
+      });
 
       // Auto-send allocation email if enabled
       if (req.tenant?.autoAllocationEmailEnabled && updated?.email) {
@@ -1421,6 +1541,20 @@ export async function registerRoutes(
       if (!updated) {
         return res.status(404).json({ error: "Client not found" });
       }
+      const slot = slotId ? await storage.getTimeSlotById(slotId) : undefined;
+      await recordActivity(
+        req,
+        clinicianId ? "activity_client_reallocated" : "activity_client_deallocated",
+        "client",
+        updated.id,
+        {
+          clientDisplayId: updated.displayId,
+          clinicianName: clinicianId
+            ? await getClinicianActivityName(clinicianId)
+            : await getClinicianActivityName(clientToReassign.assignedClinicianId),
+          slotDescription: slot ? formatActivitySlot(slot) : "",
+        },
+      );
       res.json(updated);
     } catch (error: any) {
       console.error("Failed to reassign client:", error);
@@ -1442,6 +1576,10 @@ export async function registerRoutes(
       if (!archived) {
         return res.status(404).json({ error: "Client not found" });
       }
+      await recordActivity(req, "activity_client_archived", "client", archived.id, {
+        clientDisplayId: archived.displayId,
+        archiveCategory: category || "",
+      });
       res.json(archived);
     } catch (error) {
       res.status(500).json({ error: "Failed to archive client" });
@@ -1510,6 +1648,9 @@ export async function registerRoutes(
       if (!form) {
         return res.status(404).json({ error: "Form not found" });
       }
+      if (form.tenantId !== client.tenantId) {
+        return res.status(403).json({ error: "Form does not belong to this practice" });
+      }
 
       // Verify client is in a state that allows form submission (Forms Sent)
       if (client.status !== "Forms Sent" && client.status !== "New") {
@@ -1561,13 +1702,40 @@ export async function registerRoutes(
         clientUpdate.insurer = insurerValue;
       }
       await storage.updateClient(clientId, clientUpdate);
+      const completionTenant = client.tenantId ? await storage.getTenantById(client.tenantId) : null;
+      const completionTenantContext = completionTenant
+        ? { id: completionTenant.id, name: completionTenant.name, fromEmail: completionTenant.fromEmail, primaryColor: completionTenant.primaryColor }
+        : undefined;
+
+      await recordActivity(req, "activity_form_completed", "form", submission.id, {
+        actorName: "Client",
+        clientDisplayId: client.displayId || "Client",
+        formTitle: form.title,
+      }, client.tenantId);
+
+      // Notify opted-in admins. The email intentionally excludes form responses:
+      // recipients must log in to review sensitive clinical information.
+      try {
+        const adminUsers = client.tenantId ? await storage.getAdminUsersByTenantId(client.tenantId) : [];
+        for (const admin of adminUsers) {
+          const prefs = admin.notificationPrefs as { formCompletions?: boolean } | null;
+          if (prefs?.formCompletions !== false) {
+            const emailOptions = await generateFormCompletedNotificationEmail(
+              client.displayId || "Client",
+              form.title,
+              completionTenantContext,
+            );
+            await sendEmail({ ...emailOptions, to: admin.email });
+          }
+        }
+      } catch (emailError) {
+        console.error("Failed to send completed-form notifications:", emailError);
+      }
 
       // Send confirmation email to client if they have an email address
       if (client.email) {
         try {
-          const completionTenant = client.tenantId ? await storage.getTenantById(client.tenantId) : null;
-          const tcC = completionTenant ? { id: completionTenant.id, name: completionTenant.name, fromEmail: completionTenant.fromEmail, primaryColor: completionTenant.primaryColor } : undefined;
-          const emailOptions = await generateFormCompletionEmail(tcC);
+          const emailOptions = await generateFormCompletionEmail(completionTenantContext);
           emailOptions.to = client.email;
           await sendEmail(emailOptions);
           console.log(`Form completion email sent to client ${clientId}`);
@@ -1668,6 +1836,10 @@ export async function registerRoutes(
             .set({ needsAdminCall: true, updatedAt: new Date() })
             .where(eq(clients.id, optionRow.clientId));
         });
+        await recordActivity(req, "activity_appointment_options_declined", "client", client.id, {
+          actorName: "Client",
+          clientDisplayId: client.displayId || "Client",
+        }, client.tenantId);
         return res.json({ declined: true });
       }
 
@@ -1697,6 +1869,10 @@ export async function registerRoutes(
         }).where(eq(clients.id, optionRow.clientId));
       });
 
+      await recordActivity(req, "activity_appointment_option_selected", "client", client.id, {
+        actorName: "Client",
+        clientDisplayId: client.displayId || "Client",
+      }, client.tenantId);
       res.json({
         selected: true,
         registrationUrl: `/register/${optionRow.clientId}/${registrationToken}`,
@@ -1803,11 +1979,19 @@ export async function registerRoutes(
         }
 
         await storage.updateClient(client.id, { stripeCheckoutUrl: session.url, stripePaymentLinkId: session.paymentLinkId });
+        await recordActivity(req, "activity_registration_submitted", "client", client.id, {
+          actorName: "Client",
+          clientDisplayId: client.displayId || "Client",
+        }, client.tenantId);
         return res.json({ checkoutUrl: session.url });
       }
 
       // Insurer or payments not enabled — advance directly to BookingConfirmed
       await storage.updateClient(req.params.clientId, { status: "BookingConfirmed" });
+      await recordActivity(req, "activity_booking_confirmed", "client", client.id, {
+        actorName: "Client",
+        clientDisplayId: client.displayId || "Client",
+      }, client.tenantId);
 
       // Send booking confirmed email if the tenant flag is on
       if (tenant?.bookingConfirmedEmailEnabled && client.email) {
@@ -1988,6 +2172,9 @@ export async function registerRoutes(
     try {
       const validated = insertFormTemplateSchema.parse(req.body);
       const form = await storage.createFormTemplate(validated, req.tenant?.id);
+      await recordActivity(req, "activity_form_template_created", "form", form.id, {
+        formTitle: form.title,
+      });
       res.json(form);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -2007,6 +2194,9 @@ export async function registerRoutes(
       if (!updated) {
         return res.status(404).json({ error: "Form not found" });
       }
+      await recordActivity(req, "activity_form_template_updated", "form", updated.id, {
+        formTitle: updated.title,
+      });
       res.json(updated);
     } catch (error) {
       console.error("Failed to update form:", error);
@@ -2021,6 +2211,9 @@ export async function registerRoutes(
       if (!form) return res.status(404).json({ error: "Form not found" });
       if (form.tenantId !== req.tenant?.id) return res.status(403).json({ error: "Access denied" });
       await storage.deleteFormTemplate(req.params.id);
+      await recordActivity(req, "activity_form_template_deleted", "form", form.id, {
+        formTitle: form.title,
+      });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete form" });
@@ -2030,8 +2223,8 @@ export async function registerRoutes(
   // ============ TASKS ============
   app.get("/api/activity/recent", requireAdmin, async (req, res) => {
     try {
-      const logs = await storage.getRecentAuditLogs(20, "add_slots", req.tenant?.id);
-      res.json(logs);
+      const logs = await storage.getRecentActivityLogs(25, req.tenant?.id);
+      res.json(logs.map(toRecentActivityItem));
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch recent activity" });
     }
@@ -2055,6 +2248,10 @@ export async function registerRoutes(
       }
       const validated = insertTaskSchema.parse(body);
       const task = await storage.createTask(validated, req.tenant?.id);
+      await recordActivity(req, "activity_task_created", "task", task.id, {
+        taskTitle: task.title,
+        assignee: task.assignee,
+      });
 
       if (validated.assignee) {
         try {
@@ -2111,6 +2308,15 @@ export async function registerRoutes(
       if (!updated) {
         return res.status(404).json({ error: "Task not found" });
       }
+      await recordActivity(
+        req,
+        task.status !== "Completed" && updated.status === "Completed"
+          ? "activity_task_completed"
+          : "activity_task_updated",
+        "task",
+        updated.id,
+        { taskTitle: updated.title, assignee: updated.assignee },
+      );
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "Failed to update task" });
@@ -2123,6 +2329,10 @@ export async function registerRoutes(
       if (!task) return res.status(404).json({ error: "Task not found" });
       if (task.tenantId !== req.tenant?.id) return res.status(403).json({ error: "Access denied" });
       await storage.deleteTask(req.params.id);
+      await recordActivity(req, "activity_task_deleted", "task", task.id, {
+        taskTitle: task.title,
+        assignee: task.assignee,
+      });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete task" });
@@ -2176,6 +2386,10 @@ export async function registerRoutes(
 
       // Update client status to "Forms Sent" with timestamp
       await storage.updateClient(clientId, { status: "Forms Sent", formsSentAt: new Date() });
+      await recordActivity(req, "activity_form_sent", "form", form.id, {
+        clientDisplayId: client.displayId || "Client",
+        formTitle: form.title,
+      });
 
       res.json({ success: true, message: "Form sent successfully" });
     } catch (error) {

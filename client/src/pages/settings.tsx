@@ -119,6 +119,17 @@ Warm regards,
 If you need urgent support, please contact your GP or a trusted healthcare provider. In the UK, you can also receive immediate support from: the Samaritans (Call 116 123 lines open 24/7 365 days a year or email jo@samaritans.org); or contact CALM (https://www.thecalmzone.net/) on their national helpline 0800 585858 (5pm to midnight).`,
   },
   {
+    templateKey: "form_completed_notification",
+    name: "Completed Form Notification",
+    subject: "Form completed — {{client_display_id}}",
+    bodyText: `A client has completed an intake form.
+
+Client ID: {{client_display_id}}
+Form: {{form_title}}
+
+Please log in to {{practice_name}} to review the submission.`,
+  },
+  {
     templateKey: "new_referral",
     name: "New Referral Notification",
     subject: "New Referral Received - {{clientDisplayId}}",
@@ -257,6 +268,7 @@ function NotificationsTab() {
     newReferrals: true,
     waitlistUpdates: true,
     taskAssignments: true,
+    formCompletions: true,
   };
   
   const prefs = user?.notificationPrefs || defaultPrefs;
@@ -293,6 +305,17 @@ function NotificationsTab() {
           <Switch 
             checked={prefs.newReferrals !== false}
             onCheckedChange={(checked) => handleToggle("newReferrals", checked)}
+            disabled={saving}
+          />
+        </div>
+        <div className="flex items-center justify-between">
+          <div className="space-y-0.5">
+            <Label>Completed Forms</Label>
+            <p className="text-sm text-muted-foreground">Receive an email when a client completes an intake form.</p>
+          </div>
+          <Switch
+            checked={prefs.formCompletions !== false}
+            onCheckedChange={(checked) => handleToggle("formCompletions", checked)}
             disabled={saving}
           />
         </div>

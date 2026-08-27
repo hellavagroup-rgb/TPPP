@@ -19,6 +19,7 @@ import {
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, or, desc, sql, isNull, inArray } from "drizzle-orm";
+import { RECENT_ACTIVITY_ACTIONS } from "./activity";
 
 // Storage interface for all CRUD operations
 export interface IStorage {
@@ -100,6 +101,7 @@ export interface IStorage {
   createAuditLog(log: InsertAuditLog): Promise<AuditLog>;
   getAuditLogsByUserId(userId: string): Promise<AuditLog[]>;
   getRecentAuditLogs(limit?: number, action?: string, tenantId?: string | null): Promise<AuditLog[]>;
+  getRecentActivityLogs(limit?: number, tenantId?: string | null): Promise<AuditLog[]>;
 
   // ============ EMAIL TEMPLATES ============
   getAllEmailTemplates(tenantId?: string | null): Promise<EmailTemplate[]>;
@@ -914,6 +916,31 @@ export class DatabaseStorage implements IStorage {
     }
     return await db.select().from(auditLogs)
       .where(conditions.length > 0 ? and(...conditions) : undefined)
+      .orderBy(desc(auditLogs.timestamp))
+      .limit(limit);
+  }
+
+  async getRecentActivityLogs(limit: number = 25, tenantId?: string | null): Promise<AuditLog[]> {
+    if (!tenantId) return [];
+
+    return await db.select().from(auditLogs)
+      .where(and(
+        inArray(auditLogs.action, RECENT_ACTIVITY_ACTIONS),
+        or(
+          eq(auditLogs.tenantId, tenantId),
+          and(
+            isNull(auditLogs.tenantId),
+            eq(auditLogs.resourceType, "timeslot"),
+            inArray(auditLogs.action, ["add_slots", "activity_slot_added"]),
+            sql`EXISTS (
+              SELECT 1
+              FROM clinicians AS activity_clinician
+              WHERE activity_clinician.id = ${auditLogs.resourceId}
+                AND activity_clinician.tenant_id = ${tenantId}
+            )`,
+          ),
+        ),
+      ))
       .orderBy(desc(auditLogs.timestamp))
       .limit(limit);
   }

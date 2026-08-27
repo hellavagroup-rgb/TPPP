@@ -10,20 +10,36 @@ import {
   Mail,
   CheckCircle2,
   Calendar,
-  Clock
+  Clock,
+  CalendarPlus,
+  CalendarX,
+  ClipboardCheck,
+  ListChecks,
+  ListTodo,
+  UserPlus,
+  MapPin
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
 import { Link } from "wouter";
-import type { Client, Task, Clinician, TimeSlot, AuditLog } from "@shared/schema";
+import type { Client, Clinician, TimeSlot } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
-import { Plus } from "lucide-react";
 
 type ClinicianWithAvailability = Clinician & { name: string; availability?: TimeSlot[] };
 
-function formatTimeAgo(date: Date): string {
+interface RecentActivityItem {
+  id: string;
+  eventType: "client" | "form" | "availability" | "task" | "team" | "settings";
+  title: string;
+  description?: string;
+  actorName?: string;
+  timestamp: string | Date;
+}
+
+function formatTimeAgo(date: string | Date): string {
+  const dateValue = new Date(date);
   const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
+  const diffMs = now.getTime() - dateValue.getTime();
   const diffMins = Math.floor(diffMs / 60000);
   if (diffMins < 1) return "Just now";
   if (diffMins < 60) return `${diffMins}m ago`;
@@ -32,7 +48,24 @@ function formatTimeAgo(date: Date): string {
   const diffDays = Math.floor(diffHours / 24);
   if (diffDays === 1) return "Yesterday";
   if (diffDays < 7) return `${diffDays}d ago`;
-  return date.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  return dateValue.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+}
+
+function getActivityAppearance(eventType: RecentActivityItem["eventType"], title: string) {
+  if (eventType === "availability") {
+    return title.includes("removed")
+      ? { Icon: CalendarX, surface: "bg-rose-50 border-rose-100", icon: "bg-rose-100 text-rose-700" }
+      : title.includes("location")
+        ? { Icon: MapPin, surface: "bg-sky-50 border-sky-100", icon: "bg-sky-100 text-sky-700" }
+        : { Icon: CalendarPlus, surface: "bg-emerald-50 border-emerald-100", icon: "bg-emerald-100 text-emerald-700" };
+  }
+  if (eventType === "form") return { Icon: ClipboardCheck, surface: "bg-teal-50 border-teal-100", icon: "bg-teal-100 text-teal-700" };
+  if (eventType === "task") {
+    return title.includes("completed")
+      ? { Icon: ListChecks, surface: "bg-violet-50 border-violet-100", icon: "bg-violet-100 text-violet-700" }
+      : { Icon: ListTodo, surface: "bg-slate-50 border-slate-100", icon: "bg-slate-100 text-slate-700" };
+  }
+  return { Icon: UserPlus, surface: "bg-indigo-50 border-indigo-100", icon: "bg-indigo-100 text-indigo-700" };
 }
 
 function isSlotActive(slot: TimeSlot) {
@@ -114,17 +147,14 @@ export default function Dashboard() {
     queryKey: ["/api/clients"],
   });
 
-  const { data: tasks = [] } = useQuery<Task[]>({
-    queryKey: ["/api/tasks"],
-  });
-
   const { data: clinicians = [] } = useQuery<ClinicianWithAvailability[]>({
     queryKey: ["/api/clinicians"],
   });
 
-  const { data: recentActivity = [] } = useQuery<AuditLog[]>({
+  const { data: recentActivity = [], isLoading: isActivityLoading, isError: isActivityError } = useQuery<RecentActivityItem[]>({
     queryKey: ["/api/activity/recent"],
     enabled: user?.role === "admin",
+    refetchInterval: 60_000,
   });
 
   // Get linked clinician data for admins who are also clinicians
@@ -296,46 +326,34 @@ export default function Dashboard() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              {tasks.length === 0 && recentActivity.length === 0 ? (
+              {isActivityLoading ? (
+                <div className="flex justify-center py-5">
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                </div>
+              ) : isActivityError ? (
+                <p className="text-sm text-muted-foreground text-center py-4">Recent activity could not be loaded. Please refresh and try again.</p>
+              ) : recentActivity.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-4">No recent activity</p>
               ) : (
                 <div className="space-y-3">
-                  {recentActivity.slice(0, 5).map((log) => {
-                    const parts = (log.ipAddress || "").split("|");
-                    const clinicianName = parts[0] || "Unknown";
-                    const slotInfo = parts[1] || "";
-                    const slotDetails = parts[2] || "";
-                    const timeAgo = log.timestamp ? formatTimeAgo(new Date(log.timestamp)) : "";
+                  {recentActivity.slice(0, 10).map((activity) => {
+                    const { Icon, surface, icon } = getActivityAppearance(activity.eventType, activity.title);
                     return (
-                      <div key={log.id} className="flex items-center justify-between p-3 bg-green-50 rounded-lg border border-green-100">
-                        <div className="flex items-center gap-2">
-                          <div className="p-1.5 rounded-full bg-green-100">
-                            <Plus className="h-3 w-3 text-green-600" />
+                      <div key={activity.id} className={`flex items-start justify-between gap-3 p-3 rounded-lg border ${surface}`}>
+                        <div className="flex items-start gap-2 min-w-0">
+                          <div className={`p-1.5 rounded-full shrink-0 ${icon}`}>
+                            <Icon className="h-3.5 w-3.5" />
                           </div>
-                          <div>
-                            <p className="font-medium text-sm">{clinicianName} added {slotInfo}</p>
-                            {slotDetails && <p className="text-xs text-muted-foreground">{slotDetails}</p>}
+                          <div className="min-w-0">
+                            <p className="font-medium text-sm">{activity.title}</p>
+                            {activity.description && <p className="text-xs text-muted-foreground mt-0.5">{activity.description}</p>}
+                            {activity.actorName && <p className="text-xs text-muted-foreground mt-1">By {activity.actorName}</p>}
                           </div>
                         </div>
-                        <span className="text-xs text-muted-foreground whitespace-nowrap">{timeAgo}</span>
+                        <span className="text-xs text-muted-foreground whitespace-nowrap">{formatTimeAgo(activity.timestamp)}</span>
                       </div>
                     );
                   })}
-                  {tasks.slice(0, 5).map((task) => (
-                    <div key={task.id} className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
-                      <div>
-                        <p className="font-medium text-sm">{task.title}</p>
-                        <p className="text-xs text-muted-foreground">{task.assignee}</p>
-                      </div>
-                      <span className={`text-xs px-2 py-1 rounded ${
-                        task.status === "Completed" ? "bg-emerald-100 text-emerald-700" :
-                        task.status === "In Progress" ? "bg-blue-100 text-blue-700" :
-                        "bg-amber-100 text-amber-700"
-                      }`}>
-                        {task.status}
-                      </span>
-                    </div>
-                  ))}
                 </div>
               )}
             </CardContent>

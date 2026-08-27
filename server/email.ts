@@ -406,6 +406,37 @@ ${practiceName} Team`;
   };
 }
 
+export async function generateFormCompletedNotificationEmail(
+  clientDisplayId: string,
+  formTitle: string,
+  tenant?: TenantContext,
+): Promise<EmailOptions> {
+  const practiceName = tenant?.name || GENERIC_PRACTICE_NAME;
+  const storedTemplate = await getStoredTemplate('form_completed_notification', tenant?.id);
+  const placeholders = { client_display_id: clientDisplayId, form_title: formTitle, practice_name: practiceName };
+
+  if (storedTemplate) {
+    const bodyText = replacePlaceholders(storedTemplate.bodyText, placeholders);
+    const subject = replacePlaceholders(storedTemplate.subject, placeholders);
+    return {
+      to: '',
+      subject,
+      html: wrapInHtmlTemplate(bodyText, 'Form Completed', practiceName, tenant?.primaryColor),
+      text: bodyText,
+      from: buildFromAddress(tenant),
+    };
+  }
+
+  const bodyText = `A client has completed an intake form.\n\nClient ID: ${clientDisplayId}\nForm: ${formTitle}\n\nPlease log in to ${practiceName} to review the submission.`;
+  return {
+    to: '',
+    subject: `Form completed — ${clientDisplayId}`,
+    html: wrapInHtmlTemplate(bodyText, 'Form Completed', practiceName, tenant?.primaryColor),
+    text: bodyText,
+    from: buildFromAddress(tenant),
+  };
+}
+
 export async function generateNewReferralEmail(clientDisplayId: string, clientName: string, tenant?: TenantContext): Promise<EmailOptions> {
   const practiceName = tenant?.name || GENERIC_PRACTICE_NAME;
   const storedTemplate = await getStoredTemplate('new_referral', tenant?.id);

@@ -1,4 +1,4 @@
-import type { AuditLog } from "@shared/schema";
+import type { AuditLog, Task } from "@shared/schema";
 
 export const RECENT_ACTIVITY_ACTIONS = [
   "add_slots",
@@ -90,6 +90,8 @@ export interface RecentActivityItem {
   actorName?: string;
   timestamp: Date;
 }
+
+type TaskActivityFallback = Pick<Task, "id" | "title" | "createdAt" | "tenantId">;
 
 type ActivityDetails = Record<string, unknown>;
 
@@ -198,4 +200,36 @@ export function toRecentActivityItem(log: AuditLog): RecentActivityItem {
     default:
       return { id: log.id, eventType: "client", title: "Practice activity", timestamp: log.timestamp };
   }
+}
+
+function toRecoveredTaskActivityItem(task: TaskActivityFallback): RecentActivityItem {
+  return {
+    id: `recovered-task-${task.id}`,
+    eventType: "task",
+    title: "Task created",
+    description: task.title,
+    timestamp: task.createdAt,
+  };
+}
+
+export function mergeRecentActivityItems(
+  logs: AuditLog[],
+  recoveredTasks: TaskActivityFallback[],
+  tenantId: string,
+  limit: number,
+): RecentActivityItem[] {
+  const taskCreationLogIds = new Set(
+    logs
+      .filter((log) => log.action === "activity_task_created" && log.resourceType === "task" && log.resourceId)
+      .map((log) => log.resourceId),
+  );
+
+  return [
+    ...logs.map(toRecentActivityItem),
+    ...recoveredTasks
+      .filter((task) => task.tenantId === tenantId && !taskCreationLogIds.has(task.id))
+      .map(toRecoveredTaskActivityItem),
+  ]
+    .sort((left, right) => right.timestamp.getTime() - left.timestamp.getTime())
+    .slice(0, limit);
 }

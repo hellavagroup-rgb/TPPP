@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { AuditLog } from "@shared/schema";
-import { RECENT_ACTIVITY_CATEGORY_ACTIONS, toRecentActivityItem } from "./activity";
+import type { AuditLog, Task } from "@shared/schema";
+import { mergeRecentActivityItems, RECENT_ACTIVITY_CATEGORY_ACTIONS, toRecentActivityItem } from "./activity";
 
 function activityLog(overrides: Partial<AuditLog>): AuditLog {
   return {
@@ -13,6 +13,23 @@ function activityLog(overrides: Partial<AuditLog>): AuditLog {
     ipAddress: "127.0.0.1",
     details: {},
     timestamp: new Date("2026-08-27T10:00:00Z"),
+    ...overrides,
+  };
+}
+
+function task(overrides: Partial<Task>): Task {
+  return {
+    id: "task-1",
+    title: "Follow up with W12345",
+    description: "",
+    assignee: "Practice Admin",
+    dueDate: new Date("2026-08-28T10:00:00Z"),
+    priority: "Medium",
+    status: "Pending",
+    comments: null,
+    relatedClientId: null,
+    createdAt: new Date("2026-08-26T10:00:00Z"),
+    tenantId: "tenant-1",
     ...overrides,
   };
 }
@@ -94,5 +111,50 @@ describe("recent activity mapping", () => {
       }));
       expect(event.title).toBe(title);
     }
+  });
+
+  it("recovers open tasks without a task-created audit entry for the current tenant", () => {
+    const events = mergeRecentActivityItems(
+      [],
+      [
+        task({ id: "task-tenant-1", title: "Call back client" }),
+        task({ id: "task-tenant-2", tenantId: "tenant-2", title: "Other practice task" }),
+      ],
+      "tenant-1",
+      20,
+    );
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        id: "recovered-task-task-tenant-1",
+        eventType: "task",
+        title: "Task created",
+        description: "Call back client",
+      }),
+    ]);
+  });
+
+  it("does not duplicate a task when its creation was already logged", () => {
+    const existingLog = activityLog({
+      action: "activity_task_created",
+      resourceType: "task",
+      resourceId: "task-1",
+      details: { taskTitle: "Follow up with W12345" },
+    });
+    const events = mergeRecentActivityItems([existingLog], [task({})], "tenant-1", 20);
+
+    expect(events).toHaveLength(1);
+    expect(events[0].id).toBe(existingLog.id);
+  });
+
+  it("orders recovered task activity with audit activity and respects the requested limit", () => {
+    const events = mergeRecentActivityItems(
+      [activityLog({ id: "newer-log", timestamp: new Date("2026-08-27T10:00:00Z") })],
+      [task({ id: "older-task", createdAt: new Date("2026-08-26T10:00:00Z") })],
+      "tenant-1",
+      1,
+    );
+
+    expect(events).toEqual([expect.objectContaining({ id: "newer-log" })]);
   });
 });

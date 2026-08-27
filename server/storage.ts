@@ -96,6 +96,7 @@ export interface IStorage {
   createTask(task: InsertTask, tenantId?: string | null): Promise<Task>;
   updateTask(id: string, updates: Partial<InsertTask>): Promise<Task | undefined>;
   deleteTask(id: string): Promise<void>;
+  getOpenTasksWithoutCreationActivity(tenantId: string, limit?: number): Promise<Task[]>;
   
   // ============ AUDIT LOGS (GDPR) ============
   createAuditLog(log: InsertAuditLog): Promise<AuditLog>;
@@ -874,6 +875,26 @@ export class DatabaseStorage implements IStorage {
 
   async deleteTask(id: string): Promise<void> {
     await db.delete(tasks).where(eq(tasks.id, id));
+  }
+
+  async getOpenTasksWithoutCreationActivity(tenantId: string, limit: number = 25): Promise<Task[]> {
+    const rows = await db.select({ task: tasks })
+      .from(tasks)
+      .leftJoin(auditLogs, and(
+        eq(auditLogs.resourceType, "task"),
+        eq(auditLogs.resourceId, tasks.id),
+        eq(auditLogs.action, "activity_task_created"),
+        eq(auditLogs.tenantId, tenantId),
+      ))
+      .where(and(
+        eq(tasks.tenantId, tenantId),
+        inArray(tasks.status, ["Pending", "In Progress"]),
+        isNull(auditLogs.id),
+      ))
+      .orderBy(desc(tasks.createdAt))
+      .limit(limit);
+
+    return rows.map((row) => row.task);
   }
 
   // ============ AUDIT LOGS (GDPR) ============

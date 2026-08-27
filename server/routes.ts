@@ -27,7 +27,7 @@ import { isStripeConfigured, getStripeInstance, createPaymentLink, chargeOffSess
 import { encryptSecret, decryptSecret, isEncryptionConfigured } from "./encryption";
 import { getAuthUrl, exchangeCodeForTokens, syncConnection, buildRedirectUri } from "./gmailSync";
 import { isNull, isNotNull, eq, and, inArray, desc, like, sql as drizzleSql } from "drizzle-orm";
-import { isRecentActivityCategory, toRecentActivityItem } from "./activity";
+import { isRecentActivityCategory, mergeRecentActivityItems } from "./activity";
 
 function formatActivitySlot(slot: { type?: string | null; day?: string | null; date?: string | null; startTime?: string | null; endTime?: string | null; locationType?: string | null }): string {
   const day = slot.type === "SpecificDate" ? slot.date : slot.day;
@@ -2230,8 +2230,12 @@ export async function registerRoutes(
       const category = requestedCategory && requestedCategory !== "all" && isRecentActivityCategory(requestedCategory)
         ? requestedCategory
         : undefined;
-      const logs = await storage.getRecentActivityLogs(category ? 20 : 25, req.tenant?.id, category);
-      res.json(logs.map(toRecentActivityItem));
+      const limit = category ? 20 : 25;
+      const logs = await storage.getRecentActivityLogs(limit, req.tenant?.id, category);
+      const recoveredTasks = category === "tasks" || !category
+        ? await storage.getOpenTasksWithoutCreationActivity(req.tenant!.id, limit)
+        : [];
+      res.json(mergeRecentActivityItems(logs, recoveredTasks, req.tenant!.id, limit));
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch recent activity" });
     }

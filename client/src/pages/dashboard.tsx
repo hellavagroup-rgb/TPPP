@@ -25,6 +25,7 @@ import { Link } from "wouter";
 import type { Client, Clinician, TimeSlot } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ACTIVITY_TABS, DEFAULT_ACTIVITY_CATEGORY, type ActivityCategory } from "@/lib/activityFeed";
 
 type ClinicianWithAvailability = Clinician & { name: string; availability?: TimeSlot[] };
 
@@ -36,8 +37,6 @@ interface RecentActivityItem {
   actorName?: string;
   timestamp: string | Date;
 }
-
-type ActivityCategory = "all" | "clients" | "tasks" | "availability";
 
 function formatTimeAgo(date: string | Date): string {
   const dateValue = new Date(date);
@@ -398,13 +397,21 @@ export default function Dashboard() {
               <p className="text-sm text-muted-foreground">Browse practice changes by category. Each view keeps its own recent activity.</p>
             </CardHeader>
             <CardContent>
-              <Tabs defaultValue="clients" className="w-full">
+              <Tabs defaultValue={DEFAULT_ACTIVITY_CATEGORY} className="w-full">
                 <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4 h-auto gap-1">
-                  <TabsTrigger value="clients">Clients &amp; Forms</TabsTrigger>
-                  <TabsTrigger value="tasks">Tasks</TabsTrigger>
-                  <TabsTrigger value="availability">Availability</TabsTrigger>
-                  <TabsTrigger value="all">All Activity</TabsTrigger>
+                  {ACTIVITY_TABS.map((tab) => (
+                    <TabsTrigger key={tab.value} value={tab.value}>{tab.label}</TabsTrigger>
+                  ))}
                 </TabsList>
+                <TabsContent value="all">
+                  <ActivityList
+                    activities={allActivity}
+                    isLoading={isAllActivityLoading}
+                    isError={isAllActivityError}
+                    emptyMessage="No recent activity."
+                    category="all"
+                  />
+                </TabsContent>
                 <TabsContent value="clients">
                   <ActivityList
                     activities={clientActivity}
@@ -430,15 +437,6 @@ export default function Dashboard() {
                     isError={isAvailabilityActivityError}
                     emptyMessage="No availability activity yet."
                     category="availability"
-                  />
-                </TabsContent>
-                <TabsContent value="all">
-                  <ActivityList
-                    activities={allActivity}
-                    isLoading={isAllActivityLoading}
-                    isError={isAllActivityError}
-                    emptyMessage="No recent activity."
-                    category="all"
                   />
                 </TabsContent>
               </Tabs>

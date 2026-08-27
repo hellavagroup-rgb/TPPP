@@ -108,7 +108,7 @@ export interface IStorage {
   getAuditLogsByUserId(userId: string): Promise<AuditLog[]>;
   getRecentAuditLogs(limit?: number, action?: string, tenantId?: string | null): Promise<AuditLog[]>;
   getRecentActivityLogs(limit?: number, tenantId?: string | null, category?: RecentActivityCategory): Promise<AuditLog[]>;
-  getHistoricalActivitySources(tenantId: string): Promise<HistoricalActivitySources>;
+  getHistoricalActivitySources(tenantId: string, limit?: number): Promise<HistoricalActivitySources>;
 
   // ============ EMAIL TEMPLATES ============
   getAllEmailTemplates(tenantId?: string | null): Promise<EmailTemplate[]>;
@@ -977,7 +977,22 @@ export class DatabaseStorage implements IStorage {
       .limit(limit);
   }
 
-  async getHistoricalActivitySources(tenantId: string): Promise<HistoricalActivitySources> {
+  async getHistoricalActivitySources(tenantId: string, limit: number = 25): Promise<HistoricalActivitySources> {
+    // Keep enough candidates for structured activity logs to remove duplicates
+    // during the merge without requiring an unbounded historical read.
+    const sourceLimit = Math.max(1, Math.floor(limit)) * 2;
+    const latestClientActivityAt = sql`
+      GREATEST(
+        ${clients.intakeDate},
+        ${clients.formsSentAt},
+        ${clients.formsCompletedAt},
+        ${clients.allocatedAt},
+        ${clients.awaitingConfirmationAt},
+        ${clients.confirmedAt},
+        ${clients.archivedAt}
+      )
+    `;
+
     const [tenantClients, tenantFormTemplates, tenantFormSubmissions] = await Promise.all([
       db.select({
         id: clients.id,
@@ -993,7 +1008,9 @@ export class DatabaseStorage implements IStorage {
         archivedAt: clients.archivedAt,
       })
         .from(clients)
-        .where(eq(clients.tenantId, tenantId)),
+        .where(eq(clients.tenantId, tenantId))
+        .orderBy(desc(latestClientActivityAt))
+        .limit(sourceLimit),
       db.select({
         id: formTemplates.id,
         title: formTemplates.title,
@@ -1002,7 +1019,9 @@ export class DatabaseStorage implements IStorage {
         updatedAt: formTemplates.updatedAt,
       })
         .from(formTemplates)
-        .where(eq(formTemplates.tenantId, tenantId)),
+        .where(eq(formTemplates.tenantId, tenantId))
+        .orderBy(desc(formTemplates.updatedAt), desc(formTemplates.createdAt))
+        .limit(sourceLimit),
       db.select({
         id: formSubmissions.id,
         clientId: formSubmissions.clientId,
@@ -1018,7 +1037,10 @@ export class DatabaseStorage implements IStorage {
         .where(and(
           eq(clients.tenantId, tenantId),
           eq(formTemplates.tenantId, tenantId),
-        )),
+          eq(formSubmissions.isDraft, false),
+        ))
+        .orderBy(desc(formSubmissions.submittedAt))
+        .limit(sourceLimit),
     ]);
 
     return {

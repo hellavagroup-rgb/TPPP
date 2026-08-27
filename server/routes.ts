@@ -2236,7 +2236,7 @@ export async function registerRoutes(
         ? await storage.getOpenTasksWithoutCreationActivity(req.tenant!.id, limit)
         : [];
       const historicalSources = category === "clients" || !category
-        ? await storage.getHistoricalActivitySources(req.tenant!.id)
+        ? await storage.getHistoricalActivitySources(req.tenant!.id, limit)
         : undefined;
       res.json(mergeRecentActivityItems(logs, recoveredTasks, req.tenant!.id, limit, historicalSources));
     } catch (error) {

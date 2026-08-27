@@ -2235,7 +2235,10 @@ export async function registerRoutes(
       const recoveredTasks = category === "tasks" || !category
         ? await storage.getOpenTasksWithoutCreationActivity(req.tenant!.id, limit)
         : [];
-      res.json(mergeRecentActivityItems(logs, recoveredTasks, req.tenant!.id, limit));
+      const historicalSources = category === "clients" || !category
+        ? await storage.getHistoricalActivitySources(req.tenant!.id)
+        : undefined;
+      res.json(mergeRecentActivityItems(logs, recoveredTasks, req.tenant!.id, limit, historicalSources));
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch recent activity" });
     }

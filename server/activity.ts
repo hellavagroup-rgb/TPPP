@@ -1,4 +1,4 @@
-import type { AuditLog, Task } from "@shared/schema";
+import type { AuditLog, Client, FormTemplate, Task } from "@shared/schema";
 
 export const RECENT_ACTIVITY_ACTIONS = [
   "add_slots",
@@ -92,6 +92,42 @@ export interface RecentActivityItem {
 }
 
 type TaskActivityFallback = Pick<Task, "id" | "title" | "createdAt" | "tenantId">;
+
+export type HistoricalClientActivity = Pick<
+  Client,
+  | "id"
+  | "displayId"
+  | "tenantId"
+  | "intakeDate"
+  | "formsSentAt"
+  | "formsCompletedAt"
+  | "allocatedAt"
+  | "awaitingConfirmationAt"
+  | "confirmedAt"
+  | "isArchived"
+  | "archivedAt"
+>;
+
+export type HistoricalFormTemplateActivity = Pick<
+  FormTemplate,
+  "id" | "title" | "tenantId" | "createdAt" | "updatedAt"
+>;
+
+export interface HistoricalFormSubmissionActivity {
+  id: string;
+  clientId: string;
+  formTemplateId: string;
+  clientDisplayId: string;
+  formTitle: string;
+  isDraft: boolean;
+  submittedAt: Date;
+}
+
+export interface HistoricalActivitySources {
+  clients: HistoricalClientActivity[];
+  formTemplates: HistoricalFormTemplateActivity[];
+  formSubmissions: HistoricalFormSubmissionActivity[];
+}
 
 type ActivityDetails = Record<string, unknown>;
 
@@ -212,11 +248,203 @@ function toRecoveredTaskActivityItem(task: TaskActivityFallback): RecentActivity
   };
 }
 
+function recoveredActivity(
+  id: string,
+  eventType: RecentActivityItem["eventType"],
+  title: string,
+  description: string,
+  timestamp: Date,
+): RecentActivityItem {
+  return { id, eventType, title, description, timestamp };
+}
+
+function hasLoggedResourceActivity(
+  logs: AuditLog[],
+  action: string,
+  resourceType: string,
+  resourceId: string,
+): boolean {
+  return logs.some((log) =>
+    log.action === action &&
+    log.resourceType === resourceType &&
+    log.resourceId === resourceId,
+  );
+}
+
+function hasLoggedClientDisplayActivity(logs: AuditLog[], action: string, displayId: string): boolean {
+  return logs.some((log) =>
+    log.action === action &&
+    text(detailsFor(log), "clientDisplayId") === displayId,
+  );
+}
+
+function hasLoggedClientStatusActivity(logs: AuditLog[], clientId: string, status: string): boolean {
+  return logs.some((log) =>
+    log.action === "activity_client_status_changed" &&
+    log.resourceType === "client" &&
+    log.resourceId === clientId &&
+    text(detailsFor(log), "newStatus") === status,
+  );
+}
+
+function reconstructHistoricalActivity(
+  logs: AuditLog[],
+  sources: HistoricalActivitySources,
+  tenantId: string,
+): RecentActivityItem[] {
+  const tenantClients = sources.clients.filter((client) => client.tenantId === tenantId);
+  const tenantClientIds = new Set(tenantClients.map((client) => client.id));
+  const completedSubmissionClientIds = new Set(
+    sources.formSubmissions
+      .filter((submission) => !submission.isDraft && tenantClientIds.has(submission.clientId))
+      .map((submission) => submission.clientId),
+  );
+
+  const clientMilestones = tenantClients.flatMap((client) => {
+    const events: RecentActivityItem[] = [];
+
+    if (!hasLoggedResourceActivity(logs, "activity_client_created", "client", client.id)) {
+      events.push(recoveredActivity(
+        `recovered-client-${client.id}-intake`,
+        "client",
+        "Client intake received",
+        `${client.displayId} was added to the practice.`,
+        client.intakeDate,
+      ));
+    }
+    if (
+      client.formsSentAt &&
+      !hasLoggedClientDisplayActivity(logs, "activity_form_sent", client.displayId) &&
+      !hasLoggedClientStatusActivity(logs, client.id, "Forms Sent")
+    ) {
+      events.push(recoveredActivity(
+        `recovered-client-${client.id}-form-sent`,
+        "form",
+        "Form sent",
+        `An intake form was sent to ${client.displayId}.`,
+        client.formsSentAt,
+      ));
+    }
+    if (
+      client.formsCompletedAt &&
+      !completedSubmissionClientIds.has(client.id) &&
+      !hasLoggedClientDisplayActivity(logs, "activity_form_completed", client.displayId) &&
+      !hasLoggedClientStatusActivity(logs, client.id, "Forms Completed")
+    ) {
+      events.push(recoveredActivity(
+        `recovered-client-${client.id}-forms-completed`,
+        "form",
+        "Forms completed",
+        `${client.displayId} completed their intake forms.`,
+        client.formsCompletedAt,
+      ));
+    }
+    if (
+      client.allocatedAt &&
+      !hasLoggedResourceActivity(logs, "activity_client_allocated", "client", client.id) &&
+      !hasLoggedClientStatusActivity(logs, client.id, "Assigned")
+    ) {
+      events.push(recoveredActivity(
+        `recovered-client-${client.id}-allocated`,
+        "client",
+        "Client allocated",
+        `${client.displayId} was allocated to a clinician.`,
+        client.allocatedAt,
+      ));
+    }
+    if (
+      client.awaitingConfirmationAt &&
+      !hasLoggedClientStatusActivity(logs, client.id, "AwaitingConfirmation")
+    ) {
+      events.push(recoveredActivity(
+        `recovered-client-${client.id}-awaiting-confirmation`,
+        "client",
+        "Appointment confirmation requested",
+        `${client.displayId} was asked to confirm their appointment.`,
+        client.awaitingConfirmationAt,
+      ));
+    }
+    if (
+      client.confirmedAt &&
+      !hasLoggedResourceActivity(logs, "activity_booking_confirmed", "client", client.id) &&
+      !hasLoggedClientStatusActivity(logs, client.id, "Scheduled")
+    ) {
+      events.push(recoveredActivity(
+        `recovered-client-${client.id}-confirmed`,
+        "client",
+        "Booking confirmed",
+        `${client.displayId}'s appointment is confirmed.`,
+        client.confirmedAt,
+      ));
+    }
+    if (
+      client.isArchived &&
+      client.archivedAt &&
+      !hasLoggedResourceActivity(logs, "activity_client_archived", "client", client.id)
+    ) {
+      events.push(recoveredActivity(
+        `recovered-client-${client.id}-archived`,
+        "client",
+        "Client archived",
+        `${client.displayId} was archived.`,
+        client.archivedAt,
+      ));
+    }
+
+    return events;
+  });
+
+  const submissionMilestones = sources.formSubmissions
+    .filter((submission) =>
+      !submission.isDraft &&
+      tenantClientIds.has(submission.clientId) &&
+      !hasLoggedResourceActivity(logs, "activity_form_completed", "form", submission.id),
+    )
+    .map((submission) => recoveredActivity(
+      `recovered-form-submission-${submission.id}`,
+      "form",
+      "Form completed",
+      `${submission.clientDisplayId} completed ${submission.formTitle}.`,
+      submission.submittedAt,
+    ));
+
+  const templateMilestones = sources.formTemplates
+    .filter((template) => template.tenantId === tenantId)
+    .flatMap((template) => {
+      const events: RecentActivityItem[] = [];
+      if (!hasLoggedResourceActivity(logs, "activity_form_template_created", "form", template.id)) {
+        events.push(recoveredActivity(
+          `recovered-form-template-${template.id}-created`,
+          "form",
+          "Form created",
+          template.title,
+          template.createdAt,
+        ));
+      }
+      if (
+        template.updatedAt.getTime() !== template.createdAt.getTime() &&
+        !hasLoggedResourceActivity(logs, "activity_form_template_updated", "form", template.id)
+      ) {
+        events.push(recoveredActivity(
+          `recovered-form-template-${template.id}-updated`,
+          "form",
+          "Form updated",
+          template.title,
+          template.updatedAt,
+        ));
+      }
+      return events;
+    });
+
+  return [...clientMilestones, ...submissionMilestones, ...templateMilestones];
+}
+
 export function mergeRecentActivityItems(
   logs: AuditLog[],
   recoveredTasks: TaskActivityFallback[],
   tenantId: string,
   limit: number,
+  historicalSources?: HistoricalActivitySources,
 ): RecentActivityItem[] {
   const taskCreationLogIds = new Set(
     logs
@@ -229,6 +457,7 @@ export function mergeRecentActivityItems(
     ...recoveredTasks
       .filter((task) => task.tenantId === tenantId && !taskCreationLogIds.has(task.id))
       .map(toRecoveredTaskActivityItem),
+    ...(historicalSources ? reconstructHistoricalActivity(logs, historicalSources, tenantId) : []),
   ]
     .sort((left, right) => right.timestamp.getTime() - left.timestamp.getTime())
     .slice(0, limit);

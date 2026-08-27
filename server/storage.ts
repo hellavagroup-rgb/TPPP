@@ -19,7 +19,12 @@ import {
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, or, desc, sql, isNull, inArray } from "drizzle-orm";
-import { RECENT_ACTIVITY_ACTIONS, RECENT_ACTIVITY_CATEGORY_ACTIONS, type RecentActivityCategory } from "./activity";
+import {
+  RECENT_ACTIVITY_ACTIONS,
+  RECENT_ACTIVITY_CATEGORY_ACTIONS,
+  type HistoricalActivitySources,
+  type RecentActivityCategory,
+} from "./activity";
 
 // Storage interface for all CRUD operations
 export interface IStorage {
@@ -103,6 +108,7 @@ export interface IStorage {
   getAuditLogsByUserId(userId: string): Promise<AuditLog[]>;
   getRecentAuditLogs(limit?: number, action?: string, tenantId?: string | null): Promise<AuditLog[]>;
   getRecentActivityLogs(limit?: number, tenantId?: string | null, category?: RecentActivityCategory): Promise<AuditLog[]>;
+  getHistoricalActivitySources(tenantId: string): Promise<HistoricalActivitySources>;
 
   // ============ EMAIL TEMPLATES ============
   getAllEmailTemplates(tenantId?: string | null): Promise<EmailTemplate[]>;
@@ -969,6 +975,57 @@ export class DatabaseStorage implements IStorage {
       ))
       .orderBy(desc(auditLogs.timestamp))
       .limit(limit);
+  }
+
+  async getHistoricalActivitySources(tenantId: string): Promise<HistoricalActivitySources> {
+    const [tenantClients, tenantFormTemplates, tenantFormSubmissions] = await Promise.all([
+      db.select({
+        id: clients.id,
+        displayId: clients.displayId,
+        tenantId: clients.tenantId,
+        intakeDate: clients.intakeDate,
+        formsSentAt: clients.formsSentAt,
+        formsCompletedAt: clients.formsCompletedAt,
+        allocatedAt: clients.allocatedAt,
+        awaitingConfirmationAt: clients.awaitingConfirmationAt,
+        confirmedAt: clients.confirmedAt,
+        isArchived: clients.isArchived,
+        archivedAt: clients.archivedAt,
+      })
+        .from(clients)
+        .where(eq(clients.tenantId, tenantId)),
+      db.select({
+        id: formTemplates.id,
+        title: formTemplates.title,
+        tenantId: formTemplates.tenantId,
+        createdAt: formTemplates.createdAt,
+        updatedAt: formTemplates.updatedAt,
+      })
+        .from(formTemplates)
+        .where(eq(formTemplates.tenantId, tenantId)),
+      db.select({
+        id: formSubmissions.id,
+        clientId: formSubmissions.clientId,
+        formTemplateId: formSubmissions.formTemplateId,
+        clientDisplayId: clients.displayId,
+        formTitle: formTemplates.title,
+        isDraft: formSubmissions.isDraft,
+        submittedAt: formSubmissions.submittedAt,
+      })
+        .from(formSubmissions)
+        .innerJoin(clients, eq(formSubmissions.clientId, clients.id))
+        .innerJoin(formTemplates, eq(formSubmissions.formTemplateId, formTemplates.id))
+        .where(and(
+          eq(clients.tenantId, tenantId),
+          eq(formTemplates.tenantId, tenantId),
+        )),
+    ]);
+
+    return {
+      clients: tenantClients,
+      formTemplates: tenantFormTemplates,
+      formSubmissions: tenantFormSubmissions,
+    };
   }
 
   // ============ EMAIL TEMPLATES ============

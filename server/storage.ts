@@ -19,7 +19,7 @@ import {
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, or, desc, sql, isNull, inArray } from "drizzle-orm";
-import { RECENT_ACTIVITY_ACTIONS } from "./activity";
+import { RECENT_ACTIVITY_ACTIONS, RECENT_ACTIVITY_CATEGORY_ACTIONS, type RecentActivityCategory } from "./activity";
 
 // Storage interface for all CRUD operations
 export interface IStorage {
@@ -101,7 +101,7 @@ export interface IStorage {
   createAuditLog(log: InsertAuditLog): Promise<AuditLog>;
   getAuditLogsByUserId(userId: string): Promise<AuditLog[]>;
   getRecentAuditLogs(limit?: number, action?: string, tenantId?: string | null): Promise<AuditLog[]>;
-  getRecentActivityLogs(limit?: number, tenantId?: string | null): Promise<AuditLog[]>;
+  getRecentActivityLogs(limit?: number, tenantId?: string | null, category?: RecentActivityCategory): Promise<AuditLog[]>;
 
   // ============ EMAIL TEMPLATES ============
   getAllEmailTemplates(tenantId?: string | null): Promise<EmailTemplate[]>;
@@ -920,25 +920,30 @@ export class DatabaseStorage implements IStorage {
       .limit(limit);
   }
 
-  async getRecentActivityLogs(limit: number = 25, tenantId?: string | null): Promise<AuditLog[]> {
+  async getRecentActivityLogs(limit: number = 25, tenantId?: string | null, category?: RecentActivityCategory): Promise<AuditLog[]> {
     if (!tenantId) return [];
 
+    const actions = category ? RECENT_ACTIVITY_CATEGORY_ACTIONS[category] : RECENT_ACTIVITY_ACTIONS;
     return await db.select().from(auditLogs)
       .where(and(
-        inArray(auditLogs.action, RECENT_ACTIVITY_ACTIONS),
+        inArray(auditLogs.action, actions),
         or(
           eq(auditLogs.tenantId, tenantId),
-          and(
-            isNull(auditLogs.tenantId),
-            eq(auditLogs.resourceType, "timeslot"),
-            inArray(auditLogs.action, ["add_slots", "activity_slot_added"]),
-            sql`EXISTS (
-              SELECT 1
-              FROM clinicians AS activity_clinician
-              WHERE activity_clinician.id = ${auditLogs.resourceId}
-                AND activity_clinician.tenant_id = ${tenantId}
-            )`,
-          ),
+          ...(category === "clients" || category === "tasks"
+            ? []
+            : [
+                and(
+                  isNull(auditLogs.tenantId),
+                  eq(auditLogs.resourceType, "timeslot"),
+                  inArray(auditLogs.action, ["add_slots", "activity_slot_added"]),
+                  sql`EXISTS (
+                    SELECT 1
+                    FROM clinicians AS activity_clinician
+                    WHERE activity_clinician.id = ${auditLogs.resourceId}
+                      AND activity_clinician.tenant_id = ${tenantId}
+                  )`,
+                ),
+              ]),
         ),
       ))
       .orderBy(desc(auditLogs.timestamp))

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AuditLog } from "@shared/schema";
-import { toRecentActivityItem } from "./activity";
+import { RECENT_ACTIVITY_CATEGORY_ACTIONS, toRecentActivityItem } from "./activity";
 
 function activityLog(overrides: Partial<AuditLog>): AuditLog {
   return {
@@ -18,6 +18,21 @@ function activityLog(overrides: Partial<AuditLog>): AuditLog {
 }
 
 describe("recent activity mapping", () => {
+  it("keeps client/form, task, and availability actions in separate feed categories", () => {
+    expect(RECENT_ACTIVITY_CATEGORY_ACTIONS.clients).toContain("activity_form_completed");
+    expect(RECENT_ACTIVITY_CATEGORY_ACTIONS.clients).toContain("activity_client_allocated");
+    expect(RECENT_ACTIVITY_CATEGORY_ACTIONS.tasks).toEqual(expect.arrayContaining([
+      "activity_task_created",
+      "activity_task_updated",
+      "activity_task_completed",
+      "activity_task_deleted",
+    ]));
+    expect(RECENT_ACTIVITY_CATEGORY_ACTIONS.availability).toContain("add_slots");
+    expect(RECENT_ACTIVITY_CATEGORY_ACTIONS.availability).toContain("activity_slot_added");
+    expect(RECENT_ACTIVITY_CATEGORY_ACTIONS.tasks).not.toContain("activity_form_completed");
+    expect(RECENT_ACTIVITY_CATEGORY_ACTIONS.availability).not.toContain("activity_task_created");
+  });
+
   it("renders an allocation without exposing client names or form data", () => {
     const event = toRecentActivityItem(activityLog({
       details: {

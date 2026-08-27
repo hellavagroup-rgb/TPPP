@@ -39,6 +39,49 @@ export const RECENT_ACTIVITY_ACTIONS = [
   "activity_task_deleted",
 ] as const;
 
+export const RECENT_ACTIVITY_CATEGORY_ACTIONS = {
+  clients: [
+    "activity_client_created",
+    "activity_client_details_updated",
+    "activity_client_status_changed",
+    "activity_client_archived",
+    "activity_client_restored",
+    "activity_client_deleted",
+    "activity_client_allocated",
+    "activity_client_reallocated",
+    "activity_client_deallocated",
+    "activity_client_options_sent",
+    "activity_form_completed",
+    "activity_form_sent",
+    "activity_form_template_created",
+    "activity_form_template_updated",
+    "activity_form_template_deleted",
+    "activity_appointment_option_selected",
+    "activity_appointment_options_declined",
+    "activity_registration_submitted",
+    "activity_booking_confirmed",
+  ],
+  tasks: [
+    "activity_task_created",
+    "activity_task_updated",
+    "activity_task_completed",
+    "activity_task_deleted",
+  ],
+  availability: [
+    "add_slots",
+    "activity_slot_added",
+    "activity_slot_removed",
+    "activity_slot_location_changed",
+    "activity_practice_availability_updated",
+  ],
+} as const;
+
+export type RecentActivityCategory = keyof typeof RECENT_ACTIVITY_CATEGORY_ACTIONS;
+
+export function isRecentActivityCategory(value: string): value is RecentActivityCategory {
+  return value in RECENT_ACTIVITY_CATEGORY_ACTIONS;
+}
+
 export interface RecentActivityItem {
   id: string;
   eventType: "client" | "form" | "availability" | "task" | "team" | "settings";

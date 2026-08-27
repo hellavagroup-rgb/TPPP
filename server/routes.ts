@@ -27,7 +27,7 @@ import { isStripeConfigured, getStripeInstance, createPaymentLink, chargeOffSess
 import { encryptSecret, decryptSecret, isEncryptionConfigured } from "./encryption";
 import { getAuthUrl, exchangeCodeForTokens, syncConnection, buildRedirectUri } from "./gmailSync";
 import { isNull, isNotNull, eq, and, inArray, desc, like, sql as drizzleSql } from "drizzle-orm";
-import { toRecentActivityItem } from "./activity";
+import { isRecentActivityCategory, toRecentActivityItem } from "./activity";
 
 function formatActivitySlot(slot: { type?: string | null; day?: string | null; date?: string | null; startTime?: string | null; endTime?: string | null; locationType?: string | null }): string {
   const day = slot.type === "SpecificDate" ? slot.date : slot.day;
@@ -2223,7 +2223,14 @@ export async function registerRoutes(
   // ============ TASKS ============
   app.get("/api/activity/recent", requireAdmin, async (req, res) => {
     try {
-      const logs = await storage.getRecentActivityLogs(25, req.tenant?.id);
+      const requestedCategory = typeof req.query.category === "string" ? req.query.category : undefined;
+      if (requestedCategory && requestedCategory !== "all" && !isRecentActivityCategory(requestedCategory)) {
+        return res.status(400).json({ error: "Invalid activity category" });
+      }
+      const category = requestedCategory && requestedCategory !== "all" && isRecentActivityCategory(requestedCategory)
+        ? requestedCategory
+        : undefined;
+      const logs = await storage.getRecentActivityLogs(category ? 20 : 25, req.tenant?.id, category);
       res.json(logs.map(toRecentActivityItem));
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch recent activity" });

@@ -24,6 +24,7 @@ import { useAuth } from "@/lib/auth";
 import { Link } from "wouter";
 import type { Client, Clinician, TimeSlot } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 type ClinicianWithAvailability = Clinician & { name: string; availability?: TimeSlot[] };
 
@@ -35,6 +36,8 @@ interface RecentActivityItem {
   actorName?: string;
   timestamp: string | Date;
 }
+
+type ActivityCategory = "all" | "clients" | "tasks" | "availability";
 
 function formatTimeAgo(date: string | Date): string {
   const dateValue = new Date(date);
@@ -66,6 +69,59 @@ function getActivityAppearance(eventType: RecentActivityItem["eventType"], title
       : { Icon: ListTodo, surface: "bg-slate-50 border-slate-100", icon: "bg-slate-100 text-slate-700" };
   }
   return { Icon: UserPlus, surface: "bg-indigo-50 border-indigo-100", icon: "bg-indigo-100 text-indigo-700" };
+}
+
+function ActivityList({
+  activities,
+  isLoading,
+  isError,
+  emptyMessage,
+  category,
+}: {
+  activities: RecentActivityItem[];
+  isLoading: boolean;
+  isError: boolean;
+  emptyMessage: string;
+  category: ActivityCategory;
+}) {
+  if (isLoading) {
+    return (
+      <div className="flex justify-center py-8">
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (isError) {
+    return <p className="text-sm text-muted-foreground text-center py-8">This activity view could not be loaded. Please refresh and try again.</p>;
+  }
+
+  if (activities.length === 0) {
+    return <p className="text-sm text-muted-foreground text-center py-8">{emptyMessage}</p>;
+  }
+
+  return (
+    <div className="max-h-[420px] overflow-y-auto pr-1 space-y-3" data-testid={`activity-list-${category}`}>
+      {activities.map((activity) => {
+        const { Icon, surface, icon } = getActivityAppearance(activity.eventType, activity.title);
+        return (
+          <div key={activity.id} className={`flex items-start justify-between gap-3 p-3 rounded-lg border ${surface}`}>
+            <div className="flex items-start gap-2 min-w-0">
+              <div className={`p-1.5 rounded-full shrink-0 ${icon}`}>
+                <Icon className="h-3.5 w-3.5" />
+              </div>
+              <div className="min-w-0">
+                <p className="font-medium text-sm">{activity.title}</p>
+                {activity.description && <p className="text-xs text-muted-foreground mt-0.5">{activity.description}</p>}
+                {activity.actorName && <p className="text-xs text-muted-foreground mt-1">By {activity.actorName}</p>}
+              </div>
+            </div>
+            <span className="text-xs text-muted-foreground whitespace-nowrap">{formatTimeAgo(activity.timestamp)}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function isSlotActive(slot: TimeSlot) {
@@ -151,8 +207,23 @@ export default function Dashboard() {
     queryKey: ["/api/clinicians"],
   });
 
-  const { data: recentActivity = [], isLoading: isActivityLoading, isError: isActivityError } = useQuery<RecentActivityItem[]>({
-    queryKey: ["/api/activity/recent"],
+  const { data: allActivity = [], isLoading: isAllActivityLoading, isError: isAllActivityError } = useQuery<RecentActivityItem[]>({
+    queryKey: ["/api/activity/recent?category=all"],
+    enabled: user?.role === "admin",
+    refetchInterval: 60_000,
+  });
+  const { data: clientActivity = [], isLoading: isClientActivityLoading, isError: isClientActivityError } = useQuery<RecentActivityItem[]>({
+    queryKey: ["/api/activity/recent?category=clients"],
+    enabled: user?.role === "admin",
+    refetchInterval: 60_000,
+  });
+  const { data: taskActivity = [], isLoading: isTaskActivityLoading, isError: isTaskActivityError } = useQuery<RecentActivityItem[]>({
+    queryKey: ["/api/activity/recent?category=tasks"],
+    enabled: user?.role === "admin",
+    refetchInterval: 60_000,
+  });
+  const { data: availabilityActivity = [], isLoading: isAvailabilityActivityLoading, isError: isAvailabilityActivityError } = useQuery<RecentActivityItem[]>({
+    queryKey: ["/api/activity/recent?category=availability"],
     enabled: user?.role === "admin",
     refetchInterval: 60_000,
   });
@@ -324,38 +395,53 @@ export default function Dashboard() {
                 <FileText className="h-5 w-5" />
                 Recent Activity
               </CardTitle>
+              <p className="text-sm text-muted-foreground">Browse practice changes by category. Each view keeps its own recent activity.</p>
             </CardHeader>
             <CardContent>
-              {isActivityLoading ? (
-                <div className="flex justify-center py-5">
-                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                </div>
-              ) : isActivityError ? (
-                <p className="text-sm text-muted-foreground text-center py-4">Recent activity could not be loaded. Please refresh and try again.</p>
-              ) : recentActivity.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-4">No recent activity</p>
-              ) : (
-                <div className="space-y-3">
-                  {recentActivity.slice(0, 10).map((activity) => {
-                    const { Icon, surface, icon } = getActivityAppearance(activity.eventType, activity.title);
-                    return (
-                      <div key={activity.id} className={`flex items-start justify-between gap-3 p-3 rounded-lg border ${surface}`}>
-                        <div className="flex items-start gap-2 min-w-0">
-                          <div className={`p-1.5 rounded-full shrink-0 ${icon}`}>
-                            <Icon className="h-3.5 w-3.5" />
-                          </div>
-                          <div className="min-w-0">
-                            <p className="font-medium text-sm">{activity.title}</p>
-                            {activity.description && <p className="text-xs text-muted-foreground mt-0.5">{activity.description}</p>}
-                            {activity.actorName && <p className="text-xs text-muted-foreground mt-1">By {activity.actorName}</p>}
-                          </div>
-                        </div>
-                        <span className="text-xs text-muted-foreground whitespace-nowrap">{formatTimeAgo(activity.timestamp)}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+              <Tabs defaultValue="clients" className="w-full">
+                <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4 h-auto gap-1">
+                  <TabsTrigger value="clients">Clients &amp; Forms</TabsTrigger>
+                  <TabsTrigger value="tasks">Tasks</TabsTrigger>
+                  <TabsTrigger value="availability">Availability</TabsTrigger>
+                  <TabsTrigger value="all">All Activity</TabsTrigger>
+                </TabsList>
+                <TabsContent value="clients">
+                  <ActivityList
+                    activities={clientActivity}
+                    isLoading={isClientActivityLoading}
+                    isError={isClientActivityError}
+                    emptyMessage="No client or form activity yet."
+                    category="clients"
+                  />
+                </TabsContent>
+                <TabsContent value="tasks">
+                  <ActivityList
+                    activities={taskActivity}
+                    isLoading={isTaskActivityLoading}
+                    isError={isTaskActivityError}
+                    emptyMessage="No task activity yet."
+                    category="tasks"
+                  />
+                </TabsContent>
+                <TabsContent value="availability">
+                  <ActivityList
+                    activities={availabilityActivity}
+                    isLoading={isAvailabilityActivityLoading}
+                    isError={isAvailabilityActivityError}
+                    emptyMessage="No availability activity yet."
+                    category="availability"
+                  />
+                </TabsContent>
+                <TabsContent value="all">
+                  <ActivityList
+                    activities={allActivity}
+                    isLoading={isAllActivityLoading}
+                    isError={isAllActivityError}
+                    emptyMessage="No recent activity."
+                    category="all"
+                  />
+                </TabsContent>
+              </Tabs>
             </CardContent>
           </Card>
         </div>

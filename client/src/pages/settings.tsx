@@ -224,7 +224,7 @@ Warm regards,
   },
   {
     templateKey: "allocation_options",
-    name: "Match Options (CY&A)",
+    name: "Match Options",
     subject: "Your Match Options - {{practice_name}}",
     bodyText: `We are pleased to let you know that we have found a match for you.
 
@@ -243,7 +243,7 @@ Warm regards,
   },
   {
     templateKey: "booking_confirmed",
-    name: "Booking Confirmed (CY&A)",
+    name: "Booking Confirmed",
     subject: "Booking Confirmed - {{practice_name}}",
     bodyText: `Your booking is confirmed.
 

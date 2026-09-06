@@ -5,7 +5,7 @@ import path from "path";
 import fs from "fs";
 import multer from "multer";
 import ExcelJS from "exceljs";
-import { storage } from "./storage";
+import { ClientAllocationUpdateError, storage } from "./storage";
 import { setupAuth, requireAuth, requireAdmin, requireClinician, hashPassword, auditLog, destroySessionsForUser } from "./auth";
 import passport from "passport";
 import { 
@@ -1268,19 +1268,18 @@ export async function registerRoutes(
       const isDeallocation = shouldReleaseClientAllocation(oldStatus, req.body.status);
 
       if (isDeallocation) {
-        if (currentClient?.assignedSlotId) {
-          try {
-            await db.update(timeSlots).set({ isBooked: false }).where(eq(timeSlots.id, currentClient.assignedSlotId));
-          } catch (err) {
-            console.error("Failed to unbook slot on de-allocation:", err);
-          }
-        }
         updateData.assignedSlotId = null;
         updateData.assignedSlot = null;
         updateData.assignedClinicianId = null;
       }
       
-      const updated = await storage.updateClient(req.params.id, updateData);
+      const updated = isDeallocation
+        ? await storage.updateClientAndReleaseSlot(
+            req.params.id,
+            updateData,
+            currentClient.assignedSlotId,
+          )
+        : await storage.updateClient(req.params.id, updateData);
       
       if (slotToDelete && updated) {
         try {
@@ -1426,6 +1425,11 @@ export async function registerRoutes(
       res.json(updated);
     } catch (error) {
       console.error("Failed to update client:", error);
+      if (error instanceof ClientAllocationUpdateError) {
+        return res.status(500).json({
+          error: "Client status could not be updated. The client and slot were left unchanged.",
+        });
+      }
       res.status(500).json({ error: "Failed to update client" });
     }
   });

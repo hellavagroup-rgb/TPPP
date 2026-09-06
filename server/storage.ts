@@ -43,6 +43,15 @@ export type StrandedAllocationRepairResult = {
   skipped: StrandedAllocationRepairRow[];
 };
 
+export class ClientAllocationUpdateError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "ClientAllocationUpdateError";
+  }
+}
+
+class ClientMissingDuringAllocationUpdateError extends Error {}
+
 // Storage interface for all CRUD operations
 export interface IStorage {
   // ============ USERS & AUTH ============
@@ -91,6 +100,7 @@ export interface IStorage {
   createClient(client: InsertClient, tenantId?: string | null): Promise<Client>;
   createClientIdempotently(client: InsertClient, tenantId: string, idempotencyKey?: string): Promise<{ client: Client; created: boolean }>;
   updateClient(id: string, updates: Partial<InsertClient>): Promise<Client | undefined>;
+  updateClientAndReleaseSlot(id: string, updates: Partial<InsertClient>, slotId: string | null): Promise<Client | undefined>;
   archiveClient(id: string, reason?: string, category?: string): Promise<Client | undefined>;
   restoreClient(id: string): Promise<Client | undefined>;
   deleteClientPermanently(id: string): Promise<boolean>;
@@ -691,6 +701,46 @@ export class DatabaseStorage implements IStorage {
       updatedAt: new Date()
     }).where(eq(clients.id, id)).returning();
     return client || undefined;
+  }
+
+  async updateClientAndReleaseSlot(
+    id: string,
+    updates: Partial<InsertClient>,
+    slotId: string | null,
+  ): Promise<Client | undefined> {
+    try {
+      return await db.transaction(async (tx) => {
+        if (slotId) {
+          const releasedSlots = await tx.update(timeSlots)
+            .set({ isBooked: false })
+            .where(eq(timeSlots.id, slotId))
+            .returning({ id: timeSlots.id });
+          if (releasedSlots.length !== 1) {
+            throw new ClientAllocationUpdateError("The client's assigned slot could not be released");
+          }
+        }
+
+        const [client] = await tx.update(clients).set({
+          ...updates,
+          updatedAt: new Date(),
+        }).where(eq(clients.id, id)).returning();
+        if (!client) {
+          throw new ClientMissingDuringAllocationUpdateError();
+        }
+        return client;
+      });
+    } catch (error) {
+      if (error instanceof ClientMissingDuringAllocationUpdateError) {
+        return undefined;
+      }
+      if (error instanceof ClientAllocationUpdateError) {
+        throw error;
+      }
+      throw new ClientAllocationUpdateError(
+        "The client and slot could not be updated together",
+        { cause: error },
+      );
+    }
   }
 
   async assignClinicianToClient(clientId: string, clinicianId: string, slotId: string, allocationMethod: "form" | "manual" = "form", allocationReason?: string): Promise<void> {

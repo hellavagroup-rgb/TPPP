@@ -1797,6 +1797,11 @@ export default function Clients() {
                               </DropdownMenuItem>
                             </>
                           )}
+                          {client.status === "OptionsSent" && (
+                            <DropdownMenuItem onClick={() => handleOpenEditStatus(client)}>
+                              <CalendarCheck className="h-4 w-4 mr-2" /> Edit Status
+                            </DropdownMenuItem>
+                          )}
                           {canSendRegistration(client) && client.status !== "Assigned" && (
                             <DropdownMenuItem
                               disabled={sendRegistrationMutation.isPending}
@@ -2731,6 +2736,7 @@ export default function Clients() {
                     <SelectItem value="Forms Sent">Screen Booked/Sent</SelectItem>
                     <SelectItem value="Forms Completed">Forms Completed</SelectItem>
                     <SelectItem value="Assigned">Allocated</SelectItem>
+                    <SelectItem value="OptionsSent">Options Sent</SelectItem>
                     <SelectItem value="AwaitingConfirmation">Awaiting Confirmation</SelectItem>
                     <SelectItem value="Scheduled">Confirmed</SelectItem>
                     <SelectItem value="Waitlist">Waitlist</SelectItem>
@@ -2916,7 +2922,9 @@ export default function Clients() {
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
-                  Changing to Pending Intake, Screen Booked/Sent, Forms Completed, or Waitlist will release the current time slot.
+                  {editStatusClient.status === "OptionsSent"
+                    ? "Changing away from Options Sent will cancel the pending options and invalidate the client's selection link."
+                    : "Changing to Pending Intake, Screen Booked/Sent, Forms Completed, or Waitlist will release the current time slot."}
                 </p>
               </div>
 

@@ -1799,6 +1799,12 @@ export async function registerRoutes(
       if (!updated) {
         return res.status(404).json({ error: "Client not found" });
       }
+      if (clientToReassign.status === "OptionsSent" && status !== "OptionsSent") {
+        await db.delete(clientClinicianOptions).where(and(
+          eq(clientClinicianOptions.clientId, clientToReassign.id),
+          eq(clientClinicianOptions.tenantId, req.tenant!.id),
+        ));
+      }
       const slot = slotId ? await storage.getTimeSlotById(slotId) : undefined;
       await recordActivity(
         req,

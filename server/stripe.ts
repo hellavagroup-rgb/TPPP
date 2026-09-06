@@ -23,6 +23,12 @@ export function shouldDeactivatePreviousPaymentLink(
   return !!previousPaymentLinkId && previousPaymentLinkId !== newPaymentLinkId;
 }
 
+export function paymentLinkCreationIdempotencyKey(baseKey: string): string {
+  // Version the key whenever the creation contract changes. This prevents Stripe
+  // from replaying a Payment Link created under an older, now-invalid lifecycle.
+  return `${baseKey}-link-v2`;
+}
+
 // Creates a persistent (non-expiring) Stripe Payment Link for the client's initial
 // session payment. Unlike Checkout Sessions (which Stripe hard-caps at 24h expiry),
 // Payment Links never expire. No Stripe Customer is pre-created — Stripe creates one
@@ -66,6 +72,7 @@ export async function createPaymentLink(opts: {
 
   const link = await stripe.paymentLinks.create(
     {
+      active: true,
       line_items: [{ price: price.id, quantity: 1 }],
       payment_method_types: ["card"],
       customer_creation: "always",
@@ -87,8 +94,14 @@ export async function createPaymentLink(opts: {
       },
       metadata, // propagates to the checkout session created when the client pays
     },
-    opts.idempotencyKey ? { idempotencyKey: `${opts.idempotencyKey}-link` } : undefined,
+    opts.idempotencyKey
+      ? { idempotencyKey: paymentLinkCreationIdempotencyKey(opts.idempotencyKey) }
+      : undefined,
   );
+
+  if (link.active === false) {
+    throw new Error(`Stripe returned inactive payment link ${link.id}`);
+  }
 
   // Create first, then deactivate the superseded link. On an idempotent retry
   // Stripe may return the same link; it must never be deactivated as "previous".

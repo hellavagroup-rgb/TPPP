@@ -72,7 +72,6 @@ export async function createPaymentLink(opts: {
 
   const link = await stripe.paymentLinks.create(
     {
-      active: true,
       line_items: [{ price: price.id, quantity: 1 }],
       payment_method_types: ["card"],
       customer_creation: "always",

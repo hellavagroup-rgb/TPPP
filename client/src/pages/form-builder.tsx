@@ -538,6 +538,23 @@ export default function FormBuilder() {
                         
                         {(selectedField.type === "select" || selectedField.type === "radio" || selectedField.type === "checkbox") && (
                         <div className="space-y-3 pt-2 border-t">
+                            {(selectedField.type === "radio" || selectedField.type === "checkbox") && (
+                              <div className="flex items-center justify-between pb-3">
+                                <div>
+                                  <Label>Terms acceptance</Label>
+                                  <p className="text-xs text-muted-foreground">Use this answer as the registration consent record</p>
+                                </div>
+                                <Switch
+                                  checked={selectedField.isTermsAcceptance === true}
+                                  onCheckedChange={(checked) => {
+                                    setFields(current => current.map(field => ({
+                                      ...field,
+                                      isTermsAcceptance: field.id === selectedField.id ? checked : false,
+                                    })));
+                                  }}
+                                />
+                              </div>
+                            )}
                             <Label>Options</Label>
                             <div className="space-y-2">
                             {selectedField.options?.map((option, index) => (

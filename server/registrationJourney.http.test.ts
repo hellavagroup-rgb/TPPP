@@ -293,7 +293,13 @@ describe("registration journey HTTP routes", () => {
     h.state.tenant.registrationFormTemplateId = "registration-form-a";
     h.state.registrationTemplate = {
       id: "registration-form-a", tenantId: "tenant-a", title: "Registration details",
-      description: "Please complete", fields,
+      description: "Please complete",
+      updatedAt: new Date("2026-09-06T12:00:00.000Z"),
+      fields: [
+        ...fields,
+        { id: "terms-copy", type: "info", content: "Current registration terms" },
+        { id: "agreement", type: "radio", label: "I agree to the terms and conditions", required: true, options: ["Yes"], isTermsAcceptance: true },
+      ],
     };
   }
 
@@ -461,7 +467,7 @@ describe("registration journey HTTP routes", () => {
     configureRegistrationTemplate();
     const response = await request("/api/public/register/client-a/registration-token", {
       method: "POST",
-      body: JSON.stringify({ paymentType: "insurer", termsAccepted: true, termsVersion: 3, registrationResponses: { address: "1 High Street" } }),
+      body: JSON.stringify({ paymentType: "insurer", termsVersion: 3, registrationTemplateUpdatedAt: "2026-09-06T12:00:00.000Z", registrationResponses: { address: "1 High Street", agreement: "Yes" } }),
     });
     expect(response.status).toBe(409);
     expect(response.body.error).toMatch(/changed/i);
@@ -480,10 +486,12 @@ describe("registration journey HTTP routes", () => {
     configureRegistrationTemplate();
     const rendered = await request("/api/public/register/client-a/registration-token");
     expect(rendered.status).toBe(200);
-    expect(rendered.body.registrationTemplate).toMatchObject({ id: "registration-form-a", fields: [{ id: "address" }] });
+    expect(rendered.body.registrationTemplate.id).toBe("registration-form-a");
+    expect(rendered.body.registrationTemplate.fields[0]).toMatchObject({ id: "address" });
+    expect(rendered.body.registrationTemplateUpdatedAt).toBe("2026-09-06T12:00:00.000Z");
 
     const missing = await request("/api/public/register/client-a/registration-token", {
-      method: "POST", body: JSON.stringify({ paymentType: "insurer", termsAccepted: true, termsVersion: 4, registrationResponses: {} }),
+      method: "POST", body: JSON.stringify({ paymentType: "insurer", termsVersion: 4, registrationTemplateUpdatedAt: "2026-09-06T12:00:00.000Z", registrationResponses: { agreement: "Yes" } }),
     });
     expect(missing.status).toBe(400);
     expect(missing.body.error).toMatch(/address.*required/i);
@@ -491,8 +499,9 @@ describe("registration journey HTTP routes", () => {
     expect(h.state.submissions).toHaveLength(0);
 
     const payload = JSON.stringify({
-      paymentType: "insurer", insurerDetails: "Policy", termsAccepted: true, termsVersion: 4,
-      registrationResponses: { address: "1 High Street" },
+      paymentType: "insurer", insurerDetails: "Policy", termsVersion: 4,
+      registrationTemplateUpdatedAt: "2026-09-06T12:00:00.000Z",
+      registrationResponses: { address: "1 High Street", agreement: "Yes" },
     });
     const first = await request("/api/public/register/client-a/registration-token", { method: "POST", body: payload });
     const retry = await request("/api/public/register/client-a/registration-token", { method: "POST", body: payload });
@@ -502,8 +511,11 @@ describe("registration journey HTTP routes", () => {
     expect(h.state.client.registrationFormSubmissionId).toBe("submission-1");
     expect(h.state.submissions[0]).toMatchObject({
       registrationTemplateTitle: "Registration details",
-      registrationTemplateFields: [{ id: "address", required: true }],
     });
+    expect(h.state.client.termsAcceptedAt).toBeInstanceOf(Date);
+    expect(h.state.client.termsAcceptedVersion).toBe(4);
+    expect(h.state.client.termsAcceptedContent).toContain("Current registration terms");
+    expect(h.state.submissions[0].responses.agreement).toBe("Yes");
   });
 
   it("does not require a hidden conditional field, but requires it when shown", async () => {
@@ -517,7 +529,7 @@ describe("registration journey HTTP routes", () => {
     ]);
     const hidden = await request("/api/public/register/client-a/registration-token", {
       method: "POST",
-      body: JSON.stringify({ paymentType: "insurer", termsAccepted: true, termsVersion: 4, registrationResponses: { hasPolicy: "no" } }),
+      body: JSON.stringify({ paymentType: "insurer", termsVersion: 4, registrationTemplateUpdatedAt: "2026-09-06T12:00:00.000Z", registrationResponses: { hasPolicy: "no", agreement: "Yes" } }),
     });
     expect(hidden.status).toBe(200);
 
@@ -531,7 +543,7 @@ describe("registration journey HTTP routes", () => {
     ]);
     const shown = await request("/api/public/register/client-a/registration-token", {
       method: "POST",
-      body: JSON.stringify({ paymentType: "insurer", termsAccepted: true, termsVersion: 4, registrationResponses: { hasPolicy: "yes" } }),
+      body: JSON.stringify({ paymentType: "insurer", termsVersion: 4, registrationTemplateUpdatedAt: "2026-09-06T12:00:00.000Z", registrationResponses: { hasPolicy: "yes", agreement: "Yes" } }),
     });
     expect(shown.status).toBe(400);
     expect(shown.body.error).toMatch(/policy number.*required/i);
@@ -549,7 +561,7 @@ describe("registration journey HTTP routes", () => {
     configureRegistrationTemplate(fields);
     const hidden = await request("/api/public/register/client-a/registration-token", {
       method: "POST",
-      body: JSON.stringify({ paymentType: "insurer", termsAccepted: true, termsVersion: 4, registrationResponses: { hasReferral: "no" } }),
+      body: JSON.stringify({ paymentType: "insurer", termsVersion: 4, registrationTemplateUpdatedAt: "2026-09-06T12:00:00.000Z", registrationResponses: { hasReferral: "no", agreement: "Yes" } }),
     });
     expect(hidden.status).toBe(200);
 
@@ -560,7 +572,7 @@ describe("registration journey HTTP routes", () => {
     configureRegistrationTemplate(fields);
     const shown = await request("/api/public/register/client-a/registration-token", {
       method: "POST",
-      body: JSON.stringify({ paymentType: "insurer", termsAccepted: true, termsVersion: 4, registrationResponses: { hasReferral: "yes" } }),
+      body: JSON.stringify({ paymentType: "insurer", termsVersion: 4, registrationTemplateUpdatedAt: "2026-09-06T12:00:00.000Z", registrationResponses: { hasReferral: "yes", agreement: "Yes" } }),
     });
     expect(shown.status).toBe(400);
     expect(shown.body.error).toMatch(/referrer.*required/i);
@@ -597,7 +609,7 @@ describe("registration journey HTTP routes", () => {
       registrationTokenExpiresAt: new Date(Date.now() + 60_000), agreedRatePence: null,
     }, tenant: { paymentsEnabled: true } });
     configureRegistrationTemplate([]);
-    const payload = JSON.stringify({ paymentType: "self_pay", termsAccepted: true, termsVersion: 4, registrationResponses: {} });
+    const payload = JSON.stringify({ paymentType: "self_pay", termsVersion: 4, registrationTemplateUpdatedAt: "2026-09-06T12:00:00.000Z", registrationResponses: { agreement: "Yes" } });
     const noRate = await request("/api/public/register/client-a/registration-token", { method: "POST", body: payload });
     expect(noRate.status).toBe(422);
     expect(h.state.client.status).toBe("OptionSelected");
@@ -622,7 +634,8 @@ describe("registration journey HTTP routes", () => {
       status: "OptionSelected", assignedClinicianId: "clinician-a", assignedSlotId: "slot-a",
       registrationToken: "registration-token", registrationTokenExpiresAt: new Date(Date.now() + 60_000),
     } });
-    const payload = JSON.stringify({ paymentType: "insurer", insurerDetails: "Policy", termsAccepted: true, termsVersion: 4 });
+    configureRegistrationTemplate([]);
+    const payload = JSON.stringify({ paymentType: "insurer", insurerDetails: "Policy", termsVersion: 4, registrationTemplateUpdatedAt: "2026-09-06T12:00:00.000Z", registrationResponses: { agreement: "Yes" } });
     const first = await request("/api/public/register/client-a/registration-token", { method: "POST", body: payload });
     const retry = await request("/api/public/register/client-a/registration-token", { method: "POST", body: payload });
 
@@ -642,7 +655,8 @@ describe("registration journey HTTP routes", () => {
         registrationToken: "registration-token", registrationTokenExpiresAt: new Date(Date.now() + 60_000),
       },
     });
-    const payload = JSON.stringify({ paymentType: "self_pay", termsAccepted: true, termsVersion: 4 });
+    configureRegistrationTemplate([]);
+    const payload = JSON.stringify({ paymentType: "self_pay", termsVersion: 4, registrationTemplateUpdatedAt: "2026-09-06T12:00:00.000Z", registrationResponses: { agreement: "Yes" } });
     const first = await request("/api/public/register/client-a/registration-token", { method: "POST", body: payload });
     const retry = await request("/api/public/register/client-a/registration-token", { method: "POST", body: payload });
 

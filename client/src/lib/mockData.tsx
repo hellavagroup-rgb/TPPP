@@ -83,6 +83,7 @@ export interface FormField {
   content?: string; // For info/header types
   options?: string[]; // For select, radio, checkbox
   required?: boolean;
+  isTermsAcceptance?: boolean;
   placeholder?: string;
   conditional?: {
     fieldId: string;

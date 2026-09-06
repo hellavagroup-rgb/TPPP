@@ -6,10 +6,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Loader2, CheckCircle2, ChevronDown } from "lucide-react";
+import { Loader2, CheckCircle2 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { DynamicFormFields, validateDynamicFields } from "@/components/forms/DynamicFormFields";
+import { findRegistrationConsent } from "@shared/registrationConsent";
 
 interface RegistrationData {
   tenantName: string;
@@ -24,6 +24,7 @@ interface RegistrationData {
   savedPaymentType: "self_pay" | "insurer" | null;
   savedInsurerDetails: string | null;
   registrationTemplate?: { id: string; title?: string; fields: any[] } | null;
+  registrationTemplateUpdatedAt?: string | null;
 }
 
 function formatPence(pence: number) {
@@ -37,7 +38,6 @@ export default function RegistrationForm() {
 
   const [paymentType, setPaymentType] = useState<"self_pay" | "insurer">("self_pay");
   const [insurerDetails, setInsurerDetails] = useState("");
-  const [termsAccepted, setTermsAccepted] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [prefilled, setPrefilled] = useState(false);
@@ -78,8 +78,9 @@ export default function RegistrationForm() {
         body: JSON.stringify({
           paymentType,
           insurerDetails: paymentType === "insurer" ? insurerDetails : undefined,
-          termsAccepted,
+          termsAccepted: findRegistrationConsent(data.registrationTemplate?.fields, templateValues)?.accepted === true,
           termsVersion: data.termsVersion,
+          registrationTemplateUpdatedAt: data.registrationTemplateUpdatedAt,
           registrationResponses: templateValues,
         }),
       });
@@ -132,7 +133,7 @@ export default function RegistrationForm() {
       window.setTimeout(() => document.querySelector('[data-error="true"]')?.scrollIntoView({ behavior: "smooth", block: "center" }), 0);
       return;
     }
-    if (!termsAccepted) {
+    if (findRegistrationConsent(fields, templateValues)?.accepted !== true) {
       setFormError("Please read and accept the terms and conditions to continue.");
       return;
     }
@@ -282,32 +283,6 @@ export default function RegistrationForm() {
                 <AlertDescription>Online payment setup is unavailable. An administrator must complete payment setup before registration can be submitted.</AlertDescription>
               </Alert>
             )}
-
-            {/* Terms & Conditions */}
-            <div className="space-y-3">
-              <Label className="text-sm font-medium">Terms &amp; Conditions</Label>
-              <details className="rounded-lg border overflow-hidden">
-                <summary className="flex items-center justify-between px-4 py-3 cursor-pointer select-none bg-slate-50 hover:bg-slate-100 transition-colors text-sm font-medium">
-                  <span>Read Terms &amp; Conditions</span>
-                  <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                </summary>
-                <div className="px-4 py-4 text-sm text-slate-700 whitespace-pre-wrap leading-relaxed border-t bg-white max-h-60 overflow-y-auto">
-                  {data.termsText}
-                </div>
-              </details>
-
-              <div className="flex items-start gap-3 p-3 rounded-lg border">
-                <Checkbox
-                  id="termsAccepted"
-                  checked={termsAccepted}
-                  onCheckedChange={(checked) => setTermsAccepted(checked === true)}
-                  className="mt-0.5"
-                />
-                <Label htmlFor="termsAccepted" className="text-sm cursor-pointer leading-snug">
-                  I have read and agree to the terms and conditions
-                </Label>
-              </div>
-            </div>
 
             {formError && (
               <Alert variant="destructive">

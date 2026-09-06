@@ -41,6 +41,7 @@ import {
 } from "./registrationWorkflow";
 import { executeFormDeliveryBatch, FormDeliveryRequestError, submittedPacketIsComplete } from "./formDeliveryWorkflow";
 import { shouldReleaseClientAllocation } from "./clientAllocationWorkflow";
+import { findRegistrationConsent } from "@shared/registrationConsent";
 
 function formatActivitySlot(slot: { type?: string | null; day?: string | null; date?: string | null; startTime?: string | null; endTime?: string | null; locationType?: string | null }): string {
   const day = slot.type === "SpecificDate" ? slot.date : slot.day;
@@ -2406,6 +2407,7 @@ export async function registerRoutes(
           description: registrationTemplate.description,
           fields: registrationTemplate.fields,
         } : null,
+        registrationTemplateUpdatedAt: registrationTemplate?.updatedAt?.toISOString() || null,
       });
     } catch (error) {
       console.error("Failed to fetch registration data:", error);
@@ -2416,7 +2418,7 @@ export async function registerRoutes(
   // POST /api/public/register/:clientId/:registrationToken — submit registration form
   app.post("/api/public/register/:clientId/:registrationToken", async (req, res) => {
     try {
-      const { paymentType, insurerDetails, termsAccepted, termsVersion } = req.body;
+      const { paymentType, insurerDetails, termsVersion, registrationTemplateUpdatedAt } = req.body;
       const responses = req.body.registrationResponses ?? req.body.responses;
 
       // Validate paymentType against allowlist
@@ -2498,12 +2500,17 @@ export async function registerRoutes(
         if (client.status !== "OptionSelected") {
           return res.status(409).json({ error: "Registration has already been completed" });
         }
-        const consentError = validateRegistrationConsent(termsAccepted, termsVersion, tenant.registrationTermsVersion);
-        if (consentError) return res.status(termsAccepted === true ? 409 : 400).json({ error: consentError });
         if (registrationTemplate) {
+          if (!registrationTemplateUpdatedAt
+            || registrationTemplateUpdatedAt !== registrationTemplate.updatedAt.toISOString()) {
+            return res.status(409).json({ error: "The registration form has changed. Please reload and review the current version." });
+          }
           const responseError = requiredRegistrationFieldError(registrationTemplate.fields, responses);
           if (responseError) return res.status(400).json({ error: responseError });
         }
+        const registrationConsent = findRegistrationConsent(registrationTemplate?.fields, responses);
+        const consentError = validateRegistrationConsent(registrationConsent?.accepted === true, termsVersion, tenant.registrationTermsVersion);
+        if (consentError) return res.status(registrationConsent?.accepted === true ? 409 : 400).json({ error: consentError });
 
         const paymentPrerequisite = registrationPaymentPrerequisite({
           paymentType: validatedPaymentType,
@@ -2536,7 +2543,7 @@ export async function registerRoutes(
             registrationPaymentAttemptKey: claimedPaymentAttemptKey,
             termsAcceptedAt: new Date(),
             termsAcceptedVersion: tenant.registrationTermsVersion,
-            termsAcceptedContent: tenant.registrationTermsContent,
+            termsAcceptedContent: registrationConsent!.evidenceContent,
             updatedAt: new Date(),
           }).where(and(
             eq(clients.id, client.id),
@@ -2881,6 +2888,16 @@ export async function registerRoutes(
       const updated = await storage.updateFormTemplate(req.params.id, validated);
       if (!updated) {
         return res.status(404).json({ error: "Form not found" });
+      }
+      const registrationTermsChanged = req.tenant?.registrationFormTemplateId === form.id
+        && validated.fields !== undefined
+        && JSON.stringify(form.fields) !== JSON.stringify(updated.fields);
+      if (registrationTermsChanged) {
+        await db.update(tenants).set({
+          registrationTermsVersion: drizzleSql`${tenants.registrationTermsVersion} + 1`,
+          registrationTermsUpdatedAt: new Date(),
+          updatedAt: new Date(),
+        }).where(eq(tenants.id, req.tenant!.id));
       }
       await recordActivity(req, "activity_form_template_updated", "form", updated.id, {
         formTitle: updated.title,

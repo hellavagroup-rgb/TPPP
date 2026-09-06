@@ -335,6 +335,29 @@ describe("registration journey HTTP routes", () => {
     expect(h.state.activities.filter(a => a.action === "activity_client_options_sent")).toHaveLength(1);
   });
 
+  it("replaces stale options instead of including them in a new allocation email", async () => {
+    h.state.client.status = "FormsCompleted";
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.tenant.autoAllocationEmailEnabled = true;
+    h.state.options = [
+      { ...h.state.options[0], id: "stale-option-1", selectionToken: "stale-token-1" },
+      { ...h.state.options[0], id: "stale-option-2", selectionToken: "stale-token-2" },
+      { ...h.state.options[0], id: "stale-option-3", selectionToken: "stale-token-3" },
+    ];
+
+    const response = await request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({ selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }] }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(h.state.options).toHaveLength(1);
+    expect(h.state.options[0].selectionToken).not.toMatch(/^stale-token-/);
+    expect(h.state.emails).toHaveLength(1);
+    expect(h.state.emails[0].html).toContain("Option 1:");
+    expect(h.state.emails[0].html).not.toContain("Option 2:");
+  });
+
   it("automatically moves option selection into registration exactly once", async () => {
     const first = await request("/api/public/options/selection-token-a/select", {
       method: "POST", body: JSON.stringify({ clinicianOptionId: "option-a" }),

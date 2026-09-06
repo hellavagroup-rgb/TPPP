@@ -1279,6 +1279,7 @@ export async function registerRoutes(
             updateData,
             currentClient.assignedSlotId,
             currentClient.assignedClinicianId,
+            req.tenant!.id,
           )
         : await storage.updateClient(req.params.id, updateData);
       
@@ -1530,14 +1531,19 @@ export async function registerRoutes(
         tenantId: req.tenant!.id,
       }));
 
-      await db.insert(clientClinicianOptions).values(options as any);
+      await db.transaction(async (tx) => {
+        await tx.delete(clientClinicianOptions).where(and(
+          eq(clientClinicianOptions.clientId, req.params.clientId),
+          eq(clientClinicianOptions.tenantId, req.tenant!.id),
+        ));
+        await tx.insert(clientClinicianOptions).values(options as any);
+      });
 
       // Auto-send allocation email if enabled
       if (shouldSendAllocationEmail) {
         try {
-          const allOptions = await storage.getClientClinicianOptions(req.params.clientId);
           const optionDetails = await Promise.all(
-            allOptions.map(async (opt) => {
+            options.map(async (opt) => {
               const [clinRow] = await db.select().from(clinicians).where(eq(clinicians.id, opt.clinicianId)).limit(1);
               const clinUser = clinRow?.userId
                 ? await db.select({ name: users.name }).from(users).where(eq(users.id, clinRow.userId)).limit(1).then(r => r[0])
@@ -1558,7 +1564,7 @@ export async function registerRoutes(
             })
           );
           // Use the first option's token as the portal entry point (any token gets all options)
-          const firstToken = allOptions[0]?.selectionToken;
+          const firstToken = options[0]?.selectionToken;
           if (!firstToken) {
             throw new Error("No selection token was available");
           }

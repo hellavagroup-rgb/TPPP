@@ -40,6 +40,7 @@ import {
   validateRegistrationConsent,
 } from "./registrationWorkflow";
 import { executeFormDeliveryBatch, FormDeliveryRequestError, submittedPacketIsComplete } from "./formDeliveryWorkflow";
+import { shouldReleaseClientAllocation } from "./clientAllocationWorkflow";
 
 function formatActivitySlot(slot: { type?: string | null; day?: string | null; date?: string | null; startTime?: string | null; endTime?: string | null; locationType?: string | null }): string {
   const day = slot.type === "SpecificDate" ? slot.date : slot.day;
@@ -1264,10 +1265,7 @@ export async function registerRoutes(
       }
 
       // When moving backward from an allocated state, release the slot and clear assignment fields
-      const ALLOCATED_STATUSES = ["Assigned", "AwaitingConfirmation", "Scheduled"];
-      const isDeallocation = req.body.status && oldStatus &&
-        ALLOCATED_STATUSES.includes(oldStatus) &&
-        !ALLOCATED_STATUSES.includes(req.body.status);
+      const isDeallocation = shouldReleaseClientAllocation(oldStatus, req.body.status);
 
       if (isDeallocation) {
         if (currentClient?.assignedSlotId) {

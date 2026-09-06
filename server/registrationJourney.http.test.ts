@@ -16,6 +16,7 @@ const h = vi.hoisted(() => {
     registrationTemplate: null as any,
     submissions: [] as any[],
     slotClaimFails: false,
+    stripeLinkActive: true,
     emailResult: { success: true, outcome: "accepted" } as any,
     paymentResult: { url: "https://pay.test/session", paymentLinkId: "plink_1" } as any,
   };
@@ -168,7 +169,11 @@ vi.mock("./gmailSync", () => ({
 }));
 vi.mock("./stripe", () => ({
   isStripeConfigured: vi.fn(() => true),
-  getStripeInstance: vi.fn(() => null),
+  getStripeInstance: vi.fn(() => ({
+    paymentLinks: {
+      retrieve: vi.fn(async () => ({ active: h.state.stripeLinkActive })),
+    },
+  })),
   createPaymentLink: vi.fn(async (input: any) => {
     h.state.paymentLinks.push(input);
     return h.state.paymentResult;
@@ -266,6 +271,7 @@ function resetState(overrides: { client?: any; tenant?: any } = {}) {
   h.state.registrationTemplate = null;
   h.state.submissions = [];
   h.state.slotClaimFails = false;
+  h.state.stripeLinkActive = true;
   h.state.emailResult = { success: true, outcome: "accepted" };
   h.state.paymentResult = { url: "https://pay.test/session", paymentLinkId: "plink_1" };
   vi.clearAllMocks();
@@ -666,5 +672,34 @@ describe("registration journey HTTP routes", () => {
     expect(h.state.client.paymentStatus).toBe("setup_pending");
     expect(h.state.activities.filter(a => a.action === "activity_registration_submitted")).toHaveLength(1);
     expect(h.state.emails).toHaveLength(0);
+  });
+
+  it("replaces an inactive stored registration payment link", async () => {
+    resetState({
+      tenant: { paymentsEnabled: true },
+      client: {
+        status: "RegistrationPending",
+        paymentType: "self_pay",
+        assignedClinicianId: "clinician-a",
+        assignedSlotId: "slot-a",
+        registrationToken: "registration-token",
+        registrationTokenExpiresAt: new Date(Date.now() + 60_000),
+        registrationPaymentAttemptKey: "old-attempt",
+        stripeCheckoutUrl: "https://pay.test/inactive",
+        stripePaymentLinkId: "plink_inactive",
+      },
+    });
+    h.state.stripeLinkActive = false;
+
+    const response = await request("/api/public/register/client-a/registration-token", {
+      method: "POST",
+      body: JSON.stringify({ paymentType: "self_pay" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body.checkoutUrl).toBe("https://pay.test/session");
+    expect(h.state.client.stripePaymentLinkId).toBe("plink_1");
+    expect(h.state.client.registrationPaymentAttemptKey).not.toBe("old-attempt");
+    expect(h.state.paymentLinks).toHaveLength(1);
   });
 });

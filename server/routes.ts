@@ -2453,6 +2453,38 @@ export async function registerRoutes(
         return res.json({ success: true, alreadyCompleted: true });
       }
       if (!isActiveRegistrationToken(client, req.params.registrationToken)) return res.status(403).json({ error: "Invalid or expired token" });
+      if (client.status === "RegistrationPending"
+        && client.paymentType === "self_pay"
+        && client.stripeCheckoutUrl
+        && client.stripePaymentLinkId) {
+        const stripe = getStripeInstance(registrationTenantStripeKey);
+        try {
+          const storedLink = stripe
+            ? await stripe.paymentLinks.retrieve(client.stripePaymentLinkId)
+            : null;
+          if (storedLink && storedLink.active === false) {
+            const replacementAttemptKey = crypto.randomUUID();
+            const resetRows = await db.update(clients).set({
+              stripeCheckoutUrl: null,
+              stripePaymentLinkId: null,
+              registrationPaymentAttemptKey: replacementAttemptKey,
+              paymentStatus: "setup_pending",
+              updatedAt: new Date(),
+            }).where(and(
+              eq(clients.id, client.id),
+              eq(clients.status, "RegistrationPending"),
+              eq(clients.stripePaymentLinkId, client.stripePaymentLinkId),
+            )).returning({ id: clients.id });
+            if (resetRows.length) {
+              client.stripeCheckoutUrl = null;
+              client.stripePaymentLinkId = null;
+              client.registrationPaymentAttemptKey = replacementAttemptKey;
+            }
+          }
+        } catch (error) {
+          console.error("Failed to verify stored registration payment link:", error);
+        }
+      }
       // A completed request is idempotent and never exposes previously-entered
       // insurer information. A pending Stripe request returns its existing link.
       const retryOutcome = registrationRetryResponse(client.status, client.stripeCheckoutUrl);

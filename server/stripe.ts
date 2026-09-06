@@ -16,6 +16,13 @@ export function isStripeConfigured(tenantKey?: string | null): boolean {
   return !!getStripeKey(tenantKey);
 }
 
+export function shouldDeactivatePreviousPaymentLink(
+  previousPaymentLinkId: string | null | undefined,
+  newPaymentLinkId: string,
+): boolean {
+  return !!previousPaymentLinkId && previousPaymentLinkId !== newPaymentLinkId;
+}
+
 // Creates a persistent (non-expiring) Stripe Payment Link for the client's initial
 // session payment. Unlike Checkout Sessions (which Stripe hard-caps at 24h expiry),
 // Payment Links never expire. No Stripe Customer is pre-created — Stripe creates one
@@ -37,41 +44,6 @@ export async function createPaymentLink(opts: {
 }): Promise<{ url: string; paymentLinkId: string } | null> {
   const stripe = getStripeInstance(opts.tenantStripeKey);
   if (!stripe) return null;
-
-  // Deactivate any previous link so the client can't pay against a stale rate
-  if (opts.previousPaymentLinkId) {
-    let previousLinkDeactivated = false;
-    try {
-      await stripe.paymentLinks.update(opts.previousPaymentLinkId, { active: false });
-      previousLinkDeactivated = true;
-    } catch (e: any) {
-      console.warn(`Failed to deactivate previous payment link ${opts.previousPaymentLinkId}:`, e?.message);
-    }
-
-    // Each generated link has its own one-off Price. Once the link is inactive,
-    // archive that Price too so repeated regeneration does not leave a growing
-    // list of active, unused prices in the Stripe dashboard.
-    if (previousLinkDeactivated) {
-      try {
-        const previousLink = await stripe.paymentLinks.retrieve(opts.previousPaymentLinkId, {
-          expand: ["line_items"],
-        });
-        const lineItems = (previousLink as Stripe.PaymentLink & {
-          line_items?: { data?: Array<{ price?: string | Stripe.Price | null }> };
-        }).line_items?.data || [];
-
-        for (const item of lineItems) {
-          const priceId = typeof item.price === "string" ? item.price : item.price?.id;
-          if (priceId) {
-            await stripe.prices.update(priceId, { active: false });
-          }
-        }
-      } catch (e: any) {
-        // Price cleanup is housekeeping; never prevent creation of the new link.
-        console.warn(`Failed to archive the previous payment link price for ${opts.previousPaymentLinkId}:`, e?.message);
-      }
-    }
-  }
 
   // Payment Links require a Price object (inline price_data is not supported)
   const price = await stripe.prices.create(
@@ -117,6 +89,16 @@ export async function createPaymentLink(opts: {
     },
     opts.idempotencyKey ? { idempotencyKey: `${opts.idempotencyKey}-link` } : undefined,
   );
+
+  // Create first, then deactivate the superseded link. On an idempotent retry
+  // Stripe may return the same link; it must never be deactivated as "previous".
+  if (shouldDeactivatePreviousPaymentLink(opts.previousPaymentLinkId, link.id)) {
+    try {
+      await stripe.paymentLinks.update(opts.previousPaymentLinkId!, { active: false });
+    } catch (e: any) {
+      console.warn(`Failed to deactivate previous payment link ${opts.previousPaymentLinkId}:`, e?.message);
+    }
+  }
 
   return { url: link.url, paymentLinkId: link.id };
 }

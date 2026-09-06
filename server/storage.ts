@@ -100,7 +100,7 @@ export interface IStorage {
   createClient(client: InsertClient, tenantId?: string | null): Promise<Client>;
   createClientIdempotently(client: InsertClient, tenantId: string, idempotencyKey?: string): Promise<{ client: Client; created: boolean }>;
   updateClient(id: string, updates: Partial<InsertClient>): Promise<Client | undefined>;
-  updateClientAndReleaseSlot(id: string, updates: Partial<InsertClient>, slotId: string | null): Promise<Client | undefined>;
+  updateClientAndReleaseSlot(id: string, updates: Partial<InsertClient>, slotId: string | null, clinicianId: string | null): Promise<Client | undefined>;
   archiveClient(id: string, reason?: string, category?: string): Promise<Client | undefined>;
   restoreClient(id: string): Promise<Client | undefined>;
   deleteClientPermanently(id: string): Promise<boolean>;
@@ -707,6 +707,7 @@ export class DatabaseStorage implements IStorage {
     id: string,
     updates: Partial<InsertClient>,
     slotId: string | null,
+    clinicianId: string | null,
   ): Promise<Client | undefined> {
     try {
       return await db.transaction(async (tx) => {
@@ -718,6 +719,12 @@ export class DatabaseStorage implements IStorage {
           if (releasedSlots.length !== 1) {
             throw new ClientAllocationUpdateError("The client's assigned slot could not be released");
           }
+        }
+
+        if (clinicianId) {
+          await tx.update(clinicians)
+            .set({ currentLoad: sql`GREATEST(${clinicians.currentLoad} - 1, 0)` })
+            .where(eq(clinicians.id, clinicianId));
         }
 
         const [client] = await tx.update(clients).set({

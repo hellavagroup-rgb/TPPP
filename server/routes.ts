@@ -1278,6 +1278,7 @@ export async function registerRoutes(
             req.params.id,
             updateData,
             currentClient.assignedSlotId,
+            currentClient.assignedClinicianId,
           )
         : await storage.updateClient(req.params.id, updateData);
       

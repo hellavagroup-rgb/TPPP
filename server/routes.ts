@@ -1422,6 +1422,16 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Multi-clinician allocation is not enabled for this tenant" });
       }
 
+      const shouldSendAllocationEmail = Boolean(req.tenant.autoAllocationEmailEnabled);
+      const appBase = process.env.APP_BASE_URL?.replace(/\/$/, "");
+      if (shouldSendAllocationEmail && !client.email) {
+        return res.status(400).json({ error: "Client does not have an email address for allocation options" });
+      }
+      if (shouldSendAllocationEmail && !appBase) {
+        console.error(`Allocation options rejected: APP_BASE_URL is not configured for client ${req.params.clientId}`);
+        return res.status(503).json({ error: "Allocation email is not configured. No options were sent." });
+      }
+
       // Reject duplicate slotIds in the request
       const slotIds = selections.map((s: any) => s.slotId);
       if (new Set(slotIds).size !== slotIds.length) {
@@ -1462,25 +1472,10 @@ export async function registerRoutes(
         tenantId: req.tenant!.id,
       }));
 
-      await db.transaction(async (tx) => {
-        // Insert options rows
-        await tx.insert(clientClinicianOptions).values(options as any);
-
-        // Move client to OptionsSent
-        await tx.update(clients).set({
-          status: "OptionsSent",
-          updatedAt: new Date(),
-        }).where(eq(clients.id, req.params.clientId));
-      });
-
-      const updated = await storage.getClientById(req.params.clientId);
-      await recordActivity(req, "activity_client_options_sent", "client", req.params.clientId, {
-        clientDisplayId: updated?.displayId || client.displayId,
-        optionCount: selections.length,
-      });
+      await db.insert(clientClinicianOptions).values(options as any);
 
       // Auto-send allocation email if enabled
-      if (req.tenant?.autoAllocationEmailEnabled && updated?.email) {
+      if (shouldSendAllocationEmail) {
         try {
           const allOptions = await storage.getClientClinicianOptions(req.params.clientId);
           const optionDetails = await Promise.all(
@@ -1506,26 +1501,110 @@ export async function registerRoutes(
           );
           // Use the first option's token as the portal entry point (any token gets all options)
           const firstToken = allOptions[0]?.selectionToken;
-          const appBase = process.env.APP_BASE_URL;
-          if (!appBase || !firstToken) {
-            console.warn(`Allocation email skipped: APP_BASE_URL not set or no selection token available for client ${req.params.clientId}`);
-            // Skip email — do not fall back to Host header (bearer-token disclosure risk)
-          } else {
-            const portalUrl = `${appBase}/options/${firstToken}`;
-            const tcAlloc = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor } : undefined;
-            const allocEmail = await generateAllocationOptionsEmail(optionDetails, portalUrl, tcAlloc);
-            await sendEmail({ ...allocEmail, to: updated.email });
-            console.log(`Allocation options email sent to client ${req.params.clientId}`);
+          if (!firstToken) {
+            throw new Error("No selection token was available");
           }
+          const portalUrl = `${appBase}/options/${firstToken}`;
+          const tcAlloc = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor } : undefined;
+          const allocEmail = await generateAllocationOptionsEmail(optionDetails, portalUrl, tcAlloc);
+          const sendResult = await sendEmail({ ...allocEmail, to: client.email! });
+          if (!sendResult.success) {
+            throw new Error(sendResult.error || "Email provider rejected the allocation email");
+          }
+          console.log(`Allocation options email sent to client ${req.params.clientId}`);
         } catch (emailErr) {
           console.error('Failed to send allocation options email:', emailErr);
+          await db.delete(clientClinicianOptions).where(
+            inArray(clientClinicianOptions.selectionToken, options.map(option => option.selectionToken))
+          );
+          return res.status(502).json({ error: "The allocation email could not be sent. The client was not moved to Options Sent." });
         }
       }
+
+      await db.update(clients).set({
+        status: "OptionsSent",
+        updatedAt: new Date(),
+      }).where(eq(clients.id, req.params.clientId));
+
+      const updated = await storage.getClientById(req.params.clientId);
+      await recordActivity(req, "activity_client_options_sent", "client", req.params.clientId, {
+        clientDisplayId: updated?.displayId || client.displayId,
+        optionCount: selections.length,
+      });
 
       res.json(updated);
     } catch (error) {
       console.error("Failed to allocate options:", error);
       res.status(500).json({ error: "Failed to allocate options" });
+    }
+  });
+
+  app.post("/api/clients/:clientId/resend-allocation-options", requireAdmin, async (req, res) => {
+    try {
+      const client = await storage.getClientById(req.params.clientId);
+      if (!client) return res.status(404).json({ error: "Client not found" });
+      if (client.tenantId !== req.tenant?.id) return res.status(403).json({ error: "Access denied" });
+      if (!req.tenant?.multiClinicianAllocationEnabled) {
+        return res.status(400).json({ error: "Multi-clinician allocation is not enabled for this tenant" });
+      }
+      if (client.status !== "OptionsSent") {
+        return res.status(409).json({ error: "Allocation options can only be resent while awaiting the client's selection" });
+      }
+      if (!client.email) {
+        return res.status(400).json({ error: "Client does not have an email address for allocation options" });
+      }
+
+      const appBase = process.env.APP_BASE_URL?.replace(/\/$/, "");
+      if (!appBase) {
+        return res.status(503).json({ error: "Allocation email is not configured" });
+      }
+
+      const allOptions = await storage.getClientClinicianOptions(req.params.clientId);
+      const firstToken = allOptions[0]?.selectionToken;
+      if (!firstToken) {
+        return res.status(409).json({ error: "No allocation options are available to resend" });
+      }
+
+      const optionDetails = await Promise.all(
+        allOptions.map(async (opt) => {
+          const [clinRow] = await db.select().from(clinicians).where(eq(clinicians.id, opt.clinicianId)).limit(1);
+          const clinUser = clinRow?.userId
+            ? await db.select({ name: users.name }).from(users).where(eq(users.id, clinRow.userId)).limit(1).then(r => r[0])
+            : undefined;
+          const slotRow = opt.slotId
+            ? await db.select().from(timeSlots).where(eq(timeSlots.id, opt.slotId)).limit(1).then(r => r[0])
+            : undefined;
+          return {
+            clinicianName: clinUser?.name || "Clinician",
+            type: slotRow?.type || null,
+            day: slotRow?.day || null,
+            date: slotRow?.date || null,
+            startTime: slotRow?.startTime || "",
+            endTime: slotRow?.endTime || "",
+            selectionToken: opt.selectionToken,
+            locationType: slotRow?.locationType || null,
+          };
+        })
+      );
+
+      const portalUrl = `${appBase}/options/${firstToken}`;
+      const tenantContext = {
+        id: req.tenant.id,
+        name: req.tenant.name,
+        fromEmail: req.tenant.fromEmail,
+        primaryColor: req.tenant.primaryColor,
+      };
+      const allocationEmail = await generateAllocationOptionsEmail(optionDetails, portalUrl, tenantContext);
+      const sendResult = await sendEmail({ ...allocationEmail, to: client.email });
+      if (!sendResult.success) {
+        return res.status(502).json({ error: "The allocation email could not be resent" });
+      }
+
+      console.log(`Allocation options email resent to client ${req.params.clientId}`);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Failed to resend allocation options email:", error);
+      res.status(500).json({ error: "Failed to resend allocation options email" });
     }
   });
 

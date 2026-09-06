@@ -13,3 +13,4 @@
 - [Clear query cache on login/logout, not just invalidate](query-cache-clear-on-auth-transition.md) — invalidateQueries() alone leaves stale cross-account/cross-tenant data in unmounted query cache entries.
 - [Idempotent email send fencing](idempotent-email-send-fencing.md) — retry-safe sends need a stable provider key plus a separate rotating DB claim fence for crash recovery.
 - [Recoverable Stripe resource setup](recoverable-stripe-resource-setup.md) — persist one attempt key before Stripe calls and reuse it for every resource created during crash recovery.
+- [Delivery status must follow provider acceptance](delivery-status-after-provider-acceptance.md) — never show an email-driven milestone until the provider accepts the send.

@@ -257,8 +257,41 @@ export default function Clients() {
       setSelectedOptions([]);
       setAllocationReason("");
     },
-    onError: () => {
-      toast({ title: "Error", description: "Failed to send options.", variant: "destructive" });
+    onError: (error: Error) => {
+      let description = "Failed to send options. The client was not moved to Options Sent.";
+      const jsonStart = error.message.indexOf("{");
+      if (jsonStart !== -1) {
+        try {
+          const parsed = JSON.parse(error.message.slice(jsonStart));
+          if (parsed.error) description = parsed.error;
+        } catch {
+          // Keep the safe fallback message when the API response is not JSON.
+        }
+      }
+      toast({ title: "Options not sent", description, variant: "destructive" });
+    },
+  });
+
+  const resendAllocationOptionsMutation = useMutation({
+    mutationFn: async (clientId: string) => {
+      const response = await apiRequest("POST", `/api/clients/${clientId}/resend-allocation-options`);
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Options resent", description: "The allocation options email has been sent again." });
+    },
+    onError: (error: Error) => {
+      let description = "The allocation options email could not be resent.";
+      const jsonStart = error.message.indexOf("{");
+      if (jsonStart !== -1) {
+        try {
+          const parsed = JSON.parse(error.message.slice(jsonStart));
+          if (parsed.error) description = parsed.error;
+        } catch {
+          // Keep the safe fallback message when the API response is not JSON.
+        }
+      }
+      toast({ title: "Options not resent", description, variant: "destructive" });
     },
   });
 
@@ -1776,6 +1809,18 @@ export default function Clients() {
                               Send Registration Form
                             </DropdownMenuItem>
                           )}
+                          {client.status === "OptionsSent" && (
+                            <DropdownMenuItem
+                              disabled={resendAllocationOptionsMutation.isPending}
+                              onClick={() => resendAllocationOptionsMutation.mutate(client.id)}
+                              data-testid={`button-resend-allocation-options-${client.id}`}
+                            >
+                              {resendAllocationOptionsMutation.isPending
+                                ? <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                : <Mail className="h-4 w-4 mr-2" />}
+                              Resend Options Email
+                            </DropdownMenuItem>
+                          )}
                           <DropdownMenuSeparator />
                           <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>
                             Archive/Didn't Engage
@@ -1855,7 +1900,22 @@ export default function Clients() {
                         {contactPreferenceBadge(client)}
                         {paymentStatusBadge(client) && <div className="mt-1">{paymentStatusBadge(client)}</div>}
                         {client.status === "OptionsSent" && (
-                          <p className="text-[10px] text-orange-600 mt-2 flex items-center gap-1"><Mail className="h-3 w-3" /> Options sent to client</p>
+                          <>
+                            <p className="text-[10px] text-orange-600 mt-2 flex items-center gap-1"><Mail className="h-3 w-3" /> Options sent to client</p>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="w-full gap-1 text-[10px] mt-2 border-orange-300 text-orange-700 hover:bg-orange-50 h-auto py-2"
+                              disabled={resendAllocationOptionsMutation.isPending}
+                              onClick={() => resendAllocationOptionsMutation.mutate(client.id)}
+                              data-testid={`button-resend-allocation-options-${client.id}`}
+                            >
+                              {resendAllocationOptionsMutation.isPending
+                                ? <Loader2 className="h-3 w-3 animate-spin" />
+                                : <Mail className="h-3 w-3" />}
+                              Resend Options Email
+                            </Button>
+                          </>
                         )}
                         {client.status === "OptionSelected" && (
                           <p className="text-[10px] text-teal-600 mt-2 flex items-center gap-1"><CheckCircle2 className="h-3 w-3" /> Client selected an option</p>

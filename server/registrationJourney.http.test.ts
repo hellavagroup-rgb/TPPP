@@ -51,6 +51,27 @@ const h = vi.hoisted(() => {
     select: () => ({
       from: (table: any) => chain(() => rowsFor(table)),
     }),
+    insert: (table: any) => ({
+      values: async (values: any | any[]) => {
+        if (tableName(table) === "client_clinician_options") {
+          const inserted = (Array.isArray(values) ? values : [values]).map((value, index) => ({
+            id: value.id || `inserted-option-${index}`,
+            ...value,
+          }));
+          state.options.push(...inserted);
+          return inserted;
+        }
+        return [];
+      },
+    }),
+    delete: (table: any) => ({
+      where: async () => {
+        if (tableName(table) !== "client_clinician_options") return [];
+        const deleted = [...state.options];
+        state.options = [];
+        return deleted;
+      },
+    }),
     update: (table: any) => ({
       set: (patch: any) => chain(() => {
         const name = tableName(table);
@@ -250,6 +271,44 @@ afterEach(async () => {
 });
 
 describe("registration journey HTTP routes", () => {
+  it("does not claim options were sent when the allocation email is rejected", async () => {
+    h.state.options = [];
+    h.state.client.status = "FormsCompleted";
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.tenant.autoAllocationEmailEnabled = true;
+    h.state.emailResult = { success: false, outcome: "rejected", error: "Rejected" };
+
+    const response = await request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({ selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }] }),
+    });
+
+    expect(response.status).toBe(502);
+    expect(response.body.error).toMatch(/not moved to Options Sent/i);
+    expect(h.state.client.status).toBe("FormsCompleted");
+    expect(h.state.options).toHaveLength(0);
+    expect(h.state.emails).toHaveLength(1);
+    expect(h.state.activities.filter(a => a.action === "activity_client_options_sent")).toHaveLength(0);
+  });
+
+  it("moves the client to Options Sent only after the allocation email is accepted", async () => {
+    h.state.options = [];
+    h.state.client.status = "FormsCompleted";
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.tenant.autoAllocationEmailEnabled = true;
+
+    const response = await request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({ selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }] }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(h.state.client.status).toBe("OptionsSent");
+    expect(h.state.options).toHaveLength(1);
+    expect(h.state.emails).toHaveLength(1);
+    expect(h.state.activities.filter(a => a.action === "activity_client_options_sent")).toHaveLength(1);
+  });
+
   it("automatically moves option selection into registration exactly once", async () => {
     const first = await request("/api/public/options/selection-token-a/select", {
       method: "POST", body: JSON.stringify({ clinicianOptionId: "option-a" }),

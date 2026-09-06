@@ -55,6 +55,7 @@ SUPER_ADMIN_KEY = "demo-admin-2024"
 
 [userenv.production]
 GOOGLE_REDIRECT_URI = "https://psychportal.co.uk/api/auth/gmail/callback"
+APP_BASE_URL = "https://psychportal.co.uk"
 
 [postMerge]
 path = "scripts/post-merge.sh"

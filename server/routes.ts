@@ -5047,6 +5047,20 @@ export async function registerRoutes(
     }
   });
 
+  // One-time repair for clients moved back to an unallocated status before the
+  // status-transition fix released their appointment. The storage operation
+  // refuses any row whose tenant/client/clinician/slot relationship is ambiguous.
+  app.post("/api/super-admin/clients/repair-stranded-allocations", requireSuperAdmin, async (req, res) => {
+    try {
+      const result = await storage.repairStrandedClientAllocations(req.ip);
+      console.log(`[super-admin] Stranded allocation repair identified ${result.identified}, repaired ${result.repaired.length}, skipped ${result.skipped.length}`);
+      res.json({ success: true, ...result });
+    } catch (error) {
+      console.error("Stranded allocation repair error:", error);
+      res.status(500).json({ error: "Failed to repair stranded client allocations" });
+    }
+  });
+
   // List all form templates across all tenants, with the owning tenant's name,
   // so a super-admin can pick a source form to copy elsewhere.
   app.get("/api/super-admin/forms", requireSuperAdmin, async (_req, res) => {

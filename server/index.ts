@@ -6,6 +6,7 @@ import { seedDatabaseIfEmpty } from "./seed";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { syncAllActiveConnections } from "./gmailSync";
+import { storage } from "./storage";
 
 const app = express();
 
@@ -95,6 +96,14 @@ app.use((req, res, next) => {
   await seedDatabaseIfEmpty();
 
   await registerRoutes(httpServer, app);
+
+  // Repair allocations stranded before backward status transitions released
+  // their slots. This is idempotent: repaired clients no longer match on later
+  // starts, while ambiguous ownership is reported and left untouched.
+  const strandedAllocationRepair = await storage.repairStrandedClientAllocations();
+  log(
+    `[maintenance] stranded allocations identified=${strandedAllocationRepair.identified} repaired=${strandedAllocationRepair.repaired.length} skipped=${strandedAllocationRepair.skipped.length}`,
+  );
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

@@ -25,6 +25,23 @@ import {
   type HistoricalActivitySources,
   type RecentActivityCategory,
 } from "./activity";
+import { UNALLOCATED_CLIENT_STATUSES } from "./strandedAllocationRepair";
+
+export type StrandedAllocationRepairRow = {
+  clientId: string;
+  clientDisplayId: string;
+  tenantId: string | null;
+  slotId: string;
+  status: string;
+  reason?: string;
+  slotAvailable?: boolean;
+};
+
+export type StrandedAllocationRepairResult = {
+  identified: number;
+  repaired: StrandedAllocationRepairRow[];
+  skipped: StrandedAllocationRepairRow[];
+};
 
 // Storage interface for all CRUD operations
 export interface IStorage {
@@ -79,6 +96,7 @@ export interface IStorage {
   deleteClientPermanently(id: string): Promise<boolean>;
   assignClinicianToClient(clientId: string, clinicianId: string, slotId: string, allocationMethod?: "form" | "manual", allocationReason?: string): Promise<void>;
   reassignClient(clientId: string, newClinicianId: string | null, newSlotId: string | null, newStatus: string): Promise<Client | undefined>;
+  repairStrandedClientAllocations(ipAddress?: string | null): Promise<StrandedAllocationRepairResult>;
   
   // ============ FORMS ============
   getAllFormTemplates(tenantId?: string | null): Promise<FormTemplate[]>;
@@ -510,6 +528,123 @@ export class DatabaseStorage implements IStorage {
   async getClientByDisplayId(displayId: string): Promise<Client | undefined> {
     const [client] = await db.select().from(clients).where(eq(clients.displayId, displayId));
     return client || undefined;
+  }
+
+  async repairStrandedClientAllocations(ipAddress?: string | null): Promise<StrandedAllocationRepairResult> {
+    return db.transaction(async (tx) => {
+      // This is a deliberately short, one-time maintenance transaction. Both
+      // normal allocation paths update these tables, so table-level write locks
+      // prevent a concurrent allocation from creating a new slot reference
+      // between our exclusivity check and availability verification.
+      await tx.execute(sql`LOCK TABLE clients, time_slots IN SHARE ROW EXCLUSIVE MODE`);
+
+      const statuses = sql.join(
+        UNALLOCATED_CLIENT_STATUSES.map((status) => sql`${status}`),
+        sql`, `,
+      );
+      const candidateResult = await tx.execute(sql`
+        SELECT
+          c.id AS "clientId",
+          c.display_id AS "clientDisplayId",
+          c.tenant_id AS "tenantId",
+          c.assigned_slot_id AS "slotId",
+          c.status,
+          CASE
+            WHEN c.tenant_id IS NULL THEN 'client_has_no_tenant'
+            WHEN s.id IS NULL THEN 'assigned_slot_missing'
+            WHEN c.assigned_clinician_id IS NULL THEN 'client_has_no_assigned_clinician'
+            WHEN c.assigned_clinician_id <> s.clinician_id THEN 'client_slot_clinician_mismatch'
+            WHEN s.tenant_id IS NULL THEN 'slot_has_no_tenant'
+            WHEN s.tenant_id <> c.tenant_id THEN 'client_slot_tenant_mismatch'
+            WHEN slot_clinician.id IS NULL THEN 'slot_clinician_missing'
+            WHEN slot_clinician.tenant_id IS NULL THEN 'slot_clinician_has_no_tenant'
+            WHEN slot_clinician.tenant_id <> c.tenant_id THEN 'client_slot_clinician_tenant_mismatch'
+            WHEN (
+              SELECT COUNT(*)
+              FROM clients other_client
+              WHERE other_client.assigned_slot_id = c.assigned_slot_id
+            ) <> 1 THEN 'slot_referenced_by_multiple_clients'
+            ELSE NULL
+          END AS reason
+        FROM clients c
+        LEFT JOIN time_slots s ON s.id = c.assigned_slot_id
+        LEFT JOIN clinicians slot_clinician ON slot_clinician.id = s.clinician_id
+        WHERE c.assigned_slot_id IS NOT NULL
+          AND c.status IN (${statuses})
+        ORDER BY c.display_id
+        FOR UPDATE OF c
+      `);
+
+      const candidates = candidateResult.rows as StrandedAllocationRepairRow[];
+      const eligible = candidates.filter((candidate) => !candidate.reason);
+      const repaired: StrandedAllocationRepairRow[] = [];
+
+      for (const candidate of eligible) {
+        const released = await tx.update(timeSlots)
+          .set({ isBooked: false })
+          .where(and(
+            eq(timeSlots.id, candidate.slotId),
+            eq(timeSlots.tenantId, candidate.tenantId!),
+          ))
+          .returning({ id: timeSlots.id });
+        if (released.length !== 1) {
+          throw new Error(`Verified slot ${candidate.slotId} could not be released`);
+        }
+
+        const cleared = await tx.update(clients)
+          .set({
+            assignedSlotId: null,
+            assignedSlot: null,
+            assignedClinicianId: null,
+            updatedAt: new Date(),
+          })
+          .where(and(
+            eq(clients.id, candidate.clientId),
+            eq(clients.tenantId, candidate.tenantId!),
+            eq(clients.assignedSlotId, candidate.slotId),
+          ))
+          .returning({ id: clients.id });
+        if (cleared.length !== 1) {
+          throw new Error(`Verified client ${candidate.clientId} could not be cleared`);
+        }
+
+        const verification = await tx.execute(sql`
+          SELECT
+            NOT s.is_booked
+              AND NOT EXISTS (
+                SELECT 1 FROM clients c WHERE c.assigned_slot_id = s.id
+              ) AS "slotAvailable"
+          FROM time_slots s
+          WHERE s.id = ${candidate.slotId}
+            AND s.tenant_id = ${candidate.tenantId}
+        `);
+        const slotAvailable = verification.rows[0]?.slotAvailable === true;
+        if (!slotAvailable) {
+          throw new Error(`Released slot ${candidate.slotId} failed availability verification`);
+        }
+        await tx.insert(auditLogs).values({
+          userId: null,
+          action: "repair_stranded_allocation",
+          resourceType: "client",
+          resourceId: candidate.clientId,
+          tenantId: candidate.tenantId,
+          ipAddress: ipAddress || null,
+          details: {
+            clientDisplayId: candidate.clientDisplayId,
+            previousStatus: candidate.status,
+            releasedSlotId: candidate.slotId,
+            slotAvailable,
+          },
+        });
+        repaired.push({ ...candidate, slotAvailable });
+      }
+
+      return {
+        identified: candidates.length,
+        repaired,
+        skipped: candidates.filter((candidate) => Boolean(candidate.reason)),
+      };
+    });
   }
 
   async createClient(insertClient: InsertClient, tenantId?: string | null): Promise<Client> {

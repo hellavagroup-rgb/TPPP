@@ -2,6 +2,8 @@ const ALLOCATED_CLIENT_STATUSES = new Set([
   "Assigned",
   "AwaitingConfirmation",
   "Scheduled",
+  "OptionSelected",
+  "RegistrationPending",
   "BookingConfirmed",
 ]);
 

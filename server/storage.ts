@@ -715,7 +715,10 @@ export class DatabaseStorage implements IStorage {
         if (slotId) {
           const releasedSlots = await tx.update(timeSlots)
             .set({ isBooked: false })
-            .where(eq(timeSlots.id, slotId))
+            .where(and(
+              eq(timeSlots.id, slotId),
+              eq(timeSlots.tenantId, tenantId),
+            ))
             .returning({ id: timeSlots.id });
           if (releasedSlots.length !== 1) {
             throw new ClientAllocationUpdateError("The client's assigned slot could not be released");
@@ -725,7 +728,10 @@ export class DatabaseStorage implements IStorage {
         if (clinicianId) {
           await tx.update(clinicians)
             .set({ currentLoad: sql`GREATEST(${clinicians.currentLoad} - 1, 0)` })
-            .where(eq(clinicians.id, clinicianId));
+            .where(and(
+              eq(clinicians.id, clinicianId),
+              eq(clinicians.tenantId, tenantId),
+            ));
         }
 
         await tx.delete(clientClinicianOptions).where(and(

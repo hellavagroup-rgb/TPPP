@@ -8,9 +8,18 @@ describe("shouldReleaseClientAllocation", () => {
     ).toBe(true);
   });
 
+  it.each([
+    "OptionSelected",
+    "RegistrationPending",
+  ])("releases a reserved slot when moving back from %s", (status) => {
+    expect(
+      shouldReleaseClientAllocation(status, "Forms Completed"),
+    ).toBe(true);
+  });
+
   it("preserves an allocation while moving between allocated states", () => {
     expect(
-      shouldReleaseClientAllocation("BookingConfirmed", "Scheduled"),
+      shouldReleaseClientAllocation("RegistrationPending", "BookingConfirmed"),
     ).toBe(false);
   });
 

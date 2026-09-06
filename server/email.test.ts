@@ -37,6 +37,7 @@ import {
   generateClinicianWelcomeEmail,
   generateAdminInviteEmail,
   generatePaymentFailureEmail,
+  generateRegistrationInviteEmail,
 } from './email';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -63,6 +64,17 @@ const tenantNone = undefined; // no tenant → generic defaults
 // ─── tests ──────────────────────────────────────────────────────────────────
 
 describe('Email Outlook rendering — no <style> blocks or class= attributes', () => {
+
+  describe('generateRegistrationInviteEmail', () => {
+    it('uses the tenant brand and includes the secure registration link', async () => {
+      const link = 'https://portal.example/register/client/token';
+      const email = await generateRegistrationInviteEmail(link, tenant);
+      assertOutlookSafe('generateRegistrationInviteEmail', email.html);
+      expect(email.from).toBe('noreply@test.com');
+      expect(email.subject).toContain('Test Practice');
+      expect(email.text).toContain(link);
+    });
+  });
 
   describe('generateFormInviteEmail', () => {
     it('is Outlook-safe with a dark primary colour', async () => {

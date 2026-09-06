@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, timestamp, integer, boolean, json } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, integer, boolean, json, uniqueIndex } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -38,6 +38,10 @@ export const tenants = pgTable("tenants", {
   multiClinicianAllocationEnabled: boolean("multi_clinician_allocation_enabled").default(false),
   autoAllocationEmailEnabled: boolean("auto_allocation_email_enabled").default(false),
   registrationFormEnabled: boolean("registration_form_enabled").default(false),
+  // Tenant-owned consent document. Version is incremented whenever its content changes.
+  registrationTermsContent: text("registration_terms_content").notNull().default("By proceeding you agree to the practice's Terms & Conditions."),
+  registrationTermsVersion: integer("registration_terms_version").notNull().default(1),
+  registrationTermsUpdatedAt: timestamp("registration_terms_updated_at").defaultNow().notNull(),
   bookingConfirmedEmailEnabled: boolean("booking_confirmed_email_enabled").default(false),
   writeuppChecklistEnabled: boolean("writeup_checklist_enabled").default(false),
   oneOffSlotsEnabled: boolean("one_off_slots_enabled").default(false),
@@ -180,6 +184,7 @@ export const clients = pgTable("clients", {
   stripePaymentMethodId: text("stripe_payment_method_id"), // Stripe PaymentMethod ID (pm_...)
   stripeCheckoutUrl: text("stripe_checkout_url"), // Payment link URL sent to client
   stripePaymentLinkId: text("stripe_payment_link_id"), // Stripe Payment Link ID (plink_...) for deactivation
+  registrationPaymentAttemptKey: text("registration_payment_attempt_key"),
   paymentStatus: text("payment_status", { enum: ["none", "setup_pending", "active"] }).default("none"),
   // CY&A fields
   contactPreference: text("contact_preference", { enum: ["email", "phone"] }),
@@ -190,6 +195,16 @@ export const clients = pgTable("clients", {
   insurerDetails: text("insurer_details"),
   // CY&A registration token (for the registration form portal link)
   registrationToken: text("registration_token"),
+  registrationTokenExpiresAt: timestamp("registration_token_expires_at"),
+  registrationTokenRevokedAt: timestamp("registration_token_revoked_at"),
+  registrationEmailSentAt: timestamp("registration_email_sent_at"),
+  registrationEmailSendingAt: timestamp("registration_email_sending_at"),
+  registrationEmailAttemptKey: text("registration_email_attempt_key"),
+  registrationEmailClaimId: text("registration_email_claim_id"),
+  termsAcceptedAt: timestamp("terms_accepted_at"),
+  termsAcceptedVersion: integer("terms_accepted_version"),
+  termsAcceptedContent: text("terms_accepted_content"),
+  bookingConfirmationSentAt: timestamp("booking_confirmation_sent_at"),
   // Timestamps
   intakeDate: timestamp("intake_date").defaultNow().notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -374,7 +389,11 @@ export const paymentCharges = pgTable("payment_charges", {
   chargedByUserId: varchar("charged_by_user_id").references(() => users.id),
   chargedAt: timestamp("charged_at").defaultNow().notNull(),
   tenantId: varchar("tenant_id").references(() => tenants.id),
-});
+}, (table) => [
+  uniqueIndex("payment_charges_stripe_payment_intent_unique")
+    .on(table.stripePaymentIntentId)
+    .where(sql`${table.stripePaymentIntentId} is not null`),
+]);
 
 export const insertPaymentChargeSchema = createInsertSchema(paymentCharges).omit({ id: true, chargedAt: true });
 export type InsertPaymentCharge = z.infer<typeof insertPaymentChargeSchema>;

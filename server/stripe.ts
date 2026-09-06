@@ -30,6 +30,7 @@ export async function createPaymentLink(opts: {
   tenantId?: string | null;
   tenantStripeKey?: string | null;
   practiceName?: string | null;
+  idempotencyKey?: string;
   // If the client already has an active link, pass its ID so it is deactivated first
   previousPaymentLinkId?: string | null;
 }): Promise<{ url: string; paymentLinkId: string } | null> {
@@ -72,13 +73,16 @@ export async function createPaymentLink(opts: {
   }
 
   // Payment Links require a Price object (inline price_data is not supported)
-  const price = await stripe.prices.create({
-    currency: "gbp",
-    unit_amount: opts.amountPence,
-    product_data: {
-      name: `Initial Therapy Session — ${opts.practiceName || "PsychPortal"}`,
+  const price = await stripe.prices.create(
+    {
+      currency: "gbp",
+      unit_amount: opts.amountPence,
+      product_data: {
+        name: `Initial Therapy Session — ${opts.practiceName || "PsychPortal"}`,
+      },
     },
-  });
+    opts.idempotencyKey ? { idempotencyKey: `${opts.idempotencyKey}-price` } : undefined,
+  );
 
   const metadata = {
     clientId: opts.clientId,
@@ -86,28 +90,31 @@ export async function createPaymentLink(opts: {
     ...(opts.tenantId ? { tenantId: opts.tenantId } : {}),
   };
 
-  const link = await stripe.paymentLinks.create({
-    line_items: [{ price: price.id, quantity: 1 }],
-    payment_method_types: ["card"],
-    customer_creation: "always",
-    // Stripe-enforced single use: the link deactivates itself after one completed
-    // checkout, so a rapid double-payment race is impossible. Webhook deactivation
-    // below remains as defense in depth.
-    restrictions: { completed_sessions: { limit: 1 } },
-    // Explicitly collect the payer's full name so the Stripe Customer always has
-    // a real name — Zapier/Xero contact creation depends on it. Card checkout
-    // alone does not guarantee the Customer name field is populated.
-    name_collection: { individual: { enabled: true } },
-    payment_intent_data: {
-      setup_future_usage: "off_session",
-      metadata,
+  const link = await stripe.paymentLinks.create(
+    {
+      line_items: [{ price: price.id, quantity: 1 }],
+      payment_method_types: ["card"],
+      customer_creation: "always",
+      // Stripe-enforced single use: the link deactivates itself after one completed
+      // checkout, so a rapid double-payment race is impossible. Webhook deactivation
+      // below remains as defense in depth.
+      restrictions: { completed_sessions: { limit: 1 } },
+      // Explicitly collect the payer's full name so the Stripe Customer always has
+      // a real name — Zapier/Xero contact creation depends on it. Card checkout
+      // alone does not guarantee the Customer name field is populated.
+      name_collection: { individual: { enabled: true } },
+      payment_intent_data: {
+        setup_future_usage: "off_session",
+        metadata,
+      },
+      after_completion: {
+        type: "redirect",
+        redirect: { url: opts.successUrl },
+      },
+      metadata, // propagates to the checkout session created when the client pays
     },
-    after_completion: {
-      type: "redirect",
-      redirect: { url: opts.successUrl },
-    },
-    metadata, // propagates to the checkout session created when the client pays
-  });
+    opts.idempotencyKey ? { idempotencyKey: `${opts.idempotencyKey}-link` } : undefined,
+  );
 
   return { url: link.url, paymentLinkId: link.id };
 }

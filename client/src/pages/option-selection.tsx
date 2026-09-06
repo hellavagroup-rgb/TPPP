@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRoute, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,7 @@ interface OptionsData {
   clientStatus: string;
   tenantName: string;
   primaryColor: string | null;
+  registrationUrl?: string | null;
 }
 
 function formatTime(t: string) {
@@ -33,6 +34,13 @@ function formatTime(t: string) {
   const ampm = h >= 12 ? "PM" : "AM";
   const hour = h % 12 || 12;
   return `${hour}:${m.toString().padStart(2, "0")} ${ampm}`;
+}
+
+function getSelectionErrorMessage(message: string) {
+  if (/unavailable|no longer available|already been (selected|booked|submitted)|conflict/i.test(message)) {
+    return `${message} Please return to your practice so they can offer you another appointment.`;
+  }
+  return message;
 }
 
 export default function OptionSelection() {
@@ -78,12 +86,16 @@ export default function OptionSelection() {
       }
     },
     onError: (err: Error) => {
-      setError(err.message);
+      setError(getSelectionErrorMessage(err.message));
     },
   });
 
   const primaryColor = data?.primaryColor || "#4f46e5";
   const tenantName = data?.tenantName || "Your Practice";
+
+  useEffect(() => {
+    if (data?.registrationUrl) setLocation(data.registrationUrl);
+  }, [data?.registrationUrl, setLocation]);
 
   if (isLoading) {
     return (

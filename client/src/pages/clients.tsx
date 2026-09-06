@@ -128,6 +128,7 @@ function getSlotCounts(availability?: TimeSlot[]) {
 export default function Clients() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const registrationAttemptKeysRef = useRef(new Map<string, string>());
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
   const [, setLocation] = useLocation();
@@ -260,6 +261,42 @@ export default function Clients() {
       toast({ title: "Error", description: "Failed to send options.", variant: "destructive" });
     },
   });
+
+  const sendRegistrationMutation = useMutation({
+    mutationFn: async (clientId: string) => {
+      const attemptKey = registrationAttemptKeysRef.current.get(clientId) || crypto.randomUUID();
+      registrationAttemptKeysRef.current.set(clientId, attemptKey);
+      const response = await apiRequest("POST", `/api/clients/${clientId}/send-registration`, {
+        attemptKey,
+      });
+      return { clientId, result: await response.json() };
+    },
+    onSuccess: ({ clientId }) => {
+      // A later click after success is an explicit resend and gets a fresh key.
+      // Errors retain the key so ambiguous network retries remain idempotent.
+      registrationAttemptKeysRef.current.delete(clientId);
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      toast({
+        title: "Registration form sent",
+        description: "The client has been emailed their registration form.",
+      });
+    },
+    onError: (error: Error) => {
+      const message = error.message.replace(/^\d+:\s*/, "");
+      toast({
+        title: "Unable to send registration form",
+        description: message || "Please try again or check that the client is allocated.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const canSendRegistration = (client: ClientType) =>
+    isAdmin &&
+    tenant?.registrationFormEnabled === true &&
+    !!client.assignedClinicianId &&
+    !!client.assignedSlotId &&
+    (["Assigned", "AwaitingConfirmation", "OptionSelected"] as string[]).includes(client.status);
 
   // Send Forms State
   const [isSendFormsOpen, setIsSendFormsOpen] = useState(false);
@@ -1727,6 +1764,18 @@ export default function Clients() {
                               </DropdownMenuItem>
                             </>
                           )}
+                          {canSendRegistration(client) && client.status !== "Assigned" && (
+                            <DropdownMenuItem
+                              disabled={sendRegistrationMutation.isPending}
+                              onClick={() => sendRegistrationMutation.mutate(client.id)}
+                              data-testid={`button-send-registration-${client.id}`}
+                            >
+                              {sendRegistrationMutation.isPending
+                                ? <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                : <Mail className="h-4 w-4 mr-2" />}
+                              Send Registration Form
+                            </DropdownMenuItem>
+                          )}
                           <DropdownMenuSeparator />
                           <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>
                             Archive/Didn't Engage
@@ -1768,6 +1817,21 @@ export default function Clients() {
                           <div className="mt-1">{paymentStatusBadge(client)}</div>
                         )}
                         {contactPreferenceBadge(client)}
+                        {canSendRegistration(client) && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="w-full gap-1 text-[10px] mt-2 border-indigo-300 text-indigo-700 hover:bg-indigo-50 h-auto py-2 whitespace-normal"
+                            disabled={sendRegistrationMutation.isPending}
+                            onClick={() => sendRegistrationMutation.mutate(client.id)}
+                            data-testid={`button-send-registration-${client.id}`}
+                          >
+                            {sendRegistrationMutation.isPending
+                              ? <Loader2 className="h-3 w-3 animate-spin flex-shrink-0" />
+                              : <Mail className="h-3 w-3 flex-shrink-0" />}
+                            Send Registration Form
+                          </Button>
+                          )}
                         <Button
                           size="sm"
                           variant="outline"
@@ -1868,6 +1932,18 @@ export default function Clients() {
                                   </>
                                 )}
                               </>
+                            )}
+                            {canSendRegistration(client) && (
+                              <DropdownMenuItem
+                                disabled={sendRegistrationMutation.isPending}
+                                onClick={() => sendRegistrationMutation.mutate(client.id)}
+                                data-testid={`button-send-registration-${client.id}`}
+                              >
+                                {sendRegistrationMutation.isPending
+                                  ? <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                  : <Mail className="h-4 w-4 mr-2" />}
+                                Send Registration Form
+                              </DropdownMenuItem>
                             )}
                             <DropdownMenuSeparator />
                             <DropdownMenuItem

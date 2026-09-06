@@ -14,6 +14,7 @@ interface RegistrationData {
   tenantName: string;
   primaryColor: string | null;
   termsText: string;
+  termsVersion: number;
   agreedRatePence: number | null;
   paymentsEnabled: boolean;
   alreadySubmitted: boolean;
@@ -37,11 +38,14 @@ export default function RegistrationForm() {
   const [success, setSuccess] = useState(false);
   const [prefilled, setPrefilled] = useState(false);
 
-  const { data, isLoading, isError } = useQuery<RegistrationData>({
+  const { data, isLoading, isError, error: loadError } = useQuery<RegistrationData>({
     queryKey: ["registration", clientId, registrationToken],
     queryFn: async () => {
       const res = await fetch(`/api/public/register/${clientId}/${registrationToken}`);
-      if (!res.ok) throw new Error("Not found");
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "This registration link is invalid or has expired.");
+      }
       return res.json();
     },
     enabled: !!clientId && !!registrationToken,
@@ -59,10 +63,18 @@ export default function RegistrationForm() {
 
   const mutation = useMutation({
     mutationFn: async () => {
+      if (!data?.termsVersion) {
+        throw new Error("The terms and conditions could not be verified. Please reload the page and try again.");
+      }
       const res = await fetch(`/api/public/register/${clientId}/${registrationToken}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ paymentType, insurerDetails: paymentType === "insurer" ? insurerDetails : undefined }),
+        body: JSON.stringify({
+          paymentType,
+          insurerDetails: paymentType === "insurer" ? insurerDetails : undefined,
+          termsAccepted,
+          termsVersion: data.termsVersion,
+        }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -94,6 +106,10 @@ export default function RegistrationForm() {
       setFormError("Please read and accept the terms and conditions to continue.");
       return;
     }
+    if (!data?.termsVersion) {
+      setFormError("The terms and conditions could not be verified. Please reload the page and try again.");
+      return;
+    }
 
     mutation.mutate();
   };
@@ -115,7 +131,9 @@ export default function RegistrationForm() {
         <Card className="max-w-md w-full">
           <CardContent className="pt-6 text-center">
             <p className="text-muted-foreground">
-              This link is invalid or has expired. Please contact your practice for assistance.
+              {loadError instanceof Error
+                ? loadError.message
+                : "This registration link is invalid or has expired. Please contact your practice for assistance."}
             </p>
           </CardContent>
         </Card>

@@ -30,6 +30,7 @@ export interface EmailOptions {
   html: string;
   text?: string;
   from?: string;
+  idempotencyKey?: string;
 }
 
 export function buildFromAddress(tenant?: TenantContext): string {
@@ -110,27 +111,32 @@ async function getStoredTemplate(templateKey: string, tenantId?: string | null):
   }
 }
 
-export async function sendEmail(options: EmailOptions): Promise<{ success: boolean; error?: string }> {
+export type EmailSendOutcome = "accepted" | "rejected" | "unknown";
+
+export async function sendEmail(options: EmailOptions): Promise<{ success: boolean; outcome: EmailSendOutcome; error?: string }> {
   try {
     const from = options.from || buildFromAddress();
-    const { data, error } = await getResend().emails.send({
-      from,
-      to: options.to,
-      subject: options.subject,
-      html: options.html,
-      text: options.text,
-    });
+    const { data, error } = await getResend().emails.send(
+      {
+        from,
+        to: options.to,
+        subject: options.subject,
+        html: options.html,
+        text: options.text,
+      },
+      options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : undefined,
+    );
 
     if (error) {
       console.error('Email send error:', error);
-      return { success: false, error: error.message };
+      return { success: false, outcome: "rejected", error: error.message };
     }
 
     console.log('Email sent successfully:', data?.id);
-    return { success: true };
+    return { success: true, outcome: "accepted" };
   } catch (err) {
     console.error('Email send exception:', err);
-    return { success: false, error: err instanceof Error ? err.message : 'Unknown error' };
+    return { success: false, outcome: "unknown", error: err instanceof Error ? err.message : 'Unknown error' };
   }
 }
 
@@ -542,6 +548,31 @@ ${practiceName} Team`;
     subject: `Your Match Options - ${practiceName}`,
     html: wrapInHtmlTemplate(defaultBody, 'Your Match Options', practiceName, tenant?.primaryColor),
     text: defaultBody,
+    from: buildFromAddress(tenant),
+  };
+}
+
+/** A tenant-branded, bearer-token registration invitation. */
+export async function generateRegistrationInviteEmail(
+  registrationUrl: string,
+  tenant?: TenantContext,
+): Promise<EmailOptions> {
+  const practiceName = tenant?.name || GENERIC_PRACTICE_NAME;
+  const storedTemplate = await getStoredTemplate('registration_invite', tenant?.id);
+  const bodyText = storedTemplate
+    ? replacePlaceholders(storedTemplate.bodyText, {
+      registration_link: registrationUrl,
+      practice_name: practiceName,
+    })
+    : `Please complete your registration before your appointment can be confirmed.\n\nComplete registration securely here:\n${registrationUrl}\n\nWarm regards,\n${practiceName} Team`;
+  const subject = storedTemplate
+    ? replacePlaceholders(storedTemplate.subject, { practice_name: practiceName })
+    : `Complete your registration - ${practiceName}`;
+  return {
+    to: '',
+    subject,
+    html: wrapInHtmlTemplate(bodyText, 'Complete Your Registration', practiceName, tenant?.primaryColor),
+    text: bodyText,
     from: buildFromAddress(tenant),
   };
 }

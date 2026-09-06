@@ -491,6 +491,85 @@ function EmailTemplatesTab() {
   );
 }
 
+interface RegistrationTerms {
+  content: string;
+  version: number;
+  updatedAt: string;
+}
+
+function RegistrationTermsTab() {
+  const queryClient = useQueryClient();
+  const [content, setContent] = useState("");
+  const [loadedVersion, setLoadedVersion] = useState<number | null>(null);
+
+  const { data, isLoading } = useQuery<RegistrationTerms>({
+    queryKey: ["/api/tenant/registration-terms"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/tenant/registration-terms");
+      return res.json();
+    },
+  });
+
+  useEffect(() => {
+    if (data && data.version !== loadedVersion) {
+      setContent(data.content);
+      setLoadedVersion(data.version);
+    }
+  }, [data, loadedVersion]);
+
+  const updateMutation = useMutation({
+    mutationFn: async (nextContent: string) => {
+      const res = await apiRequest("PATCH", "/api/tenant/registration-terms", { content: nextContent });
+      return res.json() as Promise<RegistrationTerms>;
+    },
+    onSuccess: (updated) => {
+      queryClient.setQueryData(["/api/tenant/registration-terms"], updated);
+      setLoadedVersion(updated.version);
+      toast.success("Registration terms updated");
+    },
+    onError: (error: Error) => toast.error(error.message || "Failed to update registration terms"),
+  });
+
+  if (isLoading) {
+    return <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>;
+  }
+
+  return (
+    <Card className="border-none shadow-sm">
+      <CardHeader>
+        <CardTitle>Registration Terms &amp; Conditions</CardTitle>
+        <CardDescription>
+          Clients must accept this exact tenant-specific content before registration can be completed.
+          Saving changed content creates a new auditable version.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <Textarea
+          value={content}
+          onChange={(event) => setContent(event.target.value)}
+          rows={18}
+          placeholder="Enter the Terms & Conditions clients must accept..."
+          data-testid="input-registration-terms"
+        />
+        <div className="flex items-center justify-between gap-4">
+          <p className="text-xs text-muted-foreground">
+            Current version: {data?.version ?? 1}
+            {data?.updatedAt ? ` · Updated ${new Date(data.updatedAt).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}` : ""}
+          </p>
+          <Button
+            onClick={() => updateMutation.mutate(content)}
+            disabled={updateMutation.isPending || !content.trim() || content === data?.content}
+            data-testid="button-save-registration-terms"
+          >
+            {updateMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
+            Save Terms
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 interface AdminUser {
   id: string;
   name: string;
@@ -1532,6 +1611,7 @@ export default function Settings() {
   const dataExportEnabled = tenant?.dataExportEnabled !== false;
   const nonEngagementEnabled = tenant?.nonEngagementEnabled !== false;
   const gmailEnabled = tenant?.gmailIntakeEnabled === true;
+  const registrationFormEnabled = tenant?.registrationFormEnabled === true;
 
   // Support ?tab=gmail deep-links, but fall back if the tab is disabled
   const urlTab = new URLSearchParams(window.location.search).get("tab");
@@ -1550,6 +1630,7 @@ export default function Settings() {
         <TabsList className="flex-wrap h-auto">
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
           <TabsTrigger value="email-templates">Message Templates</TabsTrigger>
+          {registrationFormEnabled && <TabsTrigger value="registration-terms">Registration Terms</TabsTrigger>}
           <TabsTrigger value="non-engagement">Categories</TabsTrigger>
           {dataExportEnabled && <TabsTrigger value="data-export">Data Export</TabsTrigger>}
           <TabsTrigger value="account">Account</TabsTrigger>
@@ -1564,6 +1645,12 @@ export default function Settings() {
         <TabsContent value="email-templates">
           <EmailTemplatesTab />
         </TabsContent>
+
+        {registrationFormEnabled && (
+          <TabsContent value="registration-terms">
+            <RegistrationTermsTab />
+          </TabsContent>
+        )}
 
         <TabsContent value="non-engagement" className="space-y-6">
           <InsurerManagementSection />

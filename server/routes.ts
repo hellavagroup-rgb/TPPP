@@ -14,7 +14,7 @@ import {
   type InsertFormTemplate
 } from "@shared/schema";
 import { z } from "zod";
-import { sendEmail, buildFromAddress, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateFormCompletedNotificationEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail, generateClinicianWelcomeEmail, generateAdminInviteEmail, generateAllocationOptionsEmail, generateBookingConfirmedEmail, getFormCompletionPageContent, GENERIC_PRACTICE_NAME } from "./email";
+import { sendEmail, buildFromAddress, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateFormCompletedNotificationEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail, generateClinicianWelcomeEmail, generateAdminInviteEmail, generateAllocationOptionsEmail, generateBookingConfirmedEmail, generateRegistrationInviteEmail, getFormCompletionPageContent, GENERIC_PRACTICE_NAME } from "./email";
 import { forceReseedDatabase } from "./seed";
 import { seedDemoData } from "./seedDemo";
 import { parseIntakeEmailBody } from "./intakeParser";
@@ -26,8 +26,17 @@ import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissi
 import { isStripeConfigured, getStripeInstance, createPaymentLink, chargeOffSession, constructWebhookEvent } from "./stripe";
 import { encryptSecret, decryptSecret, isEncryptionConfigured } from "./encryption";
 import { getAuthUrl, exchangeCodeForTokens, syncConnection, buildRedirectUri } from "./gmailSync";
-import { isNull, isNotNull, eq, and, inArray, desc, like, sql as drizzleSql } from "drizzle-orm";
+import { isNull, isNotNull, eq, and, or, lt, inArray, desc, like, sql as drizzleSql } from "drizzle-orm";
 import { isRecentActivityCategory, mergeRecentActivityItems } from "./activity";
+import {
+  canSendRegistration,
+  isActiveRegistrationToken,
+  isCompletedRegistrationRetry,
+  optionSelectionProgression,
+  registrationCompletionBranch,
+  registrationRetryResponse,
+  validateRegistrationConsent,
+} from "./registrationWorkflow";
 
 function formatActivitySlot(slot: { type?: string | null; day?: string | null; date?: string | null; startTime?: string | null; endTime?: string | null; locationType?: string | null }): string {
   const day = slot.type === "SpecificDate" ? slot.date : slot.day;
@@ -1457,11 +1466,6 @@ export async function registerRoutes(
         // Insert options rows
         await tx.insert(clientClinicianOptions).values(options as any);
 
-        // Hold each selected slot
-        for (const sel of selections) {
-          await tx.update(timeSlots).set({ isBooked: true }).where(eq(timeSlots.id, sel.slotId));
-        }
-
         // Move client to OptionsSent
         await tx.update(clients).set({
           status: "OptionsSent",
@@ -1522,6 +1526,181 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Failed to allocate options:", error);
       res.status(500).json({ error: "Failed to allocate options" });
+    }
+  });
+
+  // Send (or safely resend) registration to a client allocated outside option selection.
+  app.post("/api/clients/:clientId/send-registration", requireAdmin, async (req, res) => {
+    let claimedAttemptKey: string | null = null;
+    let claimedClaimId: string | null = null;
+    let providerAcceptedSend = false;
+    try {
+      if (!req.tenant?.registrationFormEnabled) {
+        return res.status(400).json({ error: "Registration forms are disabled for this practice" });
+      }
+      const attemptKey = typeof req.body?.attemptKey === "string" ? req.body.attemptKey.trim() : "";
+      if (!/^[a-zA-Z0-9-]{16,100}$/.test(attemptKey)) {
+        return res.status(400).json({ error: "A valid send attempt key is required" });
+      }
+      const client = await storage.getClientById(req.params.clientId);
+      if (!client) return res.status(404).json({ error: "Client not found" });
+      if (client.tenantId !== req.tenant.id) return res.status(403).json({ error: "Access denied" });
+      if (!client.email) return res.status(400).json({ error: "This client has no email address" });
+      if (!client.assignedClinicianId || !client.assignedSlotId) {
+        return res.status(400).json({ error: "Registration can only be sent to an allocated client" });
+      }
+      if (!canSendRegistration({
+        featureEnabled: req.tenant.registrationFormEnabled === true,
+        requestTenantId: req.tenant.id,
+        clientTenantId: client.tenantId,
+        assignedClinicianId: client.assignedClinicianId,
+        assignedSlotId: client.assignedSlotId,
+        status: client.status,
+      })) {
+        return res.status(409).json({ error: "Registration can only be sent before the booking is confirmed" });
+      }
+      const eligibleStatuses: Array<typeof client.status> = ["Assigned", "AwaitingConfirmation", "OptionSelected"];
+      const appBase = process.env.APP_BASE_URL;
+      if (!appBase) return res.status(503).json({ error: "Registration links are not configured" });
+      if (client.registrationEmailAttemptKey === attemptKey && client.registrationEmailSentAt) {
+        return res.json({ success: true, resent: true, idempotent: true });
+      }
+      const recoverableAttempt = !!client.registrationEmailAttemptKey
+        && !client.registrationEmailSentAt
+        && (
+          !client.registrationEmailSendingAt
+          || client.registrationEmailSendingAt < new Date(Date.now() - 5 * 60 * 1000)
+        );
+      // Crash recovery inherits the original provider key. A different incoming
+      // key cannot turn recovery into a second provider delivery.
+      const effectiveAttemptKey = recoverableAttempt ? client.registrationEmailAttemptKey! : attemptKey;
+      const claimId = crypto.randomUUID();
+      // Serialize provider delivery. The same key is also sent to Resend as its
+      // provider idempotency key, so a recovered stale claim cannot duplicate mail.
+      const sendClaim = await db.update(clients).set({
+        registrationEmailAttemptKey: effectiveAttemptKey,
+        registrationEmailClaimId: claimId,
+        registrationEmailSendingAt: new Date(),
+        updatedAt: new Date(),
+      }).where(and(
+        eq(clients.id, client.id),
+        eq(clients.tenantId, req.tenant.id),
+        inArray(clients.status, eligibleStatuses),
+        or(
+          isNull(clients.registrationEmailSendingAt),
+          lt(clients.registrationEmailSendingAt, new Date(Date.now() - 5 * 60 * 1000)),
+        ),
+      )).returning({ id: clients.id });
+      if (!sendClaim.length) {
+        const current = await storage.getClientById(client.id);
+        if (current && current.registrationEmailAttemptKey === effectiveAttemptKey && current.registrationEmailSentAt) {
+          return res.json({ success: true, resent: true, idempotent: true });
+        }
+        return res.status(409).json({ error: "A registration email is already being sent. Please wait a moment." });
+      }
+      claimedAttemptKey = effectiveAttemptKey;
+      claimedClaimId = claimId;
+      const tokenIsUsable = client.registrationToken && !client.registrationTokenRevokedAt
+        && (!client.registrationTokenExpiresAt || client.registrationTokenExpiresAt > new Date());
+      let token = tokenIsUsable ? client.registrationToken! : crypto.randomBytes(32).toString("hex");
+      // Persist the bearer token before sending so a successfully delivered link
+      // can never point at a token that was not saved. The workflow status remains
+      // unchanged until delivery succeeds. The token compare-and-swap ensures two
+      // concurrent first sends cannot email different tokens.
+      const tokenCondition = client.registrationToken
+        ? eq(clients.registrationToken, client.registrationToken)
+        : isNull(clients.registrationToken);
+      const tokenUpdate = await db.update(clients).set({
+        registrationToken: token,
+        registrationTokenExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        registrationTokenRevokedAt: null,
+        updatedAt: new Date(),
+      }).where(and(eq(clients.id, client.id), eq(clients.tenantId, req.tenant.id), tokenCondition))
+        .returning({ registrationToken: clients.registrationToken });
+      if (!tokenUpdate.length) {
+        const current = await storage.getClientById(client.id);
+        if (!current?.registrationToken) {
+          await db.update(clients).set({
+            registrationEmailSendingAt: null,
+            registrationEmailAttemptKey: null,
+            registrationEmailClaimId: null,
+            updatedAt: new Date(),
+          }).where(and(
+            eq(clients.id, client.id),
+            eq(clients.registrationEmailAttemptKey, effectiveAttemptKey),
+            eq(clients.registrationEmailClaimId, claimId),
+          ));
+          claimedAttemptKey = null;
+          claimedClaimId = null;
+          return res.status(409).json({ error: "Registration is already being prepared. Please retry." });
+        }
+        token = current.registrationToken;
+      }
+      const registrationUrl = `${appBase.replace(/\/$/, "")}/register/${client.id}/${token}`;
+      const tenantContext = { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor };
+      const email = await generateRegistrationInviteEmail(registrationUrl, tenantContext);
+      const delivery = await sendEmail({
+        ...email,
+        to: client.email,
+        idempotencyKey: `registration-${client.id}-${effectiveAttemptKey}`,
+      });
+      providerAcceptedSend = delivery.outcome !== "rejected";
+      if (!delivery.success) {
+        await db.update(clients).set({
+          registrationEmailSendingAt: null,
+          // Explicit provider rejection is safe to retry as a new attempt.
+          // Unknown transport outcome retains the provider key for deduplication.
+          registrationEmailAttemptKey: delivery.outcome === "rejected" ? null : effectiveAttemptKey,
+          registrationEmailClaimId: null,
+          updatedAt: new Date(),
+        }).where(and(
+          eq(clients.id, client.id),
+          eq(clients.registrationEmailAttemptKey, effectiveAttemptKey),
+          eq(clients.registrationEmailClaimId, claimId),
+        ));
+        claimedAttemptKey = null;
+        claimedClaimId = null;
+        return res.status(502).json({ error: "Registration email could not be delivered. Please try again." });
+      }
+      const completedSend = await db.update(clients).set({
+        registrationEmailSentAt: new Date(),
+        registrationEmailSendingAt: null,
+        registrationEmailClaimId: null,
+        status: "OptionSelected",
+        updatedAt: new Date(),
+      }).where(and(
+        eq(clients.id, client.id),
+        eq(clients.tenantId, req.tenant.id),
+        eq(clients.registrationEmailAttemptKey, effectiveAttemptKey),
+        eq(clients.registrationEmailClaimId, claimId),
+        isNotNull(clients.registrationEmailSendingAt),
+        inArray(clients.status, eligibleStatuses),
+      )).returning({ id: clients.id });
+      if (!completedSend.length) {
+        return res.status(409).json({ error: "The client workflow changed while the email was being sent. Please refresh." });
+      }
+      // Intentionally no client email, token, answers, or other PII in activity details.
+      await recordActivity(req, "activity_registration_sent", "client", client.id, { clientDisplayId: client.displayId });
+      claimedAttemptKey = null;
+      claimedClaimId = null;
+      return res.json({ success: true, resent: tokenIsUsable });
+    } catch (error) {
+      if (claimedAttemptKey && claimedClaimId) {
+        await db.update(clients).set({
+          registrationEmailSendingAt: null,
+          // Once the provider accepted the message, preserve its stable key so
+          // an ambiguous retry is deduplicated by Resend.
+          registrationEmailAttemptKey: providerAcceptedSend ? claimedAttemptKey : null,
+          registrationEmailClaimId: null,
+          updatedAt: new Date(),
+        }).where(and(
+          eq(clients.id, req.params.clientId),
+          eq(clients.registrationEmailAttemptKey, claimedAttemptKey),
+          eq(clients.registrationEmailClaimId, claimedClaimId),
+        )).catch(cleanupError => console.error("Failed to release registration email claim:", cleanupError));
+      }
+      console.error("Failed to send registration:", error);
+      return res.status(500).json({ error: "Failed to send registration" });
     }
   });
 
@@ -1762,9 +1941,11 @@ export async function registerRoutes(
 
       const client = await storage.getClientById(optionRow.clientId);
       if (!client) return res.status(404).json({ error: "Client not found" });
+      if (client.tenantId !== optionRow.tenantId) return res.status(404).json({ error: "Options not found" });
 
       const tenant = await storage.getTenantById(optionRow.tenantId).catch(() => undefined);
-      const allOptions = await storage.getClientClinicianOptions(optionRow.clientId);
+      const allOptions = (await storage.getClientClinicianOptions(optionRow.clientId))
+        .filter(opt => opt.tenantId === optionRow.tenantId);
 
       const optionsWithDetails = await Promise.all(
         allOptions.map(async (opt) => {
@@ -1791,6 +1972,11 @@ export async function registerRoutes(
         clientStatus: client.status,
         tenantName: tenant?.name || "",
         primaryColor: tenant?.primaryColor || null,
+        registrationUrl: tenant?.registrationFormEnabled
+          && client.status === "OptionSelected"
+          && isActiveRegistrationToken(client, client.registrationToken || "")
+          ? `/register/${client.id}/${client.registrationToken}`
+          : null,
       });
     } catch (error) {
       console.error("Failed to fetch options:", error);
@@ -1807,13 +1993,26 @@ export async function registerRoutes(
 
       const client = await storage.getClientById(optionRow.clientId);
       if (!client) return res.status(404).json({ error: "Client not found" });
+      if (client.tenantId !== optionRow.tenantId) return res.status(404).json({ error: "Options not found" });
 
-      // State gate: only allow action when client is still in OptionsSent (i.e. not yet actioned)
+      // A retry of the successful choice is safe and returns the same progression.
       if (client.status !== "OptionsSent") {
+        const priorOptions = (await storage.getClientClinicianOptions(optionRow.clientId))
+          .filter(option => option.tenantId === optionRow.tenantId);
+        const priorSelected = clinicianOptionId && priorOptions.find(option => option.id === clinicianOptionId && option.status === "selected");
+        if (priorSelected) {
+          const tenant = await storage.getTenantById(optionRow.tenantId);
+          if (tenant?.registrationFormEnabled && client.registrationToken && !client.registrationTokenRevokedAt
+            && (!client.registrationTokenExpiresAt || client.registrationTokenExpiresAt > new Date())) {
+            return res.json({ selected: true, registrationUrl: `/register/${optionRow.clientId}/${client.registrationToken}`, idempotent: true });
+          }
+          if (client.status === "BookingConfirmed") return res.json({ selected: true, bookingConfirmed: true, idempotent: true });
+        }
         return res.status(409).json({ error: "Selection has already been submitted" });
       }
 
-      const allOptions = await storage.getClientClinicianOptions(optionRow.clientId);
+      const allOptions = (await storage.getClientClinicianOptions(optionRow.clientId))
+        .filter(opt => opt.tenantId === optionRow.tenantId);
 
       // Guard against replayed tokens when all options are already resolved
       const alreadyActioned = allOptions.every(o => o.status !== "pending");
@@ -1822,15 +2021,12 @@ export async function registerRoutes(
       }
 
       if (decline) {
-        // Decline all — release all held slots, flag needsAdminCall
+        // Options never reserve slots; declining only closes this client's options.
         await db.transaction(async (tx) => {
           for (const opt of allOptions) {
             await tx.update(clientClinicianOptions)
               .set({ status: "declined" })
               .where(eq(clientClinicianOptions.id, opt.id));
-            if (opt.slotId) {
-              await tx.update(timeSlots).set({ isBooked: false }).where(eq(timeSlots.id, opt.slotId));
-            }
           }
           await tx.update(clients)
             .set({ needsAdminCall: true, updatedAt: new Date() })
@@ -1847,36 +2043,111 @@ export async function registerRoutes(
       const selectedOption = allOptions.find(o => o.id === clinicianOptionId);
       if (!selectedOption) return res.status(400).json({ error: "Option not found" });
 
-      const registrationToken = crypto.randomBytes(32).toString("hex");
+      const tenant = await storage.getTenantById(optionRow.tenantId);
+      if (!tenant) return res.status(404).json({ error: "Practice not found" });
+      const registrationEnabled = tenant.registrationFormEnabled === true;
+      const progression = optionSelectionProgression(registrationEnabled);
+      const registrationToken = registrationEnabled ? crypto.randomBytes(32).toString("hex") : null;
+      const nextStatus = progression.status;
 
-      await db.transaction(async (tx) => {
-        for (const opt of allOptions) {
-          if (opt.id === clinicianOptionId) {
-            await tx.update(clientClinicianOptions).set({ status: "selected" }).where(eq(clientClinicianOptions.id, opt.id));
-          } else {
-            await tx.update(clientClinicianOptions).set({ status: "declined" }).where(eq(clientClinicianOptions.id, opt.id));
-            if (opt.slotId) {
-              await tx.update(timeSlots).set({ isBooked: false }).where(eq(timeSlots.id, opt.slotId));
-            }
-          }
+      try {
+        await db.transaction(async (tx) => {
+          // Options are not holds. Claim exactly the selected slot with a conditional
+          // update so two clients cannot both select it.
+          if (!selectedOption.slotId) throw new Error("Selected option has no appointment slot");
+          const claimed = await tx.update(timeSlots).set({ isBooked: true })
+            .where(and(
+              eq(timeSlots.id, selectedOption.slotId),
+              eq(timeSlots.tenantId, optionRow.tenantId),
+              drizzleSql`(
+                ${timeSlots.isBooked} = false
+                OR (
+                  ${timeSlots.isBooked} = true
+                  AND EXISTS (
+                    SELECT 1
+                    FROM client_clinician_options legacy_option
+                    JOIN clients legacy_client ON legacy_client.id = legacy_option.client_id
+                    WHERE legacy_option.id = ${selectedOption.id}
+                      AND legacy_option.slot_id = ${selectedOption.slotId}
+                      AND legacy_option.client_id = ${optionRow.clientId}
+                      AND legacy_option.tenant_id = ${optionRow.tenantId}
+                      AND legacy_option.status = 'pending'
+                      AND legacy_client.status = 'OptionsSent'
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM clients booked_client
+                    WHERE booked_client.assigned_slot_id = ${timeSlots.id}
+                      AND booked_client.status IN (
+                        'Assigned', 'AwaitingConfirmation', 'Scheduled',
+                        'OptionSelected', 'RegistrationPending', 'BookingConfirmed'
+                      )
+                  )
+                )
+              )`,
+            )).returning({ id: timeSlots.id });
+          if (claimed.length !== 1) throw new Error("SELECTED_SLOT_UNAVAILABLE");
+
+          // This condition means a competing request rolls the slot claim back.
+          const movedClient = await tx.update(clients).set({
+            status: nextStatus,
+            assignedClinicianId: selectedOption.clinicianId,
+            assignedSlotId: selectedOption.slotId,
+            registrationToken,
+            registrationTokenExpiresAt: registrationEnabled ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) : null,
+            registrationTokenRevokedAt: null,
+            updatedAt: new Date(),
+          }).where(and(eq(clients.id, optionRow.clientId), eq(clients.status, "OptionsSent")))
+            .returning({ id: clients.id });
+          if (movedClient.length !== 1) throw new Error("SELECTION_ALREADY_SUBMITTED");
+
+          await tx.update(clientClinicianOptions).set({ status: "selected" })
+            .where(eq(clientClinicianOptions.id, clinicianOptionId));
+          await tx.update(clientClinicianOptions).set({ status: "declined" })
+            .where(and(eq(clientClinicianOptions.clientId, optionRow.clientId), eq(clientClinicianOptions.status, "pending")));
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "";
+        if (message === "SELECTED_SLOT_UNAVAILABLE") {
+          return res.status(409).json({ error: "This appointment is no longer available. Please contact the practice for another option." });
         }
-        await tx.update(clients).set({
-          status: "OptionSelected",
-          assignedClinicianId: selectedOption.clinicianId,
-          assignedSlotId: selectedOption.slotId || null,
-          registrationToken,
-          updatedAt: new Date(),
-        }).where(eq(clients.id, optionRow.clientId));
-      });
+        if (message === "SELECTION_ALREADY_SUBMITTED") {
+          return res.status(409).json({ error: "Selection has already been submitted" });
+        }
+        throw err;
+      }
 
-      await recordActivity(req, "activity_appointment_option_selected", "client", client.id, {
+      await recordActivity(req, registrationEnabled ? "activity_appointment_option_selected" : "activity_booking_confirmed", "client", client.id, {
         actorName: "Client",
         clientDisplayId: client.displayId || "Client",
       }, client.tenantId);
-      res.json({
-        selected: true,
-        registrationUrl: `/register/${optionRow.clientId}/${registrationToken}`,
-      });
+      // Feature-off follows the ordinary confirmation route rather than exposing a
+      // registration link. The successful state transition above is the once-only claim.
+      if (!registrationEnabled && tenant.bookingConfirmedEmailEnabled && client.email) {
+        try {
+          const [confirmedClinician] = await db.select().from(clinicians).where(eq(clinicians.id, selectedOption.clinicianId)).limit(1);
+          const clinicianUser = confirmedClinician?.userId
+            ? await db.select({ name: users.name }).from(users).where(eq(users.id, confirmedClinician.userId)).limit(1).then(rows => rows[0])
+            : undefined;
+          const [slot] = await db.select().from(timeSlots).where(eq(timeSlots.id, selectedOption.slotId!)).limit(1);
+          const context = { id: tenant.id, name: tenant.name, fromEmail: tenant.fromEmail, primaryColor: tenant.primaryColor };
+          const email = await generateBookingConfirmedEmail({
+            clinicianName: clinicianUser?.name || "Your Clinician",
+            type: slot?.type || null, day: slot?.day || null, date: slot?.date || null,
+            startTime: slot?.startTime || "", endTime: slot?.endTime || "", zoomLink: confirmedClinician?.zoomLink || null,
+          }, context);
+          const delivery = await sendEmail({ ...email, to: client.email });
+          if (delivery.success) {
+            await db.update(clients).set({ bookingConfirmationSentAt: new Date() })
+              .where(and(eq(clients.id, client.id), isNull(clients.bookingConfirmationSentAt)));
+          }
+        } catch (error) {
+          console.error("Failed to send booking confirmed email after option selection:", error);
+        }
+      }
+      res.json(registrationEnabled
+        ? { selected: true, registrationUrl: `/register/${optionRow.clientId}/${registrationToken}` }
+        : { selected: true, bookingConfirmed: true });
     } catch (error) {
       console.error("Failed to process option selection:", error);
       res.status(500).json({ error: "Failed to process selection" });
@@ -1888,16 +2159,22 @@ export async function registerRoutes(
     try {
       const client = await storage.getClientById(req.params.clientId);
       if (!client) return res.status(404).json({ error: "Client not found" });
-      if (client.registrationToken !== req.params.registrationToken) return res.status(403).json({ error: "Invalid token" });
-
       const tenant = client.tenantId ? await storage.getTenantById(client.tenantId).catch(() => undefined) : undefined;
-      const tcTemplate = tenant ? await storage.getEmailTemplateByKey("terms_and_conditions", tenant.id) : null;
-      const termsText = tcTemplate?.bodyText || "By proceeding you agree to our standard terms and conditions for therapy services. Sessions must be cancelled with at least 24 hours notice. Payment is due at the time of session booking.";
+      if (!tenant?.registrationFormEnabled) return res.status(404).json({ error: "Registration is not available for this practice" });
+      const completedRetry = isCompletedRegistrationRetry(client, req.params.registrationToken, client.status);
+      if (!completedRetry && !isActiveRegistrationToken(client, req.params.registrationToken)) {
+        return res.status(403).json({ error: "Invalid or expired token" });
+      }
+      if (!["OptionSelected", "RegistrationPending", "BookingConfirmed"].includes(client.status)) {
+        return res.status(404).json({ error: "This registration link is not active" });
+      }
+      const termsText = tenant.registrationTermsContent;
 
       res.json({
         tenantName: tenant?.name || "",
         primaryColor: tenant?.primaryColor || null,
         termsText,
+        termsVersion: tenant.registrationTermsVersion,
         agreedRatePence: client.agreedRatePence,
         paymentsEnabled: tenant?.paymentsEnabled ?? true,
         // Only treat as fully submitted once payment is confirmed — RegistrationPending
@@ -1905,7 +2182,7 @@ export async function registerRoutes(
         alreadySubmitted: client.status === "BookingConfirmed",
         // Pre-fill form data if already saved (e.g. returning after Stripe cancel)
         savedPaymentType: client.paymentType || null,
-        savedInsurerDetails: client.insurerDetails || null,
+        savedInsurerDetails: client.status === "BookingConfirmed" ? null : (client.insurerDetails || null),
       });
     } catch (error) {
       console.error("Failed to fetch registration data:", error);
@@ -1916,7 +2193,7 @@ export async function registerRoutes(
   // POST /api/public/register/:clientId/:registrationToken — submit registration form
   app.post("/api/public/register/:clientId/:registrationToken", async (req, res) => {
     try {
-      const { paymentType, insurerDetails } = req.body;
+      const { paymentType, insurerDetails, termsAccepted, termsVersion } = req.body;
 
       // Validate paymentType against allowlist
       const ALLOWED_PAYMENT_TYPES = ["self_pay", "insurer"] as const;
@@ -1928,57 +2205,143 @@ export async function registerRoutes(
 
       const client = await storage.getClientById(req.params.clientId);
       if (!client) return res.status(404).json({ error: "Client not found" });
-      if (client.registrationToken !== req.params.registrationToken) return res.status(403).json({ error: "Invalid token" });
+      const tenant = client.tenantId ? await storage.getTenantById(client.tenantId).catch(() => undefined) : undefined;
+      if (!tenant?.registrationFormEnabled) return res.status(404).json({ error: "Registration is not available for this practice" });
+      if (isCompletedRegistrationRetry(client, req.params.registrationToken, client.status)) {
+        return res.json({ success: true, alreadyCompleted: true });
+      }
+      if (!isActiveRegistrationToken(client, req.params.registrationToken)) return res.status(403).json({ error: "Invalid or expired token" });
+      // A completed request is idempotent and never exposes previously-entered
+      // insurer information. A pending Stripe request returns its existing link.
+      const retryOutcome = registrationRetryResponse(client.status, client.stripeCheckoutUrl);
+      if (retryOutcome === "completed") {
+        return res.json({ success: true, alreadyCompleted: true });
+      }
+      if (retryOutcome === "checkout") {
+        return res.json({ checkoutUrl: client.stripeCheckoutUrl, idempotent: true });
+      }
+      let effectivePaymentType: AllowedPaymentType = validatedPaymentType;
+      let paymentAttemptKey: string | null = null;
+      const pendingCompletionBranch = retryOutcome === "processing" && client.paymentType
+        ? registrationCompletionBranch({
+          paymentType: client.paymentType,
+          paymentsEnabled: tenant.paymentsEnabled === true,
+          agreedRatePence: client.agreedRatePence,
+        })
+        : null;
+      const recoveringPaymentSetup = pendingCompletionBranch === "stripe"
+        && !!client.registrationPaymentAttemptKey;
+      const recoveringDirectConfirmation = pendingCompletionBranch === "confirm"
+        && !!client.registrationPaymentAttemptKey;
 
-      // State gate: allow submission from OptionSelected (first attempt) and RegistrationPending
-      // (returning after a Stripe cancel). Block once payment is confirmed (BookingConfirmed).
-      const allowedRegistrationStatuses = ["OptionSelected", "RegistrationPending"];
-      if (!allowedRegistrationStatuses.includes(client.status)) {
-        return res.status(409).json({ error: "Registration has already been completed" });
+      if (recoveringPaymentSetup || recoveringDirectConfirmation) {
+        effectivePaymentType = client.paymentType!;
+        paymentAttemptKey = client.registrationPaymentAttemptKey;
+      } else {
+        if (retryOutcome === "processing") {
+          return res.status(409).json({ error: "Registration is already being processed. Please retry shortly." });
+        }
+        if (client.status !== "OptionSelected") {
+          return res.status(409).json({ error: "Registration has already been completed" });
+        }
+        const consentError = validateRegistrationConsent(termsAccepted, termsVersion, tenant.registrationTermsVersion);
+        if (consentError) return res.status(termsAccepted === true ? 409 : 400).json({ error: consentError });
+
+        const requiresStripe = registrationCompletionBranch({
+          paymentType: validatedPaymentType,
+          paymentsEnabled: tenant.paymentsEnabled === true,
+          agreedRatePence: client.agreedRatePence,
+        }) === "stripe";
+        if (requiresStripe && !process.env.APP_BASE_URL) {
+          return res.status(503).json({ error: "Payment setup is unavailable. Please contact the practice." });
+        }
+        // All completion branches get a durable attempt key. It fences direct
+        // confirmation side effects and drives Stripe idempotency when required.
+        paymentAttemptKey = crypto.randomUUID();
+
+        // Compare-and-swap is the workflow lock: only its winner may create payment,
+        // record activity, or transition confirmation.
+        const claimed = await db.update(clients).set({
+          paymentType: validatedPaymentType,
+          insurerDetails: validatedPaymentType === "insurer" ? (insurerDetails || null) : null,
+          status: "RegistrationPending",
+          registrationPaymentAttemptKey: paymentAttemptKey,
+          termsAcceptedAt: new Date(),
+          termsAcceptedVersion: tenant.registrationTermsVersion,
+          termsAcceptedContent: tenant.registrationTermsContent,
+          updatedAt: new Date(),
+        }).where(and(
+          eq(clients.id, client.id),
+          eq(clients.status, "OptionSelected"),
+          eq(clients.registrationToken, req.params.registrationToken),
+        )).returning({ id: clients.id });
+        if (!claimed.length) {
+          const current = await storage.getClientById(client.id);
+          if (current?.status === "BookingConfirmed") return res.json({ success: true, alreadyCompleted: true });
+          if (current?.stripeCheckoutUrl) return res.json({ checkoutUrl: current.stripeCheckoutUrl, idempotent: true });
+          return res.status(409).json({ error: "Registration is already being processed. Please retry shortly." });
+        }
       }
 
-      await storage.updateClient(req.params.clientId, {
-        paymentType: validatedPaymentType,
-        insurerDetails: validatedPaymentType === "insurer" ? (insurerDetails || null) : null,
-        status: "RegistrationPending",
-      });
-
-      const tenant = client.tenantId ? await storage.getTenantById(client.tenantId).catch(() => undefined) : undefined;
-
       // Create Stripe checkout session when payments are enabled, rate is set, and client is self-pay
-      if (validatedPaymentType === "self_pay" && tenant?.paymentsEnabled && client.agreedRatePence && client.agreedRatePence > 0) {
+      if (registrationCompletionBranch({
+        paymentType: effectivePaymentType,
+        paymentsEnabled: tenant.paymentsEnabled === true,
+        agreedRatePence: client.agreedRatePence,
+      }) === "stripe") {
+        if (!paymentAttemptKey) {
+          return res.status(409).json({ error: "Payment setup cannot be recovered. Please contact the practice." });
+        }
         let tenantStripeKey: string | null = null;
         if (tenant.stripeSecretKey) {
           try { tenantStripeKey = decryptSecret(tenant.stripeSecretKey); } catch { /* key decryption failed — Stripe will reject below */ }
         }
 
-        const protocol = (req.headers["x-forwarded-proto"] as string) || "https";
-        const host = (req.headers.host as string) || "localhost:5000";
-        const baseUrl = `${protocol}://${host}`;
+        const baseUrl = process.env.APP_BASE_URL?.replace(/\/$/, "");
+        if (!baseUrl) {
+          return res.status(503).json({ error: "Payment setup is unavailable. Please contact the practice." });
+        }
 
         let session: { url: string; paymentLinkId: string } | null = null;
         try {
           session = await createPaymentLink({
             clientId: client.id,
             clientDisplayId: client.displayId,
-            amountPence: client.agreedRatePence,
+            amountPence: client.agreedRatePence!,
             successUrl: `${baseUrl}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
             tenantId: client.tenantId,
             tenantStripeKey,
             practiceName: tenant?.name || null,
             previousPaymentLinkId: client.stripePaymentLinkId,
+            idempotencyKey: `registration-payment-${client.id}-${paymentAttemptKey}`,
           });
         } catch (stripeErr) {
           console.error("Stripe payment link creation failed:", stripeErr);
         }
 
         if (!session) {
-          // Revert status so the client can retry
-          await storage.updateClient(req.params.clientId, { status: "OptionSelected" });
+          // Keep the durable attempt key so an ambiguous provider failure can be
+          // retried safely with the same Stripe idempotency keys.
           return res.status(502).json({ error: "Payment setup is unavailable. Please try again or contact the practice." });
         }
 
-        await storage.updateClient(client.id, { stripeCheckoutUrl: session.url, stripePaymentLinkId: session.paymentLinkId });
+        const savedLink = await db.update(clients).set({
+          stripeCheckoutUrl: session.url,
+          stripePaymentLinkId: session.paymentLinkId,
+          updatedAt: new Date(),
+        }).where(and(
+          eq(clients.id, client.id),
+          eq(clients.status, "RegistrationPending"),
+          eq(clients.registrationPaymentAttemptKey, paymentAttemptKey),
+          isNull(clients.stripeCheckoutUrl),
+        )).returning({ id: clients.id });
+        if (!savedLink.length) {
+          const current = await storage.getClientById(client.id);
+          if (current?.stripeCheckoutUrl) {
+            return res.json({ checkoutUrl: current.stripeCheckoutUrl, idempotent: true });
+          }
+          return res.status(409).json({ error: "Payment setup changed while processing. Please retry." });
+        }
         await recordActivity(req, "activity_registration_submitted", "client", client.id, {
           actorName: "Client",
           clientDisplayId: client.displayId || "Client",
@@ -1986,14 +2349,13 @@ export async function registerRoutes(
         return res.json({ checkoutUrl: session.url });
       }
 
-      // Insurer or payments not enabled — advance directly to BookingConfirmed
-      await storage.updateClient(req.params.clientId, { status: "BookingConfirmed" });
-      await recordActivity(req, "activity_booking_confirmed", "client", client.id, {
-        actorName: "Client",
-        clientDisplayId: client.displayId || "Client",
-      }, client.tenantId);
+      if (!paymentAttemptKey) {
+        return res.status(409).json({ error: "Registration completion cannot be recovered. Please contact the practice." });
+      }
 
-      // Send booking confirmed email if the tenant flag is on
+      // Deliver before finalizing. Retries reuse the provider key, so a crash after
+      // provider acceptance but before the status CAS cannot duplicate the email.
+      let bookingEmailDelivered = false;
       if (tenant?.bookingConfirmedEmailEnabled && client.email) {
         try {
           const confirmedClinician = client.assignedClinicianId
@@ -2015,12 +2377,44 @@ export async function registerRoutes(
             endTime: slotRow?.endTime || '',
             zoomLink: confirmedClinician?.zoomLink || null,
           }, tcBook);
-          await sendEmail({ ...bookEmail, to: client.email });
-          console.log(`Booking confirmed email sent to client ${req.params.clientId} (non-Stripe registration)`);
+          const delivery = await sendEmail({
+            ...bookEmail,
+            to: client.email,
+            idempotencyKey: `registration-confirmation-${client.id}-${paymentAttemptKey}`,
+          });
+          if (!delivery.success) {
+            return res.status(502).json({ error: "Booking confirmation could not be delivered. Please retry." });
+          }
+          bookingEmailDelivered = true;
         } catch (bookEmailErr) {
           console.error('Failed to send booking confirmed email (non-Stripe registration):', bookEmailErr);
+          return res.status(502).json({ error: "Booking confirmation could not be delivered. Please retry." });
         }
       }
+
+      // Insurer or payments not enabled — finalize exactly once. A retry of a
+      // pending direct branch reaches this same CAS with the persisted attempt key.
+      const confirmed = await db.update(clients).set({
+        status: "BookingConfirmed",
+        registrationTokenRevokedAt: new Date(),
+        bookingConfirmationSentAt: bookingEmailDelivered ? new Date() : client.bookingConfirmationSentAt,
+        updatedAt: new Date(),
+      }).where(and(
+        eq(clients.id, client.id),
+        eq(clients.status, "RegistrationPending"),
+        eq(clients.registrationPaymentAttemptKey, paymentAttemptKey),
+      )).returning({ id: clients.id });
+      if (!confirmed.length) {
+        const current = await storage.getClientById(client.id);
+        if (current?.status === "BookingConfirmed") {
+          return res.json({ success: true, alreadyCompleted: true });
+        }
+        return res.status(409).json({ error: "Registration completion changed while processing. Please retry." });
+      }
+      await recordActivity(req, "activity_booking_confirmed", "client", client.id, {
+        actorName: "Client",
+        clientDisplayId: client.displayId || "Client",
+      }, client.tenantId);
 
       res.json({ success: true });
     } catch (error) {
@@ -3020,6 +3414,31 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/tenant/registration-terms", requireAdmin, async (req, res) => {
+    if (!req.tenant) return res.status(404).json({ error: "Tenant not found" });
+    res.json({
+      content: req.tenant.registrationTermsContent,
+      version: req.tenant.registrationTermsVersion,
+      updatedAt: req.tenant.registrationTermsUpdatedAt,
+    });
+  });
+
+  app.patch("/api/tenant/registration-terms", requireAdmin, async (req, res) => {
+    const parsed = z.object({ content: z.string().trim().min(1).max(50000) }).safeParse(req.body);
+    if (!parsed.success || !req.tenant) return res.status(400).json({ error: "Terms content is required" });
+    const [updated] = await db.update(tenants).set({
+      registrationTermsContent: parsed.data.content,
+      // Do this in SQL against the current row, not the tenant object loaded at
+      // authentication time, so concurrent settings saves cannot lose a version.
+      registrationTermsVersion: drizzleSql`case when ${tenants.registrationTermsContent} is distinct from ${parsed.data.content} then ${tenants.registrationTermsVersion} + 1 else ${tenants.registrationTermsVersion} end`,
+      registrationTermsUpdatedAt: drizzleSql`case when ${tenants.registrationTermsContent} is distinct from ${parsed.data.content} then now() else ${tenants.registrationTermsUpdatedAt} end`,
+    }).where(eq(tenants.id, req.tenant.id)).returning();
+    await recordActivity(req, "activity_registration_terms_updated", "tenant", req.tenant.id, {
+      version: updated.registrationTermsVersion,
+    });
+    res.json({ content: updated.registrationTermsContent, version: updated.registrationTermsVersion, updatedAt: updated.registrationTermsUpdatedAt });
+  });
+
   // Public endpoint — returns only branding fields, no auth required.
   // Pass ?clientId=<id> to resolve the tenant from a specific client record.
   app.get("/api/tenant/branding", async (req, res) => {
@@ -3744,18 +4163,19 @@ export async function registerRoutes(
           }
         }
 
-        if (!existingCharge) {
-          // Validate tenant ownership before any mutation
-          const clientForUpdate = await storage.getClientById(clientId);
-          if (!clientForUpdate) return res.json({ received: true });
-          if (clientForUpdate.tenantId !== metaTenantId) {
-            console.error(`Webhook: tenant mismatch for client ${clientId}`);
-            return res.json({ received: true });
-          }
+        // Validate tenant ownership before any mutation. This runs on every
+        // delivery: an existing ledger row suppresses only duplicate ledger
+        // creation, never client finalization recovery.
+        const clientForUpdate = await storage.getClientById(clientId);
+        if (!clientForUpdate) return res.json({ received: true });
+        if (clientForUpdate.tenantId !== metaTenantId) {
+          console.error(`Webhook: tenant mismatch for client ${clientId}`);
+          return res.json({ received: true });
+        }
 
-          const client = clientForUpdate;
-          const paymentIntentId = session.payment_intent;
-          const stripeInstance = getStripeInstance(tenantStripeKey);
+        const client = clientForUpdate;
+        const paymentIntentId = session.payment_intent;
+        const stripeInstance = getStripeInstance(tenantStripeKey);
 
           // Persist paymentStatus = active; opportunistically save payment method if retrievable
           const clientUpdate: Record<string, unknown> = { paymentStatus: "active", updatedAt: new Date() };
@@ -3791,29 +4211,28 @@ export async function registerRoutes(
           }
           await db.update(clients).set(clientUpdate as any).where(eq(clients.id, clientId));
 
-          // Record the initial charge (idempotent — existingCharge was null above)
-          if (paymentIntentId) {
-            await storage.createPaymentCharge({
-              clientId,
-              amountPence: session.amount_total,
-              stripePaymentIntentId: paymentIntentId,
-              status: "succeeded",
-              notes: "Initial session payment via Checkout",
-              tenantId: client.tenantId,
-            });
-          }
+        // The ledger row alone is idempotent; all finalization below must still
+        // run on webhook retries after a crash between these steps.
+        if (!existingCharge && paymentIntentId) {
+          await storage.createPaymentCharge({
+            clientId,
+            amountPence: session.amount_total,
+            stripePaymentIntentId: paymentIntentId,
+            status: "succeeded",
+            notes: "Initial session payment via Checkout",
+            tenantId: client.tenantId,
+          });
+        }
 
-          // CY&A: advance to BookingConfirmed when client came through the CY&A registration flow
-          const paymentTenant = client.tenantId ? await storage.getTenantById(client.tenantId).catch(() => undefined) : undefined;
-          if (client.status === "RegistrationPending") {
-            await db.update(clients).set({
-              status: "BookingConfirmed",
-              updatedAt: new Date(),
-            }).where(eq(clients.id, clientId));
+        // CY&A: advance to BookingConfirmed when client came through the CY&A registration flow
+        const paymentTenant = client.tenantId ? await storage.getTenantById(client.tenantId).catch(() => undefined) : undefined;
+        if (client.status === "RegistrationPending") {
+          let bookingEmailDelivered = false;
 
-            // Send booking confirmed email if the tenant flag is on
-            if (paymentTenant?.bookingConfirmedEmailEnabled && client.email) {
-              try {
+          // Deliver before the status CAS. Stripe retries reuse this provider key,
+          // so a crash after acceptance cannot duplicate the confirmation email.
+          if (paymentTenant?.bookingConfirmedEmailEnabled && client.email) {
+            try {
                 const confirmedClinician = client.assignedClinicianId
                   ? await db.select().from(clinicians).where(eq(clinicians.id, client.assignedClinicianId)).limit(1).then(r => r[0])
                   : undefined;
@@ -3833,12 +4252,32 @@ export async function registerRoutes(
                   endTime: slotRow?.endTime || '',
                   zoomLink: confirmedClinician?.zoomLink || null,
                 }, tcBook);
-                await sendEmail({ ...bookEmail, to: client.email });
-                console.log(`Booking confirmed email sent to client ${clientId}`);
-              } catch (bookEmailErr) {
-                console.error('Failed to send booking confirmed email (Stripe webhook):', bookEmailErr);
+              const delivery = await sendEmail({
+                ...bookEmail,
+                to: client.email,
+                idempotencyKey: `stripe-booking-confirmation-${client.id}-${paymentIntentId || session.id}`,
+              });
+              if (!delivery.success) {
+                throw new Error(`Booking confirmation delivery ${delivery.outcome}`);
               }
+              bookingEmailDelivered = true;
+            } catch (bookEmailErr) {
+              console.error('Failed to send booking confirmed email (Stripe webhook):', bookEmailErr);
+              throw bookEmailErr;
             }
+          }
+
+          const confirmed = await db.update(clients).set({
+            status: "BookingConfirmed",
+            registrationTokenRevokedAt: new Date(),
+            bookingConfirmationSentAt: bookingEmailDelivered ? new Date() : client.bookingConfirmationSentAt,
+            updatedAt: new Date(),
+          }).where(and(eq(clients.id, clientId), eq(clients.status, "RegistrationPending"))).returning({ id: clients.id });
+          if (confirmed.length) {
+            await recordActivity(req, "activity_booking_confirmed", "client", client.id, {
+              actorName: "Client",
+              clientDisplayId: client.displayId || "Client",
+            }, client.tenantId);
           }
         }
       }

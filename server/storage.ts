@@ -1145,8 +1145,18 @@ export class DatabaseStorage implements IStorage {
 
   // ============ PAYMENT CHARGES ============
   async createPaymentCharge(charge: InsertPaymentCharge): Promise<PaymentCharge> {
-    const [result] = await db.insert(paymentCharges).values(charge).returning();
-    return result;
+    const [result] = await db.insert(paymentCharges).values(charge)
+      // The database index is partial (only non-null intent IDs); no explicit
+      // conflict target lets PostgreSQL safely handle that index as well.
+      .onConflictDoNothing()
+      .returning();
+    if (result) return result;
+    if (charge.stripePaymentIntentId) {
+      const [existing] = await db.select().from(paymentCharges)
+        .where(eq(paymentCharges.stripePaymentIntentId, charge.stripePaymentIntentId)).limit(1);
+      if (existing) return existing;
+    }
+    throw new Error("Payment charge could not be created");
   }
 
   async getPaymentChargesByClientId(clientId: string): Promise<PaymentCharge[]> {

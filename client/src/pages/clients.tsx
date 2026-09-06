@@ -143,6 +143,8 @@ export default function Clients() {
     staleTime: 60_000,
   });
   const formsEnabled = tenant?.formsEnabled !== false;
+  const registrationTemplateId = tenant?.registrationFormId;
+  const registrationReady = !!registrationTemplateId;
   const nonEngagementEnabled = tenant?.nonEngagementEnabled !== false;
   // CY&A feature flags (all default false — existing tenants unaffected)
   const contactPreferenceEnabled = tenant?.contactPreferenceEnabled === true;
@@ -333,6 +335,9 @@ export default function Clients() {
 
   const sendRegistrationMutation = useMutation({
     mutationFn: async (clientId: string) => {
+      if (!registrationReady) {
+        throw new Error("Registration is not ready. Select a registration form in Settings before sending links.");
+      }
       const attemptKey = registrationAttemptKeysRef.current.get(clientId) || crypto.randomUUID();
       registrationAttemptKeysRef.current.set(clientId, attemptKey);
       const response = await apiRequest("POST", `/api/clients/${clientId}/send-registration`, {
@@ -363,6 +368,7 @@ export default function Clients() {
   const canSendRegistration = (client: ClientType) =>
     isAdmin &&
     tenant?.registrationFormEnabled === true &&
+    registrationReady &&
     !!client.assignedClinicianId &&
     !!client.assignedSlotId &&
     (["Assigned", "AwaitingConfirmation", "OptionSelected"] as string[]).includes(client.status);
@@ -1060,7 +1066,7 @@ export default function Clients() {
             updates,
           }, { onSuccess: () => resolve(), onError: (e) => reject(e) });
       });
-      if (stripeEnabled && editClientData.agreedRatePence !== (editingClient.agreedRatePence ?? null)) {
+      if (editClientData.agreedRatePence !== (editingClient.agreedRatePence ?? null)) {
         await apiRequest("PATCH", `/api/clients/${editingClient.id}/agreed-rate`, {
           agreedRatePence: editClientData.agreedRatePence ?? 0
         });
@@ -1376,6 +1382,9 @@ export default function Clients() {
         <div>
           <h2 className="text-3xl font-serif font-bold text-foreground">Client Allocation</h2>
           <p className="text-muted-foreground mt-1">Anonymized client management.</p>
+          {isAdmin && tenant?.registrationFormEnabled === true && !registrationReady && (
+            <p className="mt-2 text-sm text-destructive">Registration is not ready: select a registration form in Settings before links can be sent.</p>
+          )}
         </div>
         
         <Dialog open={isNewClientOpen} onOpenChange={handleNewClientOpenChange}>
@@ -2865,7 +2874,7 @@ export default function Clients() {
               />
             </div>
 
-            {stripeEnabled && (
+            {(
               <div className="grid gap-2">
                 <Label>Session Rate (£)</Label>
                 <div className="relative">
@@ -2888,7 +2897,7 @@ export default function Clients() {
                     data-testid="input-edit-client-rate"
                   />
                 </div>
-                <p className="text-[10px] text-muted-foreground">Used for Stripe payment collection.</p>
+                <p className="text-[10px] text-muted-foreground">This agreed rate is shown during registration and used for online payment when Stripe is enabled.</p>
               </div>
             )}
 

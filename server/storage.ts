@@ -88,7 +88,7 @@ export interface IStorage {
   deleteFormTemplate(id: string): Promise<void>;
   
   // ============ FORM SUBMISSIONS ============
-  getAllCompletedFormSubmissions(tenantId?: string | null): Promise<{ submission: FormSubmission; clientName: string; clientDisplayId: string; formTitle: string; formFields: any[] }[]>;
+  getAllCompletedFormSubmissions(tenantId?: string | null): Promise<{ submission: FormSubmission; clientName: string; clientDisplayId: string; formTitle: string; formDescription: string; formFields: any[] }[]>;
   getFormSubmissionsByClientId(clientId: string): Promise<FormSubmission[]>;
   createFormSubmission(submission: InsertFormSubmission, tenantId?: string | null): Promise<FormSubmission>;
   getDraftSubmission(clientId: string, formTemplateId: string): Promise<FormSubmission | undefined>;
@@ -793,7 +793,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ============ FORM SUBMISSIONS ============
-  async getAllCompletedFormSubmissions(tenantId?: string | null): Promise<{ submission: FormSubmission; clientName: string; clientDisplayId: string; formTitle: string; formFields: any[] }[]> {
+  async getAllCompletedFormSubmissions(tenantId?: string | null): Promise<{ submission: FormSubmission; clientName: string; clientDisplayId: string; formTitle: string; formDescription: string; formFields: any[] }[]> {
     const submissions = await db
       .select()
       .from(formSubmissions)
@@ -805,7 +805,7 @@ export class DatabaseStorage implements IStorage {
     if (submissions.length === 0) return [];
 
     const clientIds = [...new Set(submissions.map(s => s.clientId))];
-    const templateIds = [...new Set(submissions.map(s => s.formTemplateId))];
+    const templateIds = [...new Set(submissions.map(s => s.formTemplateId).filter((id): id is string => !!id))];
 
     const [clientRows, templateRows] = await Promise.all([
       db.select().from(clients).where(inArray(clients.id, clientIds)),
@@ -822,8 +822,13 @@ export class DatabaseStorage implements IStorage {
         submission,
         clientName: client?.name ?? "",
         clientDisplayId: client?.displayId ?? "",
-        formTitle: template?.title ?? "",
-        formFields: Array.isArray(template?.fields) ? template.fields as any[] : [],
+        // Registration responses must retain their original questions even
+        // when the configurable template is subsequently edited or deleted.
+        formTitle: submission.registrationTemplateTitle ?? template?.title ?? "",
+        formDescription: submission.registrationTemplateDescription ?? template?.description ?? "",
+        formFields: Array.isArray(submission.registrationTemplateFields)
+          ? submission.registrationTemplateFields as any[]
+          : Array.isArray(template?.fields) ? template.fields as any[] : [],
       };
     });
   }

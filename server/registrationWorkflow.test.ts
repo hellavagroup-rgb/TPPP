@@ -6,6 +6,8 @@ import {
   nextTermsVersion,
   optionSelectionProgression,
   registrationCompletionBranch,
+  registrationPaymentPrerequisite,
+  isCorrelatedRegistrationCheckout,
   registrationRetryResponse,
   validateRegistrationConsent,
 } from "./registrationWorkflow";
@@ -65,8 +67,39 @@ describe("registration security decisions", () => {
     expect(registrationCompletionBranch({ paymentType: "self_pay", paymentsEnabled: true, agreedRatePence: null })).toBe("confirm");
   });
 
+  it("does not silently bypass self-pay prerequisites", () => {
+    expect(registrationPaymentPrerequisite({
+      paymentType: "self_pay", paymentsEnabled: true, agreedRatePence: null, stripeAvailable: true,
+    })).toBe("client_rate_required");
+    expect(registrationPaymentPrerequisite({
+      paymentType: "self_pay", paymentsEnabled: true, agreedRatePence: 12000, stripeAvailable: false,
+    })).toBe("stripe_unavailable");
+    expect(registrationPaymentPrerequisite({
+      paymentType: "self_pay", paymentsEnabled: true, agreedRatePence: 12000, stripeAvailable: true,
+    })).toBe("stripe_required");
+    expect(registrationPaymentPrerequisite({
+      paymentType: "insurer", paymentsEnabled: true, agreedRatePence: null, stripeAvailable: false,
+    })).toBe("confirm_after_form");
+    expect(registrationPaymentPrerequisite({
+      paymentType: "self_pay", paymentsEnabled: false, agreedRatePence: null, stripeAvailable: false,
+    })).toBe("confirm_after_form");
+  });
+
   it("versions editable terms only when content changes", () => {
     expect(nextTermsVersion(false, 4)).toBe(4);
     expect(nextTermsVersion(true, 4)).toBe(5);
+  });
+
+  it("accepts only an exact paid registration checkout correlation", () => {
+    const exact = {
+      paymentStatus: "paid", metadataTenantId: "tenant-a", metadataClientId: "client-a",
+      metadataAttemptKey: "attempt-a", paymentLinkId: "plink-a", clientTenantId: "tenant-a",
+      clientId: "client-a", currentAttemptKey: "attempt-a", currentPaymentLinkId: "plink-a",
+    };
+    expect(isCorrelatedRegistrationCheckout(exact)).toBe(true);
+    expect(isCorrelatedRegistrationCheckout({ ...exact, paymentStatus: "unpaid" })).toBe(false);
+    expect(isCorrelatedRegistrationCheckout({ ...exact, paymentLinkId: "stale-link" })).toBe(false);
+    expect(isCorrelatedRegistrationCheckout({ ...exact, metadataAttemptKey: "stale-attempt" })).toBe(false);
+    expect(isCorrelatedRegistrationCheckout({ ...exact, metadataTenantId: "tenant-b" })).toBe(false);
   });
 });

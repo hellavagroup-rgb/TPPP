@@ -33,6 +33,7 @@ export async function createPaymentLink(opts: {
   idempotencyKey?: string;
   // If the client already has an active link, pass its ID so it is deactivated first
   previousPaymentLinkId?: string | null;
+  registrationAttemptKey?: string | null;
 }): Promise<{ url: string; paymentLinkId: string } | null> {
   const stripe = getStripeInstance(opts.tenantStripeKey);
   if (!stripe) return null;
@@ -88,6 +89,7 @@ export async function createPaymentLink(opts: {
     clientId: opts.clientId,
     displayId: opts.clientDisplayId,
     ...(opts.tenantId ? { tenantId: opts.tenantId } : {}),
+    ...(opts.registrationAttemptKey ? { registrationAttemptKey: opts.registrationAttemptKey } : {}),
   };
 
   const link = await stripe.paymentLinks.create(

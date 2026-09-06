@@ -13,6 +13,8 @@ const h = vi.hoisted(() => {
     activities: [] as any[],
     emails: [] as any[],
     paymentLinks: [] as any[],
+    registrationTemplate: null as any,
+    submissions: [] as any[],
     slotClaimFails: false,
     emailResult: { success: true, outcome: "accepted" } as any,
     paymentResult: { url: "https://pay.test/session", paymentLinkId: "plink_1" } as any,
@@ -31,6 +33,11 @@ const h = vi.hoisted(() => {
       case "clinicians": return state.clinician?.id ? [state.clinician] : [];
       case "users": return state.user ? [state.user] : [];
       case "client_clinician_options": return state.options;
+      // The harness has no SQL predicate evaluator; enforce the tenant predicate
+      // for template reads here so cross-practice configuration is testable.
+      case "form_templates": return state.registrationTemplate?.id
+        && state.registrationTemplate.tenantId === state.tenant?.id ? [state.registrationTemplate] : [];
+      case "form_submissions": return state.submissions;
       default: return [];
     }
   };
@@ -52,16 +59,25 @@ const h = vi.hoisted(() => {
       from: (table: any) => chain(() => rowsFor(table)),
     }),
     insert: (table: any) => ({
-      values: async (values: any | any[]) => {
+      values: (values: any | any[]) => {
+        let inserted: any[] = [];
         if (tableName(table) === "client_clinician_options") {
-          const inserted = (Array.isArray(values) ? values : [values]).map((value, index) => ({
+          inserted = (Array.isArray(values) ? values : [values]).map((value, index) => ({
             id: value.id || `inserted-option-${index}`,
             ...value,
           }));
           state.options.push(...inserted);
-          return inserted;
+        } else if (tableName(table) === "form_submissions") {
+          inserted = (Array.isArray(values) ? values : [values]).map((value, index) => ({
+            id: `submission-${state.submissions.length + index + 1}`, ...value,
+          }));
+          state.submissions.push(...inserted);
         }
-        return [];
+        const result: any = {
+          returning: () => Promise.resolve(inserted),
+          then: (resolve: any, reject: any) => Promise.resolve(inserted).then(resolve, reject),
+        };
+        return result;
       },
     }),
     delete: (table: any) => ({
@@ -247,6 +263,8 @@ function resetState(overrides: { client?: any; tenant?: any } = {}) {
   h.state.activities = [];
   h.state.emails = [];
   h.state.paymentLinks = [];
+  h.state.registrationTemplate = null;
+  h.state.submissions = [];
   h.state.slotClaimFails = false;
   h.state.emailResult = { success: true, outcome: "accepted" };
   h.state.paymentResult = { url: "https://pay.test/session", paymentLinkId: "plink_1" };
@@ -271,6 +289,14 @@ afterEach(async () => {
 });
 
 describe("registration journey HTTP routes", () => {
+  function configureRegistrationTemplate(fields: any[] = [{ id: "address", label: "Address", required: true }]) {
+    h.state.tenant.registrationFormTemplateId = "registration-form-a";
+    h.state.registrationTemplate = {
+      id: "registration-form-a", tenantId: "tenant-a", title: "Registration details",
+      description: "Please complete", fields,
+    };
+  }
+
   it("does not claim options were sent when the allocation email is rejected", async () => {
     h.state.options = [];
     h.state.client.status = "FormsCompleted";
@@ -409,15 +435,163 @@ describe("registration journey HTTP routes", () => {
       registrationToken: "registration-token",
       registrationTokenExpiresAt: new Date(Date.now() + 60_000),
     } });
+    configureRegistrationTemplate();
     const response = await request("/api/public/register/client-a/registration-token", {
       method: "POST",
-      body: JSON.stringify({ paymentType: "insurer", termsAccepted: true, termsVersion: 3 }),
+      body: JSON.stringify({ paymentType: "insurer", termsAccepted: true, termsVersion: 3, registrationResponses: { address: "1 High Street" } }),
     });
     expect(response.status).toBe(409);
     expect(response.body.error).toMatch(/changed/i);
     expect(h.state.client.status).toBe("OptionSelected");
     expect(h.state.emails).toHaveLength(0);
     expect(h.state.activities).toHaveLength(0);
+  });
+
+  it("renders only the configured tenant form and validates required fields before claiming", async () => {
+    configureRegistrationTemplate();
+    resetState({ client: {
+      status: "OptionSelected", registrationToken: "registration-token",
+      registrationTokenExpiresAt: new Date(Date.now() + 60_000),
+    } });
+    // resetState intentionally clears durable rows, so configure after it.
+    configureRegistrationTemplate();
+    const rendered = await request("/api/public/register/client-a/registration-token");
+    expect(rendered.status).toBe(200);
+    expect(rendered.body.registrationTemplate).toMatchObject({ id: "registration-form-a", fields: [{ id: "address" }] });
+
+    const missing = await request("/api/public/register/client-a/registration-token", {
+      method: "POST", body: JSON.stringify({ paymentType: "insurer", termsAccepted: true, termsVersion: 4, registrationResponses: {} }),
+    });
+    expect(missing.status).toBe(400);
+    expect(missing.body.error).toMatch(/address.*required/i);
+    expect(h.state.client.status).toBe("OptionSelected");
+    expect(h.state.submissions).toHaveLength(0);
+
+    const payload = JSON.stringify({
+      paymentType: "insurer", insurerDetails: "Policy", termsAccepted: true, termsVersion: 4,
+      registrationResponses: { address: "1 High Street" },
+    });
+    const first = await request("/api/public/register/client-a/registration-token", { method: "POST", body: payload });
+    const retry = await request("/api/public/register/client-a/registration-token", { method: "POST", body: payload });
+    expect(first.status).toBe(200);
+    expect(retry.body).toMatchObject({ success: true, alreadyCompleted: true });
+    expect(h.state.submissions).toHaveLength(1);
+    expect(h.state.client.registrationFormSubmissionId).toBe("submission-1");
+    expect(h.state.submissions[0]).toMatchObject({
+      registrationTemplateTitle: "Registration details",
+      registrationTemplateFields: [{ id: "address", required: true }],
+    });
+  });
+
+  it("does not require a hidden conditional field, but requires it when shown", async () => {
+    resetState({ client: {
+      status: "OptionSelected", registrationToken: "registration-token",
+      registrationTokenExpiresAt: new Date(Date.now() + 60_000),
+    } });
+    configureRegistrationTemplate([
+      { id: "hasPolicy", label: "Has policy", required: true },
+      { id: "policyNumber", label: "Policy number", required: true, showWhen: { field: "hasPolicy", equals: "yes" } },
+    ]);
+    const hidden = await request("/api/public/register/client-a/registration-token", {
+      method: "POST",
+      body: JSON.stringify({ paymentType: "insurer", termsAccepted: true, termsVersion: 4, registrationResponses: { hasPolicy: "no" } }),
+    });
+    expect(hidden.status).toBe(200);
+
+    resetState({ client: {
+      status: "OptionSelected", registrationToken: "registration-token",
+      registrationTokenExpiresAt: new Date(Date.now() + 60_000),
+    } });
+    configureRegistrationTemplate([
+      { id: "hasPolicy", required: true },
+      { id: "policyNumber", label: "Policy number", required: true, showWhen: { field: "hasPolicy", equals: "yes" } },
+    ]);
+    const shown = await request("/api/public/register/client-a/registration-token", {
+      method: "POST",
+      body: JSON.stringify({ paymentType: "insurer", termsAccepted: true, termsVersion: 4, registrationResponses: { hasPolicy: "yes" } }),
+    });
+    expect(shown.status).toBe(400);
+    expect(shown.body.error).toMatch(/policy number.*required/i);
+  });
+
+  it("matches legacy conditional field visibility for required validation", async () => {
+    const fields = [
+      { id: "hasReferral", required: true },
+      { id: "referrer", label: "Referrer", required: true, conditional: { fieldId: "hasReferral", value: "yes" } },
+    ];
+    resetState({ client: {
+      status: "OptionSelected", registrationToken: "registration-token",
+      registrationTokenExpiresAt: new Date(Date.now() + 60_000),
+    } });
+    configureRegistrationTemplate(fields);
+    const hidden = await request("/api/public/register/client-a/registration-token", {
+      method: "POST",
+      body: JSON.stringify({ paymentType: "insurer", termsAccepted: true, termsVersion: 4, registrationResponses: { hasReferral: "no" } }),
+    });
+    expect(hidden.status).toBe(200);
+
+    resetState({ client: {
+      status: "OptionSelected", registrationToken: "registration-token",
+      registrationTokenExpiresAt: new Date(Date.now() + 60_000),
+    } });
+    configureRegistrationTemplate(fields);
+    const shown = await request("/api/public/register/client-a/registration-token", {
+      method: "POST",
+      body: JSON.stringify({ paymentType: "insurer", termsAccepted: true, termsVersion: 4, registrationResponses: { hasReferral: "yes" } }),
+    });
+    expect(shown.status).toBe(400);
+    expect(shown.body.error).toMatch(/referrer.*required/i);
+  });
+
+  it("rejects missing and cross-tenant registration template configuration", async () => {
+    resetState({ client: {
+      status: "OptionSelected", registrationToken: "registration-token",
+      registrationTokenExpiresAt: new Date(Date.now() + 60_000),
+    }, tenant: { registrationFormTemplateId: null } });
+    const missing = await request("/api/public/register/client-a/registration-token");
+    expect(missing.status).toBe(503);
+
+    resetState({ client: {
+      status: "OptionSelected", registrationToken: "registration-token",
+      registrationTokenExpiresAt: new Date(Date.now() + 60_000),
+    }, tenant: { registrationFormTemplateId: "other-form" } });
+    h.state.registrationTemplate = { id: "other-form", tenantId: "tenant-b", title: "Other", description: "", fields: [] };
+    const crossTenant = await request("/api/public/register/client-a/registration-token");
+    expect(crossTenant.status).toBe(503);
+
+    resetState({ tenant: { registrationFormTemplateId: null } });
+    const selection = await request("/api/public/options/selection-token-a/select", {
+      method: "POST", body: JSON.stringify({ clinicianOptionId: "option-a" }),
+    });
+    expect(selection.status).toBe(409);
+    expect(selection.body.error).toMatch(/not configured/i);
+    expect(h.state.client.status).toBe("OptionsSent");
+  });
+
+  it("never confirms enabled self-pay without a rate or Stripe, but confirms disabled payments after the form", async () => {
+    resetState({ client: {
+      status: "OptionSelected", registrationToken: "registration-token",
+      registrationTokenExpiresAt: new Date(Date.now() + 60_000), agreedRatePence: null,
+    }, tenant: { paymentsEnabled: true } });
+    configureRegistrationTemplate([]);
+    const payload = JSON.stringify({ paymentType: "self_pay", termsAccepted: true, termsVersion: 4, registrationResponses: {} });
+    const noRate = await request("/api/public/register/client-a/registration-token", { method: "POST", body: payload });
+    expect(noRate.status).toBe(422);
+    expect(h.state.client.status).toBe("OptionSelected");
+
+    h.state.client.agreedRatePence = 12000;
+    const stripe = await import("./stripe");
+    vi.mocked(stripe.isStripeConfigured).mockReturnValue(false);
+    const noStripe = await request("/api/public/register/client-a/registration-token", { method: "POST", body: payload });
+    expect(noStripe.status).toBe(503);
+    expect(h.state.client.status).toBe("OptionSelected");
+    vi.mocked(stripe.isStripeConfigured).mockReturnValue(true);
+
+    h.state.tenant.paymentsEnabled = false;
+    const disabled = await request("/api/public/register/client-a/registration-token", { method: "POST", body: payload });
+    expect(disabled.status).toBe(200);
+    expect(h.state.client.status).toBe("BookingConfirmed");
+    expect(h.state.submissions).toHaveLength(1);
   });
 
   it("completes non-payment registration once across response-loss retries", async () => {
@@ -452,6 +626,7 @@ describe("registration journey HTTP routes", () => {
     expect(first.body.checkoutUrl).toBe("https://pay.test/session");
     expect(retry.body).toMatchObject({ checkoutUrl: "https://pay.test/session", idempotent: true });
     expect(h.state.paymentLinks).toHaveLength(1);
+    expect(h.state.client.paymentStatus).toBe("setup_pending");
     expect(h.state.activities.filter(a => a.action === "activity_registration_submitted")).toHaveLength(1);
     expect(h.state.emails).toHaveLength(0);
   });

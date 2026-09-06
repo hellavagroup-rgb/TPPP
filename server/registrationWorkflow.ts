@@ -53,6 +53,28 @@ export function validateRegistrationConsent(termsAccepted: unknown, suppliedVers
   return null;
 }
 
+export type RegistrationPaymentPrerequisite =
+  | "stripe_required"
+  | "confirm_after_form"
+  | "client_rate_required"
+  | "stripe_unavailable";
+
+/**
+ * Payment is a prerequisite, not an optional best-effort side effect. In
+ * particular, a self-paying client must never be confirmed merely because the
+ * configured rate or Stripe connection is missing.
+ */
+export function registrationPaymentPrerequisite(input: {
+  paymentType: "self_pay" | "insurer";
+  paymentsEnabled: boolean;
+  agreedRatePence: number | null;
+  stripeAvailable: boolean;
+}): RegistrationPaymentPrerequisite {
+  if (input.paymentType === "insurer" || !input.paymentsEnabled) return "confirm_after_form";
+  if (!input.agreedRatePence || input.agreedRatePence <= 0) return "client_rate_required";
+  return input.stripeAvailable ? "stripe_required" : "stripe_unavailable";
+}
+
 export function registrationCompletionBranch(input: {
   paymentType: "self_pay" | "insurer";
   paymentsEnabled: boolean;
@@ -71,4 +93,25 @@ export function registrationRetryResponse(status: string, checkoutUrl: string | 
   if (status === "BookingConfirmed") return "completed";
   if (status === "RegistrationPending") return checkoutUrl ? "checkout" : "processing";
   return "invalid";
+}
+
+/** Strict gate for registration-only Checkout webhooks. */
+export function isCorrelatedRegistrationCheckout(input: {
+  paymentStatus: string | null | undefined;
+  metadataTenantId: string | null | undefined;
+  metadataClientId: string | null | undefined;
+  metadataAttemptKey: string | null | undefined;
+  paymentLinkId: string | null | undefined;
+  clientTenantId: string | null;
+  clientId: string;
+  currentAttemptKey: string | null;
+  currentPaymentLinkId: string | null;
+}): boolean {
+  return input.paymentStatus === "paid"
+    && input.metadataTenantId === input.clientTenantId
+    && input.metadataClientId === input.clientId
+    && !!input.metadataAttemptKey
+    && input.metadataAttemptKey === input.currentAttemptKey
+    && !!input.paymentLinkId
+    && input.paymentLinkId === input.currentPaymentLinkId;
 }

@@ -22,6 +22,7 @@ import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import type { FormTemplate, Client } from "@shared/schema";
+import { DynamicFormFields, validateDynamicFields } from "@/components/forms/DynamicFormFields";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 const TIME_PERIODS = [
@@ -288,15 +289,8 @@ export default function FormFill() {
     if (!form || !client) return;
 
     const fields = form.fields as any[];
-    const newErrors: Record<string, boolean> = {};
-    let hasError = false;
-
-    fields.forEach((field: any) => {
-        if (isFieldVisible(field) && field.required && !formState[field.id]) {
-            newErrors[field.id] = true;
-            hasError = true;
-        }
-    });
+    const newErrors = validateDynamicFields(fields, formState);
+    const hasError = Object.keys(newErrors).length > 0;
 
     if (hasError) {
         setErrors(newErrors);
@@ -435,7 +429,7 @@ export default function FormFill() {
 
         <Card className="shadow-lg border-0 ring-1 ring-slate-200">
             <CardContent className="p-6 sm:p-10 space-y-8">
-                {fields.map((field: any) => {
+                {false && fields.map((field: any) => {
                     if (!isFieldVisible(field)) return null;
 
                     return (
@@ -573,6 +567,12 @@ export default function FormFill() {
                         </div>
                     );
                 })}
+                <DynamicFormFields
+                  fields={fields}
+                  values={formState}
+                  errors={errors}
+                  onChange={handleValueChange}
+                />
             </CardContent>
             <CardFooter className="p-6 sm:p-10 pt-0 bg-slate-50/50 border-t mt-4 flex flex-col gap-4">
                 {submitError && (

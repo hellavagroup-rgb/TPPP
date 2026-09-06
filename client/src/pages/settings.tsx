@@ -15,6 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { useAuth } from "@/lib/auth";
 import { useLocation } from "wouter";
 import { useManagedInsurers, useAddInsurer, useDeleteInsurer } from "@/hooks/use-insurers";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 interface EmailTemplate {
   id: string;
@@ -495,6 +496,52 @@ interface RegistrationTerms {
   content: string;
   version: number;
   updatedAt: string;
+}
+
+interface RegistrationFormTemplate {
+  id: string;
+  title: string;
+  fields: any[];
+}
+
+function RegistrationTemplateTab({ tenant }: { tenant: any }) {
+  const queryClient = useQueryClient();
+  const selectedId = tenant?.registrationFormId || "";
+  const [formId, setFormId] = useState(selectedId);
+  useEffect(() => setFormId(selectedId), [selectedId]);
+  const { data: forms = [], isLoading } = useQuery<RegistrationFormTemplate[]>({ queryKey: ["/api/forms"] });
+  const save = useMutation({
+    mutationFn: async (registrationFormId: string) => {
+      const res = await apiRequest("PATCH", "/api/tenant/settings", { registrationFormId: registrationFormId || null });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Failed to save registration form");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/tenant"] });
+      toast.success("Registration form saved");
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const selected = forms.find(form => form.id === formId);
+  return <Card className="border-none shadow-sm">
+    <CardHeader><CardTitle>Registration Form</CardTitle><CardDescription>Select the form clients complete before choosing payment and accepting the separately versioned registration terms.</CardDescription></CardHeader>
+    <CardContent className="space-y-4">
+      {isLoading ? <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /> : <>
+        <div className="grid gap-2">
+          <Label htmlFor="registration-template">Form template</Label>
+          <Select value={formId || "__none__"} onValueChange={value => setFormId(value === "__none__" ? "" : value)}>
+            <SelectTrigger id="registration-template"><SelectValue placeholder="Choose a form" /></SelectTrigger>
+            <SelectContent><SelectItem value="__none__">No form selected</SelectItem>{forms.map(form => <SelectItem key={form.id} value={form.id}>{form.title}</SelectItem>)}</SelectContent>
+          </Select>
+        </div>
+        {!selected && <Alert variant="destructive"><AlertCircle className="h-4 w-4" /><AlertDescription>Registration is not ready: select a form template before sending registration links.</AlertDescription></Alert>}
+        {selected && <Alert><CheckCircle2 className="h-4 w-4" /><AlertDescription>Ready: “{selected.title}” ({selected.fields?.length || 0} fields) will appear before payment and terms.</AlertDescription></Alert>}
+        <Button onClick={() => save.mutate(formId)} disabled={save.isPending || formId === selectedId} data-testid="button-save-registration-template">
+          {save.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}Save Registration Form
+        </Button>
+      </>}
+    </CardContent>
+  </Card>;
 }
 
 function RegistrationTermsTab() {
@@ -1630,6 +1677,7 @@ export default function Settings() {
         <TabsList className="flex-wrap h-auto">
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
           <TabsTrigger value="email-templates">Message Templates</TabsTrigger>
+          {registrationFormEnabled && <TabsTrigger value="registration-form">Registration Form</TabsTrigger>}
           {registrationFormEnabled && <TabsTrigger value="registration-terms">Registration Terms</TabsTrigger>}
           <TabsTrigger value="non-engagement">Categories</TabsTrigger>
           {dataExportEnabled && <TabsTrigger value="data-export">Data Export</TabsTrigger>}
@@ -1645,6 +1693,12 @@ export default function Settings() {
         <TabsContent value="email-templates">
           <EmailTemplatesTab />
         </TabsContent>
+
+        {registrationFormEnabled && (
+          <TabsContent value="registration-form">
+            <RegistrationTemplateTab tenant={tenant} />
+          </TabsContent>
+        )}
 
         {registrationFormEnabled && (
           <TabsContent value="registration-terms">

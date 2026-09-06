@@ -34,6 +34,8 @@ import {
   isCompletedRegistrationRetry,
   optionSelectionProgression,
   registrationCompletionBranch,
+  registrationPaymentPrerequisite,
+  isCorrelatedRegistrationCheckout,
   registrationRetryResponse,
   validateRegistrationConsent,
 } from "./registrationWorkflow";
@@ -44,6 +46,44 @@ function formatActivitySlot(slot: { type?: string | null; day?: string | null; d
   const time = [slot.startTime, slot.endTime].filter(Boolean).join("–");
   const location = slot.locationType === "in_person" ? "in person" : "online";
   return [day, time, location].filter(Boolean).join(" · ");
+}
+
+type RegistrationField = {
+  id?: string; name?: string; label?: string; required?: boolean;
+  conditional?: { fieldId?: string; value?: unknown };
+  showWhen?: { field?: string; equals?: unknown; contains?: unknown };
+};
+
+function requiredRegistrationFieldError(fields: unknown, responses: unknown): string | null {
+  if (!Array.isArray(fields) || !responses || typeof responses !== "object" || Array.isArray(responses)) {
+    return "Registration responses are required";
+  }
+  const values = responses as Record<string, unknown>;
+  for (const field of fields as RegistrationField[]) {
+    if (!field || !field.required) continue;
+    // Mirror DynamicFormFields visibility: a required dependent question is not
+    // required when the condition which displays it is false.
+    if (field.conditional) {
+      if (!field.conditional.fieldId || values[field.conditional.fieldId] !== field.conditional.value) continue;
+    } else if (field.showWhen?.field) {
+      const controlling = values[field.showWhen.field];
+      const visible = field.showWhen.equals !== undefined
+        ? controlling === field.showWhen.equals
+        : field.showWhen.contains !== undefined
+          ? (Array.isArray(controlling) ? controlling.includes(field.showWhen.contains) : controlling === field.showWhen.contains)
+          : true;
+      if (!visible) continue;
+    }
+    const key = field.id || field.name;
+    if (!key) continue; // malformed optional display metadata must not become a bypassable required field
+    const value = values[key];
+    const empty = value === undefined || value === null
+      || (typeof value === "string" && value.trim().length === 0)
+      || (Array.isArray(value) && value.length === 0)
+      || (typeof value === "object" && !Array.isArray(value) && !(value instanceof Date) && Object.keys(value as object).length === 0);
+    if (empty) return `${field.label || field.name || key} is required`;
+  }
+  return null;
 }
 
 export async function registerRoutes(
@@ -1632,6 +1672,18 @@ export async function registerRoutes(
       if (!req.tenant?.registrationFormEnabled) {
         return res.status(400).json({ error: "Registration forms are disabled for this practice" });
       }
+      // `undefined` is retained only for older in-process test fixtures; persisted
+      // tenants use null until an administrator deliberately selects a template.
+      if (req.tenant.registrationFormTemplateId === null) {
+        return res.status(400).json({ error: "A registration form template must be configured before sending" });
+      }
+      if (req.tenant.registrationFormTemplateId) {
+        const [template] = await db.select({ id: formTemplates.id }).from(formTemplates).where(and(
+          eq(formTemplates.id, req.tenant.registrationFormTemplateId),
+          eq(formTemplates.tenantId, req.tenant.id),
+        )).limit(1);
+        if (!template) return res.status(400).json({ error: "The configured registration form template is unavailable" });
+      }
       const attemptKey = typeof req.body?.attemptKey === "string" ? req.body.attemptKey.trim() : "";
       if (!/^[a-zA-Z0-9-]{16,100}$/.test(attemptKey)) {
         return res.status(400).json({ error: "A valid send attempt key is required" });
@@ -2166,6 +2218,16 @@ export async function registerRoutes(
       const tenant = await storage.getTenantById(optionRow.tenantId);
       if (!tenant) return res.status(404).json({ error: "Practice not found" });
       const registrationEnabled = tenant.registrationFormEnabled === true;
+      if (registrationEnabled && tenant.registrationFormTemplateId === null) {
+        return res.status(409).json({ error: "The practice has not configured its registration form yet. Please contact the practice." });
+      }
+      if (registrationEnabled && tenant.registrationFormTemplateId) {
+        const [template] = await db.select({ id: formTemplates.id }).from(formTemplates).where(and(
+          eq(formTemplates.id, tenant.registrationFormTemplateId),
+          eq(formTemplates.tenantId, tenant.id),
+        )).limit(1);
+        if (!template) return res.status(409).json({ error: "The practice registration form is unavailable. Please contact the practice." });
+      }
       const progression = optionSelectionProgression(registrationEnabled);
       const registrationToken = registrationEnabled ? crypto.randomBytes(32).toString("hex") : null;
       const nextStatus = progression.status;
@@ -2281,6 +2343,18 @@ export async function registerRoutes(
       if (!client) return res.status(404).json({ error: "Client not found" });
       const tenant = client.tenantId ? await storage.getTenantById(client.tenantId).catch(() => undefined) : undefined;
       if (!tenant?.registrationFormEnabled) return res.status(404).json({ error: "Registration is not available for this practice" });
+      if (tenant.registrationFormTemplateId === null) {
+        return res.status(503).json({ error: "Registration form configuration is unavailable" });
+      }
+      const registrationTemplate = tenant.registrationFormTemplateId
+        ? await db.select().from(formTemplates).where(and(
+          eq(formTemplates.id, tenant.registrationFormTemplateId),
+          eq(formTemplates.tenantId, tenant.id),
+        )).limit(1).then(rows => rows[0])
+        : undefined;
+      if (tenant.registrationFormTemplateId && !registrationTemplate) {
+        return res.status(503).json({ error: "Registration form configuration is unavailable" });
+      }
       const completedRetry = isCompletedRegistrationRetry(client, req.params.registrationToken, client.status);
       if (!completedRetry && !isActiveRegistrationToken(client, req.params.registrationToken)) {
         return res.status(403).json({ error: "Invalid or expired token" });
@@ -2289,6 +2363,18 @@ export async function registerRoutes(
         return res.status(404).json({ error: "This registration link is not active" });
       }
       const termsText = tenant.registrationTermsContent;
+      let publicStripeKey: string | null = null;
+      if (tenant.stripeSecretKey) {
+        try { publicStripeKey = decryptSecret(tenant.stripeSecretKey); } catch { /* unavailable below */ }
+      }
+      const paymentEligibility = client.paymentType
+        ? registrationPaymentPrerequisite({
+          paymentType: client.paymentType,
+          paymentsEnabled: tenant.paymentsEnabled === true,
+          agreedRatePence: client.agreedRatePence,
+          stripeAvailable: isStripeConfigured(publicStripeKey),
+        })
+        : null;
 
       res.json({
         tenantName: tenant?.name || "",
@@ -2297,12 +2383,20 @@ export async function registerRoutes(
         termsVersion: tenant.registrationTermsVersion,
         agreedRatePence: client.agreedRatePence,
         paymentsEnabled: tenant?.paymentsEnabled ?? true,
+        paymentSetupAvailable: !!process.env.APP_BASE_URL && isStripeConfigured(publicStripeKey),
+        paymentEligibility,
         // Only treat as fully submitted once payment is confirmed — RegistrationPending
         // means the client may have cancelled out of Stripe and needs to retry payment.
         alreadySubmitted: client.status === "BookingConfirmed",
         // Pre-fill form data if already saved (e.g. returning after Stripe cancel)
         savedPaymentType: client.paymentType || null,
         savedInsurerDetails: client.status === "BookingConfirmed" ? null : (client.insurerDetails || null),
+        registrationTemplate: registrationTemplate ? {
+          id: registrationTemplate.id,
+          title: registrationTemplate.title,
+          description: registrationTemplate.description,
+          fields: registrationTemplate.fields,
+        } : null,
       });
     } catch (error) {
       console.error("Failed to fetch registration data:", error);
@@ -2314,6 +2408,7 @@ export async function registerRoutes(
   app.post("/api/public/register/:clientId/:registrationToken", async (req, res) => {
     try {
       const { paymentType, insurerDetails, termsAccepted, termsVersion } = req.body;
+      const responses = req.body.registrationResponses ?? req.body.responses;
 
       // Validate paymentType against allowlist
       const ALLOWED_PAYMENT_TYPES = ["self_pay", "insurer"] as const;
@@ -2327,6 +2422,22 @@ export async function registerRoutes(
       if (!client) return res.status(404).json({ error: "Client not found" });
       const tenant = client.tenantId ? await storage.getTenantById(client.tenantId).catch(() => undefined) : undefined;
       if (!tenant?.registrationFormEnabled) return res.status(404).json({ error: "Registration is not available for this practice" });
+      if (tenant.registrationFormTemplateId === null) {
+        return res.status(503).json({ error: "Registration form configuration is unavailable" });
+      }
+      const registrationTemplate = tenant.registrationFormTemplateId
+        ? await db.select().from(formTemplates).where(and(
+          eq(formTemplates.id, tenant.registrationFormTemplateId),
+          eq(formTemplates.tenantId, tenant.id),
+        )).limit(1).then(rows => rows[0])
+        : undefined;
+      if (tenant.registrationFormTemplateId && !registrationTemplate) {
+        return res.status(503).json({ error: "Registration form configuration is unavailable" });
+      }
+      let registrationTenantStripeKey: string | null = null;
+      if (tenant.stripeSecretKey) {
+        try { registrationTenantStripeKey = decryptSecret(tenant.stripeSecretKey); } catch { /* handled as unavailable */ }
+      }
       if (isCompletedRegistrationRetry(client, req.params.registrationToken, client.status)) {
         return res.json({ success: true, alreadyCompleted: true });
       }
@@ -2339,6 +2450,20 @@ export async function registerRoutes(
       }
       if (retryOutcome === "checkout") {
         return res.json({ checkoutUrl: client.stripeCheckoutUrl, idempotent: true });
+      }
+      if (retryOutcome === "processing" && client.paymentType) {
+        const prerequisite = registrationPaymentPrerequisite({
+          paymentType: client.paymentType,
+          paymentsEnabled: tenant.paymentsEnabled === true,
+          agreedRatePence: client.agreedRatePence,
+          stripeAvailable: isStripeConfigured(registrationTenantStripeKey),
+        });
+        if (prerequisite === "client_rate_required") {
+          return res.status(422).json({ error: "A positive session rate must be configured before self-pay registration can continue." });
+        }
+        if (prerequisite === "stripe_unavailable") {
+          return res.status(503).json({ error: "Online payment is not configured for this practice. Please contact the practice." });
+        }
       }
       let effectivePaymentType: AllowedPaymentType = validatedPaymentType;
       let paymentAttemptKey: string | null = null;
@@ -2366,35 +2491,75 @@ export async function registerRoutes(
         }
         const consentError = validateRegistrationConsent(termsAccepted, termsVersion, tenant.registrationTermsVersion);
         if (consentError) return res.status(termsAccepted === true ? 409 : 400).json({ error: consentError });
+        if (registrationTemplate) {
+          const responseError = requiredRegistrationFieldError(registrationTemplate.fields, responses);
+          if (responseError) return res.status(400).json({ error: responseError });
+        }
 
-        const requiresStripe = registrationCompletionBranch({
+        const paymentPrerequisite = registrationPaymentPrerequisite({
           paymentType: validatedPaymentType,
           paymentsEnabled: tenant.paymentsEnabled === true,
           agreedRatePence: client.agreedRatePence,
-        }) === "stripe";
-        if (requiresStripe && !process.env.APP_BASE_URL) {
+          stripeAvailable: isStripeConfigured(registrationTenantStripeKey),
+        });
+        if (paymentPrerequisite === "client_rate_required") {
+          return res.status(422).json({ error: "A positive session rate must be configured before self-pay registration can continue." });
+        }
+        if (paymentPrerequisite === "stripe_unavailable") {
+          return res.status(503).json({ error: "Online payment is not configured for this practice. Please contact the practice." });
+        }
+        if (paymentPrerequisite === "stripe_required" && !process.env.APP_BASE_URL) {
           return res.status(503).json({ error: "Payment setup is unavailable. Please contact the practice." });
         }
         // All completion branches get a durable attempt key. It fences direct
         // confirmation side effects and drives Stripe idempotency when required.
-        paymentAttemptKey = crypto.randomUUID();
+        const claimedPaymentAttemptKey = crypto.randomUUID();
+        paymentAttemptKey = claimedPaymentAttemptKey;
 
-        // Compare-and-swap is the workflow lock: only its winner may create payment,
-        // record activity, or transition confirmation.
-        const claimed = await db.update(clients).set({
-          paymentType: validatedPaymentType,
-          insurerDetails: validatedPaymentType === "insurer" ? (insurerDetails || null) : null,
-          status: "RegistrationPending",
-          registrationPaymentAttemptKey: paymentAttemptKey,
-          termsAcceptedAt: new Date(),
-          termsAcceptedVersion: tenant.registrationTermsVersion,
-          termsAcceptedContent: tenant.registrationTermsContent,
-          updatedAt: new Date(),
-        }).where(and(
-          eq(clients.id, client.id),
-          eq(clients.status, "OptionSelected"),
-          eq(clients.registrationToken, req.params.registrationToken),
-        )).returning({ id: clients.id });
+        // The form record, its client linkage, consent snapshot and state claim
+        // are one database transaction. Do not leave RegistrationPending unless
+        // the exact submitted packet is durable and reachable from the client.
+        const claimed = await db.transaction(async (tx) => {
+          const claimedRows = await tx.update(clients).set({
+            paymentType: validatedPaymentType,
+            insurerDetails: validatedPaymentType === "insurer" ? (insurerDetails || null) : null,
+            status: "RegistrationPending",
+            registrationPaymentAttemptKey: claimedPaymentAttemptKey,
+            termsAcceptedAt: new Date(),
+            termsAcceptedVersion: tenant.registrationTermsVersion,
+            termsAcceptedContent: tenant.registrationTermsContent,
+            updatedAt: new Date(),
+          }).where(and(
+            eq(clients.id, client.id),
+            eq(clients.status, "OptionSelected"),
+            eq(clients.registrationToken, req.params.registrationToken),
+          )).returning({ id: clients.id });
+          if (!claimedRows.length || !registrationTemplate) return claimedRows;
+
+          const [submission] = await tx.insert(formSubmissions).values({
+            clientId: client.id,
+            formTemplateId: registrationTemplate.id,
+            tenantId: tenant.id,
+            responses,
+            isDraft: false,
+            registrationAttemptKey: claimedPaymentAttemptKey,
+            registrationTemplateTitle: registrationTemplate.title,
+            registrationTemplateDescription: registrationTemplate.description,
+            registrationTemplateFields: registrationTemplate.fields,
+          }).returning({ id: formSubmissions.id });
+          if (!submission) throw new Error("REGISTRATION_SUBMISSION_NOT_PERSISTED");
+
+          const linked = await tx.update(clients).set({
+            registrationFormSubmissionId: submission.id,
+            updatedAt: new Date(),
+          }).where(and(
+            eq(clients.id, client.id),
+            eq(clients.status, "RegistrationPending"),
+            eq(clients.registrationPaymentAttemptKey, claimedPaymentAttemptKey),
+          )).returning({ id: clients.id });
+          if (!linked.length) throw new Error("REGISTRATION_SUBMISSION_NOT_LINKED");
+          return claimedRows;
+        });
         if (!claimed.length) {
           const current = await storage.getClientById(client.id);
           if (current?.status === "BookingConfirmed") return res.json({ success: true, alreadyCompleted: true });
@@ -2412,11 +2577,6 @@ export async function registerRoutes(
         if (!paymentAttemptKey) {
           return res.status(409).json({ error: "Payment setup cannot be recovered. Please contact the practice." });
         }
-        let tenantStripeKey: string | null = null;
-        if (tenant.stripeSecretKey) {
-          try { tenantStripeKey = decryptSecret(tenant.stripeSecretKey); } catch { /* key decryption failed — Stripe will reject below */ }
-        }
-
         const baseUrl = process.env.APP_BASE_URL?.replace(/\/$/, "");
         if (!baseUrl) {
           return res.status(503).json({ error: "Payment setup is unavailable. Please contact the practice." });
@@ -2430,10 +2590,11 @@ export async function registerRoutes(
             amountPence: client.agreedRatePence!,
             successUrl: `${baseUrl}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
             tenantId: client.tenantId,
-            tenantStripeKey,
+            tenantStripeKey: registrationTenantStripeKey,
             practiceName: tenant?.name || null,
             previousPaymentLinkId: client.stripePaymentLinkId,
             idempotencyKey: `registration-payment-${client.id}-${paymentAttemptKey}`,
+            registrationAttemptKey: paymentAttemptKey,
           });
         } catch (stripeErr) {
           console.error("Stripe payment link creation failed:", stripeErr);
@@ -2448,6 +2609,7 @@ export async function registerRoutes(
         const savedLink = await db.update(clients).set({
           stripeCheckoutUrl: session.url,
           stripePaymentLinkId: session.paymentLinkId,
+          paymentStatus: "setup_pending",
           updatedAt: new Date(),
         }).where(and(
           eq(clients.id, client.id),
@@ -2638,11 +2800,14 @@ export async function registerRoutes(
       // Enrich with form template info
       const enrichedSubmissions = await Promise.all(
         submissions.map(async (sub) => {
-          const form = await storage.getFormTemplateById(sub.formTemplateId);
+          const form = sub.formTemplateId ? await storage.getFormTemplateById(sub.formTemplateId) : undefined;
           return {
             ...sub,
-            formTitle: form?.title || "Unknown Form",
-            formFields: form?.fields || [],
+            // Registration records carry an immutable template snapshot. Do not
+            // reinterpret historic answers through a later edited/deleted form.
+            formTitle: sub.registrationTemplateTitle || form?.title || "Unknown Form",
+            formDescription: sub.registrationTemplateDescription || form?.description || "",
+            formFields: sub.registrationTemplateFields || form?.fields || [],
           };
         })
       );
@@ -3506,7 +3671,13 @@ export async function registerRoutes(
   app.get("/api/tenant", requireAuth, async (req, res) => {
     try {
       if (!req.tenant) return res.status(403).json({ error: "No tenant" });
-      res.json(req.tenant);
+      // Keep the public settings contract explicit while the database name
+      // documents that this is a form-template foreign key.
+      res.json({
+        ...req.tenant,
+        registrationFormId: req.tenant.registrationFormTemplateId,
+        registrationTemplateId: req.tenant.registrationFormTemplateId,
+      });
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch tenant" });
     }
@@ -3549,6 +3720,55 @@ export async function registerRoutes(
       version: updated.registrationTermsVersion,
     });
     res.json({ content: updated.registrationTermsContent, version: updated.registrationTermsVersion, updatedAt: updated.registrationTermsUpdatedAt });
+  });
+
+  // Registration templates are tenant-owned. Never accept a template identifier
+  // from another practice, even from an authenticated administrator.
+  app.get("/api/tenant/registration-form-template", requireAdmin, async (req, res) => {
+    if (!req.tenant) return res.status(404).json({ error: "Tenant not found" });
+    if (!req.tenant.registrationFormTemplateId) return res.json({ template: null });
+    const [template] = await db.select().from(formTemplates).where(and(
+      eq(formTemplates.id, req.tenant.registrationFormTemplateId),
+      eq(formTemplates.tenantId, req.tenant.id),
+    )).limit(1);
+    res.json({ template: template || null });
+  });
+
+  app.patch("/api/tenant/registration-form-template", requireAdmin, async (req, res) => {
+    const parsed = z.object({ formTemplateId: z.string().min(1).nullable() }).safeParse(req.body);
+    if (!parsed.success || !req.tenant) return res.status(400).json({ error: "A formTemplateId or null is required" });
+    if (parsed.data.formTemplateId) {
+      const [template] = await db.select({ id: formTemplates.id }).from(formTemplates).where(and(
+        eq(formTemplates.id, parsed.data.formTemplateId),
+        eq(formTemplates.tenantId, req.tenant.id),
+      )).limit(1);
+      if (!template) return res.status(404).json({ error: "Registration form template not found" });
+    }
+    const [updated] = await db.update(tenants).set({
+      registrationFormTemplateId: parsed.data.formTemplateId,
+    }).where(eq(tenants.id, req.tenant.id)).returning({ registrationFormTemplateId: tenants.registrationFormTemplateId });
+    await recordActivity(req, "activity_registration_template_updated", "tenant", req.tenant.id, {
+      configured: !!updated?.registrationFormTemplateId,
+    });
+    res.json({ formTemplateId: updated?.registrationFormTemplateId || null });
+  });
+
+  // Compatibility endpoint used by the settings surface. It applies the same
+  // ownership check as the narrow endpoint above rather than trusting an ID.
+  app.patch("/api/tenant/settings", requireAdmin, async (req, res) => {
+    const parsed = z.object({ registrationFormId: z.string().min(1).nullable() }).safeParse(req.body);
+    if (!parsed.success || !req.tenant) return res.status(400).json({ error: "A registrationFormId or null is required" });
+    if (parsed.data.registrationFormId) {
+      const [template] = await db.select({ id: formTemplates.id }).from(formTemplates).where(and(
+        eq(formTemplates.id, parsed.data.registrationFormId),
+        eq(formTemplates.tenantId, req.tenant.id),
+      )).limit(1);
+      if (!template) return res.status(404).json({ error: "Registration form template not found" });
+    }
+    const [updated] = await db.update(tenants).set({
+      registrationFormTemplateId: parsed.data.registrationFormId,
+    }).where(eq(tenants.id, req.tenant.id)).returning({ registrationFormTemplateId: tenants.registrationFormTemplateId });
+    res.json({ registrationFormId: updated?.registrationFormTemplateId || null });
   });
 
   // Public endpoint — returns only branding fields, no auth required.
@@ -4288,6 +4508,28 @@ export async function registerRoutes(
         const client = clientForUpdate;
         const paymentIntentId = session.payment_intent;
         const stripeInstance = getStripeInstance(tenantStripeKey);
+        const registrationAttemptKey = session.metadata?.registrationAttemptKey;
+        const isRegistrationPayment = client.status === "RegistrationPending" || !!registrationAttemptKey;
+        // A registration payment may finalize only from the *current* payment
+        // link and attempt. This rejects stale links, cross-tenant metadata and
+        // unpaid Checkout completion events before touching payment status,
+        // ledger, or the booking workflow. Ordinary checkout handling remains
+        // backward compatible below.
+        const validRegistrationPayment = !isRegistrationPayment || isCorrelatedRegistrationCheckout({
+          paymentStatus: session.payment_status,
+          metadataTenantId: session.metadata?.tenantId,
+          metadataClientId: session.metadata?.clientId,
+          metadataAttemptKey: registrationAttemptKey,
+          paymentLinkId: completedPaymentLinkId,
+          clientTenantId: client.tenantId,
+          clientId,
+          currentAttemptKey: client.registrationPaymentAttemptKey,
+          currentPaymentLinkId: client.stripePaymentLinkId,
+        });
+        if (!validRegistrationPayment) {
+          console.warn(`Webhook: ignored uncorrelated registration checkout for client ${clientId}`);
+          return res.json({ received: true });
+        }
 
           // Persist paymentStatus = active; opportunistically save payment method if retrievable
           const clientUpdate: Record<string, unknown> = { paymentStatus: "active", updatedAt: new Date() };
@@ -4338,7 +4580,7 @@ export async function registerRoutes(
 
         // CY&A: advance to BookingConfirmed when client came through the CY&A registration flow
         const paymentTenant = client.tenantId ? await storage.getTenantById(client.tenantId).catch(() => undefined) : undefined;
-        if (client.status === "RegistrationPending") {
+        if (client.status === "RegistrationPending" && validRegistrationPayment) {
           let bookingEmailDelivered = false;
 
           // Deliver before the status CAS. Stripe retries reuse this provider key,
@@ -4384,7 +4626,12 @@ export async function registerRoutes(
             registrationTokenRevokedAt: new Date(),
             bookingConfirmationSentAt: bookingEmailDelivered ? new Date() : client.bookingConfirmationSentAt,
             updatedAt: new Date(),
-          }).where(and(eq(clients.id, clientId), eq(clients.status, "RegistrationPending"))).returning({ id: clients.id });
+          }).where(and(
+            eq(clients.id, clientId),
+            eq(clients.status, "RegistrationPending"),
+            eq(clients.registrationPaymentAttemptKey, registrationAttemptKey),
+            eq(clients.stripePaymentLinkId, completedPaymentLinkId!),
+          )).returning({ id: clients.id });
           if (confirmed.length) {
             await recordActivity(req, "activity_booking_confirmed", "client", client.id, {
               actorName: "Client",

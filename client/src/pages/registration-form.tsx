@@ -9,6 +9,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Loader2, CheckCircle2, ChevronDown } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { DynamicFormFields, validateDynamicFields } from "@/components/forms/DynamicFormFields";
 
 interface RegistrationData {
   tenantName: string;
@@ -17,9 +18,12 @@ interface RegistrationData {
   termsVersion: number;
   agreedRatePence: number | null;
   paymentsEnabled: boolean;
+  paymentSetupAvailable: boolean;
+  paymentEligibility: "stripe_required" | "confirm_after_form" | "client_rate_required" | "stripe_unavailable" | null;
   alreadySubmitted: boolean;
   savedPaymentType: "self_pay" | "insurer" | null;
   savedInsurerDetails: string | null;
+  registrationTemplate?: { id: string; title?: string; fields: any[] } | null;
 }
 
 function formatPence(pence: number) {
@@ -37,6 +41,8 @@ export default function RegistrationForm() {
   const [formError, setFormError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [prefilled, setPrefilled] = useState(false);
+  const [templateValues, setTemplateValues] = useState<Record<string, any>>({});
+  const [templateErrors, setTemplateErrors] = useState<Record<string, boolean>>({});
 
   const { data, isLoading, isError, error: loadError } = useQuery<RegistrationData>({
     queryKey: ["registration", clientId, registrationToken],
@@ -74,6 +80,7 @@ export default function RegistrationForm() {
           insurerDetails: paymentType === "insurer" ? insurerDetails : undefined,
           termsAccepted,
           termsVersion: data.termsVersion,
+          registrationResponses: templateValues,
         }),
       });
       if (!res.ok) {
@@ -100,6 +107,29 @@ export default function RegistrationForm() {
 
     if (paymentType === "insurer" && !insurerDetails.trim()) {
       setFormError("Please enter your insurer name and policy details.");
+      return;
+    }
+    if (!data) {
+      setFormError("Registration details are unavailable. Please reload the page and try again.");
+      return;
+    }
+    const selfPayBlocked =
+      paymentType === "self_pay" &&
+      data.paymentsEnabled &&
+      (!data.agreedRatePence || data.agreedRatePence <= 0 || !data.paymentSetupAvailable ||
+        data.paymentEligibility === "client_rate_required" || data.paymentEligibility === "stripe_unavailable");
+    if (selfPayBlocked) {
+      setFormError(!data.agreedRatePence || data.paymentEligibility === "client_rate_required"
+        ? "Your agreed session rate has not been set. Please contact the practice so an administrator can set it before registration can be submitted."
+        : "Online payment setup is unavailable. Please contact the practice so an administrator can complete payment setup before registration can be submitted.");
+      return;
+    }
+    const fields = data.registrationTemplate?.fields || [];
+    const dynamicErrors = validateDynamicFields(fields, templateValues);
+    if (Object.keys(dynamicErrors).length) {
+      setTemplateErrors(dynamicErrors);
+      setFormError("Please complete all required registration details.");
+      window.setTimeout(() => document.querySelector('[data-error="true"]')?.scrollIntoView({ behavior: "smooth", block: "center" }), 0);
       return;
     }
     if (!termsAccepted) {
@@ -178,6 +208,27 @@ export default function RegistrationForm() {
                 : "."}
             </p>
 
+            {/* Configured registration questions must be completed before payment details. */}
+            {data.registrationTemplate?.fields?.length ? (
+              <div className="space-y-5">
+                {data.registrationTemplate?.title && <h2 className="text-base font-semibold">{data.registrationTemplate.title}</h2>}
+                <DynamicFormFields
+                  fields={data.registrationTemplate.fields}
+                  values={templateValues}
+                  errors={templateErrors}
+                  onChange={(id, value) => {
+                    setTemplateValues(current => ({ ...current, [id]: value }));
+                    setTemplateErrors(current => {
+                      if (!current[id]) return current;
+                      const next = { ...current };
+                      delete next[id];
+                      return next;
+                    });
+                  }}
+                />
+              </div>
+            ) : null}
+
             {/* Payment Type */}
             <div className="space-y-3">
               <Label className="text-sm font-medium">Payment method</Label>
@@ -219,6 +270,17 @@ export default function RegistrationForm() {
                   Please provide the name of your insurer and your policy or authorisation reference number.
                 </p>
               </div>
+            )}
+
+            {paymentType === "self_pay" && data.paymentsEnabled && (!data.agreedRatePence || data.agreedRatePence <= 0 || data.paymentEligibility === "client_rate_required") && (
+              <Alert variant="destructive">
+                <AlertDescription>Your agreed session rate has not been set. An administrator must set it before registration can be submitted.</AlertDescription>
+              </Alert>
+            )}
+            {paymentType === "self_pay" && data.paymentsEnabled && (data.agreedRatePence ?? 0) > 0 && (!data.paymentSetupAvailable || data.paymentEligibility === "stripe_unavailable") && (
+              <Alert variant="destructive">
+                <AlertDescription>Online payment setup is unavailable. An administrator must complete payment setup before registration can be submitted.</AlertDescription>
+              </Alert>
             )}
 
             {/* Terms & Conditions */}

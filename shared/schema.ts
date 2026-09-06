@@ -38,6 +38,9 @@ export const tenants = pgTable("tenants", {
   multiClinicianAllocationEnabled: boolean("multi_clinician_allocation_enabled").default(false),
   autoAllocationEmailEnabled: boolean("auto_allocation_email_enabled").default(false),
   registrationFormEnabled: boolean("registration_form_enabled").default(false),
+  // Selected from this tenant's own form templates and used by the public
+  // registration journey. A null selection deliberately makes sending unavailable.
+  registrationFormTemplateId: varchar("registration_form_template_id"),
   // Tenant-owned consent document. Version is incremented whenever its content changes.
   registrationTermsContent: text("registration_terms_content").notNull().default("By proceeding you agree to the practice's Terms & Conditions."),
   registrationTermsVersion: integer("registration_terms_version").notNull().default(1),
@@ -185,6 +188,7 @@ export const clients = pgTable("clients", {
   stripeCheckoutUrl: text("stripe_checkout_url"), // Payment link URL sent to client
   stripePaymentLinkId: text("stripe_payment_link_id"), // Stripe Payment Link ID (plink_...) for deactivation
   registrationPaymentAttemptKey: text("registration_payment_attempt_key"),
+  registrationFormSubmissionId: varchar("registration_form_submission_id"),
   paymentStatus: text("payment_status", { enum: ["none", "setup_pending", "active"] }).default("none"),
   // CY&A fields
   contactPreference: text("contact_preference", { enum: ["email", "phone"] }),
@@ -265,12 +269,24 @@ export type FormTemplate = typeof formTemplates.$inferSelect;
 export const formSubmissions = pgTable("form_submissions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   clientId: varchar("client_id").references(() => clients.id).notNull(),
-  formTemplateId: varchar("form_template_id").references(() => formTemplates.id).notNull(),
+  // Historic registration submissions retain their immutable template snapshot
+  // after a configurable template is deleted.
+  formTemplateId: varchar("form_template_id").references(() => formTemplates.id, { onDelete: "set null" }),
   responses: json("responses").notNull(), // Encrypted sensitive health data
   isDraft: boolean("is_draft").default(false).notNull(),
   submittedAt: timestamp("submitted_at").defaultNow().notNull(),
   tenantId: varchar("tenant_id").references(() => tenants.id),
-});
+  // Present only for the registration portal. It makes a response-loss retry
+  // return/link the same immutable submission rather than creating another one.
+  registrationAttemptKey: text("registration_attempt_key"),
+  registrationTemplateTitle: text("registration_template_title"),
+  registrationTemplateDescription: text("registration_template_description"),
+  registrationTemplateFields: json("registration_template_fields"),
+}, (table) => [
+  uniqueIndex("form_submissions_registration_attempt_key_unique")
+    .on(table.registrationAttemptKey)
+    .where(sql`${table.registrationAttemptKey} is not null`),
+]);
 
 export const formSubmissionsRelations = relations(formSubmissions, ({ one }) => ({
   client: one(clients, {

@@ -1,8 +1,8 @@
 import { 
-  users, clients, clinicians, timeSlots, formTemplates, formSubmissions, tasks, auditLogs, emailTemplates, inviteTokens, passwordResetTokens, nonEngagementCategories, customInsurers, paymentCharges, intakeMessages, tenants, clientClinicianOptions,
+  users, clients, clinicians, timeSlots, formTemplates, formSubmissions, formDeliveries, clientCreationRequests, tasks, auditLogs, emailTemplates, inviteTokens, passwordResetTokens, nonEngagementCategories, customInsurers, paymentCharges, intakeMessages, tenants, clientClinicianOptions,
   type User, type InsertUser, type SafeUser,
   type Tenant,
-  type Client, type InsertClient,
+  type Client, type InsertClient, type FormDelivery,
   type Clinician, type InsertClinician,
   type TimeSlot, type InsertTimeSlot,
   type FormTemplate, type InsertFormTemplate,
@@ -18,7 +18,7 @@ import {
   type ClientClinicianOption, type InsertClientClinicianOption,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, or, desc, sql, isNull, inArray } from "drizzle-orm";
+import { eq, and, or, desc, sql, isNull, inArray, lt } from "drizzle-orm";
 import {
   RECENT_ACTIVITY_ACTIONS,
   RECENT_ACTIVITY_CATEGORY_ACTIONS,
@@ -72,6 +72,7 @@ export interface IStorage {
   getClientById(id: string): Promise<Client | undefined>;
   getClientByDisplayId(displayId: string): Promise<Client | undefined>;
   createClient(client: InsertClient, tenantId?: string | null): Promise<Client>;
+  createClientIdempotently(client: InsertClient, tenantId: string, idempotencyKey?: string): Promise<{ client: Client; created: boolean }>;
   updateClient(id: string, updates: Partial<InsertClient>): Promise<Client | undefined>;
   archiveClient(id: string, reason?: string, category?: string): Promise<Client | undefined>;
   restoreClient(id: string): Promise<Client | undefined>;
@@ -94,6 +95,11 @@ export interface IStorage {
   saveOrUpdateDraft(clientId: string, formTemplateId: string, responses: any, tenantId?: string | null): Promise<FormSubmission>;
   submitDraft(submissionId: string, responses: any, tenantId?: string | null): Promise<FormSubmission | undefined>;
   backfillFormSubmissionTenantIds(): Promise<number>;
+  getFormDeliveries(clientId: string, tenantId: string): Promise<FormDelivery[]>;
+  prepareFormDeliveries(clientId: string, formTemplateIds: string[], tenantId: string): Promise<FormDelivery[]>;
+  updateFormDelivery(id: string, tenantId: string, updates: Partial<FormDelivery>): Promise<FormDelivery | undefined>;
+  claimFormDelivery(id: string, tenantId: string, leaseToken: string, staleBefore: Date): Promise<FormDelivery | undefined>;
+  finishFormDeliveryClaim(id: string, tenantId: string, leaseToken: string, status: "sent" | "failed", error?: string): Promise<FormDelivery | undefined>;
   
   // ============ TASKS ============
   getAllTasks(tenantId?: string | null): Promise<Task[]>;
@@ -411,6 +417,8 @@ export class DatabaseStorage implements IStorage {
 
       // Delete child records that belong to the client
       await tx.delete(formSubmissions).where(eq(formSubmissions.clientId, id));
+      await tx.delete(formDeliveries).where(eq(formDeliveries.clientId, id));
+      await tx.delete(clientCreationRequests).where(eq(clientCreationRequests.clientId, id));
       await tx.delete(paymentCharges).where(eq(paymentCharges.clientId, id));
 
       // Nullify soft references (keep the row but remove the client pointer)
@@ -507,6 +515,39 @@ export class DatabaseStorage implements IStorage {
   async createClient(insertClient: InsertClient, tenantId?: string | null): Promise<Client> {
     const [client] = await db.insert(clients).values({ ...insertClient, ...(tenantId ? { tenantId } : {}) }).returning();
     return client;
+  }
+
+  async createClientIdempotently(insertClient: InsertClient, tenantId: string, idempotencyKey?: string): Promise<{ client: Client; created: boolean }> {
+    if (!idempotencyKey) return { client: await this.createClient(insertClient, tenantId), created: true };
+    const [alreadyCreated] = await db.select().from(clientCreationRequests).where(
+      and(eq(clientCreationRequests.tenantId, tenantId), eq(clientCreationRequests.idempotencyKey, idempotencyKey))
+    );
+    if (alreadyCreated) {
+      const client = await this.getClientById(alreadyCreated.clientId);
+      if (!client || client.tenantId !== tenantId) throw new Error("Idempotency record references an inaccessible client");
+      return { client, created: false };
+    }
+
+    const clientId = crypto.randomUUID();
+    try {
+      const client = await db.transaction(async (tx) => {
+        const [created] = await tx.insert(clients).values({ ...insertClient, id: clientId, tenantId }).returning();
+        await tx.insert(clientCreationRequests).values({ tenantId, idempotencyKey, clientId: created.id });
+        return created;
+      });
+      return { client, created: true };
+    } catch (error: any) {
+      // A simultaneous retry may win the unique key race. Its transaction has
+      // committed the client and request together, so returning that client is safe.
+      if (error?.code !== "23505") throw error;
+      const [existing] = await db.select().from(clientCreationRequests).where(
+        and(eq(clientCreationRequests.tenantId, tenantId), eq(clientCreationRequests.idempotencyKey, idempotencyKey))
+      );
+      if (!existing) throw error;
+      const client = await this.getClientById(existing.clientId);
+      if (!client || client.tenantId !== tenantId) throw error;
+      return { client, created: false };
+    }
   }
 
   async updateClient(id: string, updates: Partial<InsertClient>): Promise<Client | undefined> {
@@ -745,6 +786,9 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteFormTemplate(id: string): Promise<void> {
+    // Form delivery rows are destructive children of a template, like form
+    // submissions; remove them before the FK parent.
+    await db.delete(formDeliveries).where(eq(formDeliveries.formTemplateId, id));
     await db.delete(formTemplates).where(eq(formTemplates.id, id));
   }
 
@@ -827,6 +871,72 @@ export class DatabaseStorage implements IStorage {
       }).returning();
       return newDraft;
     }
+  }
+
+  async getFormDeliveries(clientId: string, tenantId: string): Promise<FormDelivery[]> {
+    return db.select().from(formDeliveries).where(and(
+      eq(formDeliveries.clientId, clientId),
+      eq(formDeliveries.tenantId, tenantId),
+    )).orderBy(formDeliveries.createdAt);
+  }
+
+  async prepareFormDeliveries(clientId: string, formTemplateIds: string[], tenantId: string): Promise<FormDelivery[]> {
+    for (const formTemplateId of Array.from(new Set(formTemplateIds))) {
+      await db.insert(formDeliveries).values({
+        tenantId,
+        clientId,
+        formTemplateId,
+        idempotencyKey: `form-delivery-${tenantId}-${clientId}-${formTemplateId}`,
+      }).onConflictDoNothing();
+    }
+    return this.getFormDeliveries(clientId, tenantId);
+  }
+
+  async updateFormDelivery(id: string, tenantId: string, updates: Partial<FormDelivery>): Promise<FormDelivery | undefined> {
+    const [delivery] = await db.update(formDeliveries).set({
+      ...updates,
+      updatedAt: new Date(),
+    }).where(and(eq(formDeliveries.id, id), eq(formDeliveries.tenantId, tenantId))).returning();
+    return delivery || undefined;
+  }
+
+  async claimFormDelivery(id: string, tenantId: string, leaseToken: string, staleBefore: Date): Promise<FormDelivery | undefined> {
+    const now = new Date();
+    const [delivery] = await db.update(formDeliveries).set({
+      status: "sending",
+      leaseToken,
+      leaseExpiresAt: new Date(now.getTime() + 5 * 60_000),
+      attemptCount: sql`${formDeliveries.attemptCount} + 1`,
+      updatedAt: now,
+    }).where(and(
+      eq(formDeliveries.id, id),
+      eq(formDeliveries.tenantId, tenantId),
+      or(
+        eq(formDeliveries.status, "pending"),
+        eq(formDeliveries.status, "failed"),
+        and(eq(formDeliveries.status, "sending"), lt(formDeliveries.leaseExpiresAt, staleBefore)),
+      ),
+    )).returning();
+    return delivery || undefined;
+  }
+
+  async finishFormDeliveryClaim(id: string, tenantId: string, leaseToken: string, status: "sent" | "failed", error?: string): Promise<FormDelivery | undefined> {
+    const now = new Date();
+    const [delivery] = await db.update(formDeliveries).set({
+      status,
+      sentAt: status === "sent" ? now : undefined,
+      failedAt: status === "failed" ? now : undefined,
+      lastError: status === "failed" ? (error || "delivery_failed") : null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      updatedAt: now,
+    }).where(and(
+      eq(formDeliveries.id, id),
+      eq(formDeliveries.tenantId, tenantId),
+      eq(formDeliveries.status, "sending"),
+      eq(formDeliveries.leaseToken, leaseToken),
+    )).returning();
+    return delivery || undefined;
   }
 
   async submitDraft(submissionId: string, responses: any, tenantId?: string | null): Promise<FormSubmission | undefined> {

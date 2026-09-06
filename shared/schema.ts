@@ -220,6 +220,18 @@ export const clientsRelations = relations(clients, ({ one, many }) => ({
   formSubmissions: many(formSubmissions),
 }));
 
+// A client-creation request is retained so an interrupted browser request can
+// safely be repeated without creating a second referral or notification.
+export const clientCreationRequests = pgTable("client_creation_requests", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").references(() => tenants.id).notNull(),
+  idempotencyKey: text("idempotency_key").notNull(),
+  clientId: varchar("client_id").references(() => clients.id).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("client_creation_requests_tenant_key_unique").on(table.tenantId, table.idempotencyKey),
+]);
+
 export const insertClientSchema = createInsertSchema(clients, {
   intakeDate: z.coerce.date().optional(),
 }).omit({ 
@@ -276,6 +288,32 @@ export const selectFormSubmissionSchema = createSelectSchema(formSubmissions);
 
 export type InsertFormSubmission = z.infer<typeof insertFormSubmissionSchema>;
 export type FormSubmission = typeof formSubmissions.$inferSelect;
+
+// One durable delivery per tenant/client/form.  This is deliberately separate
+// from submissions: a form can be delivered, fail, be retried, and eventually
+// completed without losing that audit trail.
+export const formDeliveries = pgTable("form_deliveries", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").references(() => tenants.id).notNull(),
+  clientId: varchar("client_id").references(() => clients.id).notNull(),
+  formTemplateId: varchar("form_template_id").references(() => formTemplates.id).notNull(),
+  status: text("status", { enum: ["pending", "sending", "sent", "failed", "completed"] }).notNull().default("pending"),
+  idempotencyKey: text("idempotency_key").notNull(),
+  attemptCount: integer("attempt_count").notNull().default(0),
+  leaseToken: text("lease_token"),
+  leaseExpiresAt: timestamp("lease_expires_at"),
+  sentAt: timestamp("sent_at"),
+  completedAt: timestamp("completed_at"),
+  failedAt: timestamp("failed_at"),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("form_deliveries_tenant_client_form_unique").on(table.tenantId, table.clientId, table.formTemplateId),
+  uniqueIndex("form_deliveries_idempotency_key_unique").on(table.idempotencyKey),
+]);
+
+export type FormDelivery = typeof formDeliveries.$inferSelect;
 
 // ============ TASKS ============
 export const tasks = pgTable("tasks", {

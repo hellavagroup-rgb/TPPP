@@ -14,6 +14,8 @@ export const RECENT_ACTIVITY_ACTIONS = [
   "activity_client_options_sent",
   "activity_form_completed",
   "activity_form_sent",
+  "activity_form_delivery_failed",
+  "activity_form_delivery_retried",
   "activity_form_template_created",
   "activity_form_template_updated",
   "activity_form_template_deleted",
@@ -53,6 +55,8 @@ export const RECENT_ACTIVITY_CATEGORY_ACTIONS = {
     "activity_client_options_sent",
     "activity_form_completed",
     "activity_form_sent",
+    "activity_form_delivery_failed",
+    "activity_form_delivery_retried",
     "activity_form_template_created",
     "activity_form_template_updated",
     "activity_form_template_deleted",
@@ -185,6 +189,10 @@ export function toRecentActivityItem(log: AuditLog): RecentActivityItem {
       return { id: log.id, eventType: "form", title: "Form completed", description: `${clientDisplayId} completed ${text(details, "formTitle", "an intake form")}.`, actorName, timestamp: log.timestamp };
     case "activity_form_sent":
       return { id: log.id, eventType: "form", title: "Form sent", description: `${text(details, "formTitle", "An intake form")} sent to ${clientDisplayId}.`, actorName, timestamp: log.timestamp };
+    case "activity_form_delivery_failed":
+      return { id: log.id, eventType: "form", title: "Form delivery failed", description: `${text(details, "formTitle", "An intake form")} could not be sent to ${clientDisplayId}.`, actorName, timestamp: log.timestamp };
+    case "activity_form_delivery_retried":
+      return { id: log.id, eventType: "form", title: "Form delivery retried", description: `${text(details, "formTitle", "An intake form")} delivery was retried for ${clientDisplayId}.`, actorName, timestamp: log.timestamp };
     case "activity_form_template_created":
       return { id: log.id, eventType: "form", title: "Form created", description: text(details, "formTitle", "An intake form"), actorName, timestamp: log.timestamp };
     case "activity_form_template_updated":

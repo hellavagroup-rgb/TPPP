@@ -180,13 +180,44 @@ export default function Clients() {
     queryKey: ["/api/forms"],
   });
 
+  const clientCreationIdempotencyKey = useRef<string | null>(null);
+  const [recoveredClientId, setRecoveredClientId] = useState<string | null>(null);
+  const [isRetryingCreatedForms, setIsRetryingCreatedForms] = useState(false);
+
   // Mutations
   const createClientMutation = useMutation({
-    mutationFn: async (clientData: any) => {
-      const response = await apiRequest("POST", "/api/clients", clientData);
-      return response.json();
+    mutationFn: async ({ clientData, formIds }: { clientData: any; formIds: string[] }) => {
+      clientCreationIdempotencyKey.current ??= crypto.randomUUID();
+      const response = await fetch("/api/clients", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": clientCreationIdempotencyKey.current },
+        credentials: "include",
+        body: JSON.stringify(clientData),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const client = await response.json();
+      if (formIds.length > 0) {
+        try {
+          const deliveryResponse = await apiRequest("POST", "/api/form-deliveries/send", { clientId: client.id, formIds });
+          const delivery = await deliveryResponse.json();
+          if (delivery.success) return client;
+          const error = new Error(delivery.message || "Some selected forms could not be sent") as Error & { clientCreated?: boolean; clientId?: string };
+          error.clientCreated = true;
+          error.clientId = client.id;
+          throw error;
+        } catch (cause) {
+          if ((cause as { clientCreated?: boolean })?.clientCreated) throw cause;
+          const error = new Error("Client was created, but forms could not be sent") as Error & { clientCreated?: boolean; clientId?: string };
+          error.clientCreated = true;
+          error.clientId = client.id;
+          throw error;
+        }
+      }
+      return client;
     },
     onSuccess: () => {
+      clientCreationIdempotencyKey.current = null;
+      setRecoveredClientId(null);
       queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
       toast({ title: "Client Created", description: "New referral added successfully." });
       setIsNewClientOpen(false);
@@ -201,9 +232,14 @@ export default function Clients() {
         notes: "",
         contactPreference: "email",
       });
+      setSelectedNewClientFormIds([]);
     },
     onError: async (error: any) => {
-      let description = "Failed to create client.";
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      if (error?.clientId) setRecoveredClientId(error.clientId);
+      let description = error?.clientCreated
+        ? "Client was created, but one or more forms failed to send. Failed forms remain selected for retry."
+        : "Failed to create client.";
       try {
         const body = await error?.response?.json?.();
         if (body?.error && typeof body.error === "string") description = body.error;
@@ -335,6 +371,7 @@ export default function Clients() {
   const [isSendFormsOpen, setIsSendFormsOpen] = useState(false);
   const [clientToSendForms, setClientToSendForms] = useState<ClientType | null>(null);
   const [selectedFormIds, setSelectedForms] = useState<string[]>([]);
+  const [formDeliveryStates, setFormDeliveryStates] = useState<Record<string, string>>({});
   const [previewForm, setPreviewForm] = useState<FormTemplateType | null>(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [showAllClinicians, setShowAllClinicians] = useState(false);
@@ -346,6 +383,7 @@ export default function Clients() {
 
   // New Client Form State
   const [isNewClientOpen, setIsNewClientOpen] = useState(false);
+  const [selectedNewClientFormIds, setSelectedNewClientFormIds] = useState<string[]>([]);
   const [newClientEmailWarning, setNewClientEmailWarning] = useState<{ displayId: string; id: string }[]>([]);
   // Tracks the email value the in-flight onBlur check was issued for.
   // When the field changes before the response arrives, we discard the stale result.
@@ -356,6 +394,9 @@ export default function Clients() {
     if (!open) {
       setNewClientEmailWarning([]);
       newClientEmailCheckRef.current = "";
+      clientCreationIdempotencyKey.current = null;
+      setRecoveredClientId(null);
+      setSelectedNewClientFormIds([]);
     }
   };
   const [newClientData, setNewClientData] = useState({
@@ -703,7 +744,7 @@ export default function Clients() {
     }
   };
 
-  // ============ PAYMENT STATE ============
+  // Payment state
   const { data: stripeStatus } = useQuery<{ configured: boolean }>({
     queryKey: ["/api/stripe/status"],
   });
@@ -1051,10 +1092,20 @@ export default function Clients() {
     return availability.filter(s => s.type !== "Vacation" && isSlotActive(s));
   };
 
-  const handleOpenSendForms = (client: ClientType) => {
+  const handleOpenSendForms = async (client: ClientType) => {
       setClientToSendForms(client);
-      setSelectedForms([]); // Reset selection
+      setSelectedForms([]);
+      setFormDeliveryStates({});
       setIsSendFormsOpen(true);
+      try {
+        const response = await fetch(`/api/clients/${client.id}/form-deliveries`, { credentials: "include" });
+        if (!response.ok) throw new Error("Unable to recover form delivery state");
+        const deliveries: { formTemplateId: string; status: string }[] = await response.json();
+        setSelectedForms(deliveries.map((delivery) => delivery.formTemplateId));
+        setFormDeliveryStates(Object.fromEntries(deliveries.map((delivery) => [delivery.formTemplateId, delivery.status])));
+      } catch {
+        toast({ title: "Delivery history unavailable", description: "You can still select forms and send them.", variant: "destructive" });
+      }
   };
 
   const handleOpenPhoneFill = (client: ClientType) => {
@@ -1080,34 +1131,23 @@ export default function Clients() {
   const handleSendForms = async () => {
       if (clientToSendForms && selectedFormIds.length > 0) {
           try {
-            // Send form via email API
-            for (const formId of selectedFormIds) {
-              await apiRequest("POST", "/api/email/send-form", {
-                clientId: clientToSendForms.id,
-                formId
-              });
-            }
+            const response = await apiRequest("POST", "/api/form-deliveries/send", {
+              clientId: clientToSendForms.id,
+              formIds: selectedFormIds,
+            });
+            const result = await response.json();
             queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
-            
-            // Generate unique link for the form
-            const uniqueLink = `${window.location.origin}/fill/${clientToSendForms.id}/${selectedFormIds[0]}`;
-            console.log("Client Form Link:", uniqueLink);
-            
+            if (!result.success) {
+              setFormDeliveryStates(Object.fromEntries(result.outcomes.map((outcome: any) => [outcome.formId, outcome.status])));
+              toast({ title: "Some forms were not sent", description: "Failed forms remain selected so you can retry them.", variant: "destructive" });
+              return;
+            }
             setIsSendFormsOpen(false);
             setClientToSendForms(null);
             toast({
                 title: "Forms Sent",
                 description: `${selectedFormIds.length} form(s) sent to ${clientToSendForms.email}.`,
             });
-            
-            setTimeout(() => {
-               toast({
-                   title: "Client Email Simulation",
-                   description: "Click here to simulate the client view.",
-                   action: <Button size="sm" variant="outline" onClick={() => window.open(uniqueLink, '_blank')}>Open Link</Button>,
-                   duration: 10000
-               });
-            }, 1000);
           } catch (error) {
             toast({
               title: "Error",
@@ -1141,6 +1181,31 @@ export default function Clients() {
         });
         return;
     }
+    const shouldSendForms = formsEnabled && contactPreferenceEnabled && newClientData.contactPreference === "email";
+    if (shouldSendForms && selectedNewClientFormIds.length === 0) {
+      toast({ title: "Selection Required", description: "Select at least one intake form to send.", variant: "destructive" });
+      return;
+    }
+
+    if (recoveredClientId) {
+      setIsRetryingCreatedForms(true);
+      apiRequest("POST", "/api/form-deliveries/send", { clientId: recoveredClientId, formIds: selectedNewClientFormIds })
+        .then((response) => response.json())
+        .then((delivery) => {
+          if (!delivery.success) throw new Error("Some forms could not be sent");
+          setRecoveredClientId(null);
+          setIsRetryingCreatedForms(false);
+          setSelectedNewClientFormIds([]);
+          setIsNewClientOpen(false);
+          queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+          toast({ title: "Forms Sent", description: "The created client's forms were sent successfully." });
+        })
+        .catch(() => {
+          setIsRetryingCreatedForms(false);
+          toast({ title: "Forms still not sent", description: "Client was created; failed forms remain selected for retry.", variant: "destructive" });
+        });
+      return;
+    }
 
     const clientData: Record<string, unknown> = {
         displayId: newClientData.wNumber.toUpperCase().startsWith("W") ? newClientData.wNumber.toUpperCase() : `W${newClientData.wNumber.toUpperCase()}`,
@@ -1159,7 +1224,7 @@ export default function Clients() {
         clientData.contactPreference = newClientData.contactPreference;
     }
 
-    createClientMutation.mutate(clientData);
+    createClientMutation.mutate({ clientData, formIds: selectedNewClientFormIds });
   };
 
   // Helper to determine if a clinician matches the client's needs
@@ -1462,6 +1527,26 @@ export default function Clients() {
                         />
                     </div>
 
+                    {formsEnabled && forms.length > 0 && contactPreferenceEnabled && newClientData.contactPreference === "email" && (
+                      <div className="grid gap-2">
+                        <Label>Intake forms to send</Label>
+                        <p className="text-xs text-muted-foreground">Selected forms will be sent after the referral is created.</p>
+                        <div className="space-y-2">
+                          {forms.map((form) => (
+                            <label key={form.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                              <Checkbox
+                                checked={selectedNewClientFormIds.includes(form.id)}
+                                onCheckedChange={(checked) => setSelectedNewClientFormIds((current) =>
+                                  checked ? [...current, form.id] : current.filter((id) => id !== form.id)
+                                )}
+                              />
+                              {form.title}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     {contactPreferenceEnabled && (
                         <div className="grid gap-2">
                             <Label>Next Step</Label>
@@ -1475,7 +1560,10 @@ export default function Clients() {
                                 </button>
                                 <button
                                     type="button"
-                                    onClick={() => setNewClientData({...newClientData, contactPreference: "phone"})}
+                                    onClick={() => {
+                                      setNewClientData({...newClientData, contactPreference: "phone"});
+                                      setSelectedNewClientFormIds([]);
+                                    }}
                                     className={`flex-1 rounded-md border px-3 py-2 text-sm font-medium transition-colors ${newClientData.contactPreference === "phone" ? "border-primary bg-primary/10 text-primary" : "border-border bg-background text-muted-foreground hover:bg-muted"}`}
                                 >
                                     Call client
@@ -1485,7 +1573,15 @@ export default function Clients() {
                     )}
                 </div>
                 <DialogFooter>
-                    <Button onClick={handleCreateClient}>Create Referral</Button>
+                    <Button onClick={handleCreateClient} disabled={createClientMutation.isPending || isRetryingCreatedForms}>
+                      {createClientMutation.isPending || isRetryingCreatedForms
+                        ? "Creating…"
+                        : recoveredClientId
+                          ? "Retry sending forms"
+                          : (contactPreferenceEnabled && newClientData.contactPreference === "email")
+                          ? "Create client and send forms"
+                          : (contactPreferenceEnabled ? "Create client for call" : "Create client")}
+                    </Button>
                 </DialogFooter>
             </DialogContent>
         </Dialog>
@@ -2277,6 +2373,11 @@ export default function Clients() {
                             <p className="text-xs text-muted-foreground">
                                 {form.description}
                             </p>
+                            {formDeliveryStates[form.id] && (
+                              <p className={`text-xs font-medium ${formDeliveryStates[form.id] === "failed" ? "text-destructive" : "text-muted-foreground"}`}>
+                                {formDeliveryStates[form.id] === "failed" ? "Delivery failed — retry selected" : formDeliveryStates[form.id] === "completed" ? "Completed" : formDeliveryStates[form.id] === "sent" ? "Sent" : "Ready to send"}
+                              </p>
+                            )}
                         </div>
                         <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => handlePreviewForm(form.id)}>
                             <Eye className="h-3 w-3 mr-1" /> Preview
@@ -2287,7 +2388,7 @@ export default function Clients() {
             <DialogFooter>
                 <Button variant="outline" onClick={() => setIsSendFormsOpen(false)}>Cancel</Button>
                 <Button onClick={handleSendForms} disabled={selectedFormIds.length === 0}>
-                    <Mail className="h-4 w-4 mr-2" /> Send {selectedFormIds.length > 0 ? `(${selectedFormIds.length})` : ""}
+                    <Mail className="h-4 w-4 mr-2" /> {selectedFormIds.some((id) => formDeliveryStates[id] === "failed") ? "Retry selected" : "Send"} {selectedFormIds.length > 0 ? `(${selectedFormIds.length})` : ""}
                 </Button>
             </DialogFooter>
         </DialogContent>

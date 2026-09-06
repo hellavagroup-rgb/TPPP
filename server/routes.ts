@@ -22,7 +22,7 @@ import { syncAllActiveConnections } from "./gmailSync";
 import { requireTenant } from './middleware/tenant';
 import { requireSuperAdmin } from './middleware/superAdmin';
 import { db } from "./db";
-import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs, intakeMessages, gmailConnections, paymentCharges, clientClinicianOptions } from "@shared/schema";
+import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, formDeliveries, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs, intakeMessages, gmailConnections, paymentCharges, clientClinicianOptions } from "@shared/schema";
 import { isStripeConfigured, getStripeInstance, createPaymentLink, chargeOffSession, constructWebhookEvent } from "./stripe";
 import { encryptSecret, decryptSecret, isEncryptionConfigured } from "./encryption";
 import { getAuthUrl, exchangeCodeForTokens, syncConnection, buildRedirectUri } from "./gmailSync";
@@ -37,6 +37,7 @@ import {
   registrationRetryResponse,
   validateRegistrationConsent,
 } from "./registrationWorkflow";
+import { executeFormDeliveryBatch, FormDeliveryRequestError, submittedPacketIsComplete } from "./formDeliveryWorkflow";
 
 function formatActivitySlot(slot: { type?: string | null; day?: string | null; date?: string | null; startTime?: string | null; endTime?: string | null; locationType?: string | null }): string {
   const day = slot.type === "SpecificDate" ? slot.date : slot.day;
@@ -1098,14 +1099,22 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/clients", requireAdmin, auditLog("create", "client"), async (req, res) => {
+  app.post("/api/clients", requireAdmin, async (req, res) => {
     try {
       const validated = insertClientSchema.parse(req.body);
       // CY&A: auto-set needsAdminCall when contact preference is phone
       const clientDataToCreate = validated.contactPreference === "phone"
         ? { ...validated, needsAdminCall: true }
         : validated;
-      const client = await storage.createClient(clientDataToCreate, req.tenant?.id);
+      if (!req.tenant?.id) return res.status(403).json({ error: "Tenant context is required" });
+      const idempotencyKey = typeof req.header("Idempotency-Key") === "string"
+        ? req.header("Idempotency-Key")!.trim()
+        : "";
+      if (idempotencyKey.length > 200) return res.status(400).json({ error: "Invalid Idempotency-Key" });
+      const { client, created } = await storage.createClientIdempotently(clientDataToCreate, req.tenant.id, idempotencyKey || undefined);
+      // A repeated request must return the original response without sending
+      // another referral notification or writing duplicate activity.
+      if (!created) return res.json(client);
 
       // Send new referral notification to admins with newReferrals enabled
       try {
@@ -1155,6 +1164,12 @@ export async function registerRoutes(
         return res.status(403).json({ error: "Access denied" });
       }
       const oldStatus = currentClient?.status;
+      if (req.body.status === "Forms Completed") {
+        const deliveries = req.tenant?.id ? await storage.getFormDeliveries(currentClient.id, req.tenant.id) : [];
+        if (deliveries.some((delivery) => delivery.status !== "completed")) {
+          return res.status(400).json({ error: "All delivered forms must be completed before marking this client complete" });
+        }
+      }
 
       // Validate displayId change if provided
       if (req.body.displayId && req.body.displayId !== currentClient.displayId) {
@@ -1915,6 +1930,12 @@ export async function registerRoutes(
       if (form.tenantId !== client.tenantId) {
         return res.status(403).json({ error: "Form does not belong to this practice" });
       }
+      const existingDelivery = client.tenantId
+        ? (await storage.getFormDeliveries(clientId, client.tenantId)).find((delivery) => delivery.formTemplateId === formId)
+        : undefined;
+      if (existingDelivery?.status === "completed") {
+        return res.status(400).json({ error: "Form already submitted" });
+      }
 
       // Verify client is in a state that allows form submission (Forms Sent)
       if (client.status !== "Forms Sent" && client.status !== "New") {
@@ -1957,15 +1978,29 @@ export async function registerRoutes(
         }
       }
 
-      // Update client status to "Forms Completed" with timestamp and insurer if found
-      const clientUpdate: { status: "Forms Completed"; formsCompletedAt: Date; insurer?: string } = { 
-        status: "Forms Completed",
-        formsCompletedAt: new Date()
-      };
+      // A client is complete only after every form that was delivered has a
+      // completed submission. This prevents the first form in a packet from
+      // prematurely advancing the workflow.
+      const completedAt = new Date();
+      if (existingDelivery && client.tenantId) {
+        await db.update(formDeliveries).set({ status: "completed", completedAt, updatedAt: completedAt })
+          .where(and(
+            eq(formDeliveries.clientId, clientId),
+            eq(formDeliveries.formTemplateId, formId),
+            eq(formDeliveries.tenantId, client.tenantId),
+          ));
+      }
+      const deliveries = client.tenantId ? await storage.getFormDeliveries(clientId, client.tenantId) : [];
+      const allFormsComplete = submittedPacketIsComplete(deliveries.map((delivery) => delivery.status));
+      const clientUpdate: { status?: "Forms Completed"; formsCompletedAt?: Date; insurer?: string } = {};
+      if (allFormsComplete) {
+        clientUpdate.status = "Forms Completed";
+        clientUpdate.formsCompletedAt = client.formsCompletedAt || completedAt;
+      }
       if (insurerValue) {
         clientUpdate.insurer = insurerValue;
       }
-      await storage.updateClient(clientId, clientUpdate);
+      if (Object.keys(clientUpdate).length > 0) await storage.updateClient(clientId, clientUpdate);
       const completionTenant = client.tenantId ? await storage.getTenantById(client.tenantId) : null;
       const completionTenantContext = completionTenant
         ? { id: completionTenant.id, name: completionTenant.name, fromEmail: completionTenant.fromEmail, primaryColor: completionTenant.primaryColor }
@@ -2834,62 +2869,54 @@ export async function registerRoutes(
 
   // ============ EMAIL ROUTES ============
   
-  // Send form to client via email
-  app.post("/api/email/send-form", requireAdmin, async (req, res) => {
+  app.get("/api/clients/:clientId/form-deliveries", requireAdmin, async (req, res) => {
+    const client = await storage.getClientById(req.params.clientId);
+    if (!client) return res.status(404).json({ error: "Client not found" });
+    if (client.tenantId !== req.tenant?.id) return res.status(403).json({ error: "Access denied" });
+    res.json(await storage.getFormDeliveries(client.id, req.tenant.id));
+  });
+
+  // One batch operation is used by the new UI and the legacy single-form
+  // endpoint. Delivery records are created before provider calls so retries
+  // retain the exact same provider idempotency key.
+  const sendFormDeliveryBatch = async (req: Request, res: Response) => {
     try {
-      const { clientId, formId } = req.body;
-      
-      if (!clientId || !formId) {
-        return res.status(400).json({ error: "Missing clientId or formId" });
-      }
-
-      // Get client and form details
-      const client = await storage.getClientById(clientId);
-      if (!client) {
-        return res.status(404).json({ error: "Client not found" });
-      }
-      if (client.tenantId !== req.tenant?.id) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      const form = await storage.getFormTemplateById(formId);
-      if (!form) {
-        return res.status(404).json({ error: "Form not found" });
-      }
-      if (form.tenantId !== req.tenant?.id) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      // Generate form URL - use request host for correct URL
+      const clientId = req.body?.clientId;
+      const formIds = Array.isArray(req.body?.formIds)
+        ? Array.from(new Set(req.body.formIds.filter((id: unknown): id is string => typeof id === "string" && id.length > 0)))
+        : typeof req.body?.formId === "string" ? [req.body.formId] : [];
+      if (!req.tenant?.id) return res.status(403).json({ error: "Access denied" });
       const protocol = req.headers['x-forwarded-proto'] || 'https';
       const host = req.headers.host || 'localhost:5000';
       const baseUrl = `${protocol}://${host}`;
-      const formUrl = `${baseUrl}/fill/${client.id}/${formId}`;
-
-      // Generate and send email
-      const tcF = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor } : undefined;
-      const emailOptions = await generateFormInviteEmail(form.title, formUrl, tcF);
-      emailOptions.to = client.email;
-
-      const result = await sendEmail(emailOptions);
-      
-      if (!result.success) {
-        return res.status(500).json({ error: result.error || "Failed to send email" });
-      }
-
-      // Update client status to "Forms Sent" with timestamp
-      await storage.updateClient(clientId, { status: "Forms Sent", formsSentAt: new Date() });
-      await recordActivity(req, "activity_form_sent", "form", form.id, {
-        clientDisplayId: client.displayId || "Client",
-        formTitle: form.title,
+      const result = await executeFormDeliveryBatch({
+        tenant: { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor },
+        clientId, formIds, baseUrl,
+      }, {
+        getClient: (id) => storage.getClientById(id),
+        getForm: (id) => storage.getFormTemplateById(id),
+        prepare: (id, ids, tenantId) => storage.prepareFormDeliveries(id, ids, tenantId),
+        list: (id, tenantId) => storage.getFormDeliveries(id, tenantId),
+        claim: (id, tenantId, lease, stale) => storage.claimFormDelivery(id, tenantId, lease, stale),
+        finish: (id, tenantId, lease, status, error) => storage.finishFormDeliveryClaim(id, tenantId, lease, status, error),
+        updateClient: (id, updates) => storage.updateClient(id, updates),
+        buildEmail: (form, url, tenant) => generateFormInviteEmail(form.title, url, tenant),
+        sendEmail,
+        activity: (action, form, client, details = {}) => recordActivity(req, action, "form", form.id, {
+          clientDisplayId: client.displayId, formTitle: form.title, ...details,
+        }, req.tenant!.id),
+        uuid: () => crypto.randomUUID(),
+        now: () => new Date(),
       });
-
-      res.json({ success: true, message: "Form sent successfully" });
+      res.json(result);
     } catch (error) {
+      if (error instanceof FormDeliveryRequestError) return res.status(error.statusCode).json({ error: error.message });
       console.error("Send form email error:", error);
       res.status(500).json({ error: "Failed to send form email" });
     }
-  });
+  };
+  app.post("/api/form-deliveries/send", requireAdmin, sendFormDeliveryBatch);
+  app.post("/api/email/send-form", requireAdmin, sendFormDeliveryBatch);
 
   // Send task reminder email
   app.post("/api/email/task-reminder", requireAdmin, async (req, res) => {

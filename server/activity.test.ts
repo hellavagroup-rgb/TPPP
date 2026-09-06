@@ -140,6 +140,23 @@ describe("recent activity mapping", () => {
     expect(event.description).toContain("Initial Assessment");
   });
 
+  it("makes failed and retried deliveries visible as form activity", () => {
+    const failed = toRecentActivityItem(activityLog({
+      action: "activity_form_delivery_failed",
+      resourceType: "form",
+      details: { clientDisplayId: "W555", formTitle: "Initial Assessment" },
+    }));
+    const retried = toRecentActivityItem(activityLog({
+      action: "activity_form_delivery_retried",
+      resourceType: "form",
+      details: { clientDisplayId: "W555", formTitle: "Initial Assessment" },
+    }));
+
+    expect(failed).toMatchObject({ eventType: "form", title: "Form delivery failed" });
+    expect(failed.description).toContain("W555");
+    expect(retried).toMatchObject({ eventType: "form", title: "Form delivery retried" });
+  });
+
   it("includes archive, restore, client-edit, and form-template lifecycle events", () => {
     const expectedTitles = [
       ["activity_client_details_updated", "Client details updated"],

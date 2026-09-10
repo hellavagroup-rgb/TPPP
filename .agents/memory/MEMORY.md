@@ -5,6 +5,7 @@
 - [require() throws in ESM projects at runtime](esm-require-runtime-error.md) — stray require() compiles fine under tsx but throws ReferenceError only when that code path actually runs.
 - [HTML emails do not auto-linkify plain-text URLs](email-html-autolinkify.md) — a shared plain-text-to-HTML email wrapper must explicitly wrap URLs in `<a href>`, or links render as inert text.
 - [Per-tenant feature flags must be checked on every page](tenant-feature-flags-per-page.md) — gating a field in the admin view doesn't gate it elsewhere; each page rendering that data needs its own check.
+- [Feature flags must not hide workflow records](feature-flags-record-visibility.md) — flags may change actions and labels, but status-based client visibility must remain stable.
 - [Production demo tenant](production-demo-tenant.md) — "Wellness Demo Practice" is a real, intentional third prod tenant seeded with fake data for video recording; don't treat as a leak or delete it.
 - [Multi-tenant webhook tenant identification](multi-tenant-webhook-identification.md) — never pick a per-tenant secret by reading unverified event metadata; verify against every candidate secret instead.
 - [Shared sender address causes stale display-name caching](shared-sender-address-name-caching.md) — a correct per-tenant "From" header can still show an old name if a mail client cached it for the shared address.

@@ -1,5 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Client, ClientStatus, FormTemplate } from "@/lib/mockData";
+import {
+  isAwaitingConfirmationStatus,
+  isMatchedAllocationStatus,
+} from "@/lib/clientWorkflowColumns";
 import { formatDateUK, formatAssignedSlot } from "@/lib/dateUtils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -1862,20 +1866,20 @@ export default function Clients() {
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-semibold text-indigo-800 text-sm">{multiClinicianAllocationEnabled ? "Matched" : "Allocated"}</h3>
               <Badge variant="secondary" className="bg-indigo-100 text-indigo-700">
-                {filteredClients.filter(c => multiClinicianAllocationEnabled ? (["Assigned","OptionsSent","OptionSelected"] as string[]).includes(c.status) : c.status === "Assigned").length}
+                {filteredClients.filter(c => isMatchedAllocationStatus(c.status)).length}
               </Badge>
             </div>
             <div className="space-y-2">
-              {filteredClients.filter(c => multiClinicianAllocationEnabled ? (["Assigned","OptionsSent","OptionSelected"] as string[]).includes(c.status) : c.status === "Assigned").map(client => (
+              {filteredClients.filter(c => isMatchedAllocationStatus(c.status)).map(client => (
                 <Card key={client.id} className="bg-white shadow-sm hover:shadow-md transition-shadow cursor-pointer overflow-hidden" data-testid={`kanban-card-${client.id}`}>
                   <CardContent className="p-3">
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex flex-col gap-1">
                         <span className="font-mono font-semibold text-sm">{client.displayId}</span>
-                        {multiClinicianAllocationEnabled && client.status === "OptionsSent" && (
+                        {client.status === "OptionsSent" && (
                           <span className="inline-flex items-center text-[9px] px-1.5 py-0 rounded-full bg-orange-100 text-orange-700 border border-orange-200 w-fit">Options Sent</span>
                         )}
-                        {multiClinicianAllocationEnabled && client.status === "OptionSelected" && (
+                        {client.status === "OptionSelected" && (
                           <span className="inline-flex items-center text-[9px] px-1.5 py-0 rounded-full bg-teal-100 text-teal-700 border border-teal-200 w-fit">Option Selected</span>
                         )}
                       </div>
@@ -2035,7 +2039,7 @@ export default function Clients() {
                   </CardContent>
                 </Card>
               ))}
-              {filteredClients.filter(c => multiClinicianAllocationEnabled ? (["Assigned","OptionsSent","OptionSelected"] as string[]).includes(c.status) : c.status === "Assigned").length === 0 && (
+              {filteredClients.filter(c => isMatchedAllocationStatus(c.status)).length === 0 && (
                 <p className="text-xs text-muted-foreground text-center py-4">No clients</p>
               )}
             </div>
@@ -2046,11 +2050,11 @@ export default function Clients() {
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-semibold text-purple-800 text-sm">Awaiting Confirmation</h3>
               <Badge variant="secondary" className="bg-purple-100 text-purple-700">
-                {filteredClients.filter(c => multiClinicianAllocationEnabled ? (["AwaitingConfirmation","RegistrationPending","BookingConfirmed"] as string[]).includes(c.status) : c.status === "AwaitingConfirmation").length}
+                {filteredClients.filter(c => isAwaitingConfirmationStatus(c.status)).length}
               </Badge>
             </div>
             <div className="space-y-2">
-              {filteredClients.filter(c => multiClinicianAllocationEnabled ? (["AwaitingConfirmation","RegistrationPending","BookingConfirmed"] as string[]).includes(c.status) : c.status === "AwaitingConfirmation").map(client => {
+              {filteredClients.filter(c => isAwaitingConfirmationStatus(c.status)).map(client => {
                 const apptConfirmed = (client as any).writeuppAppointmentConfirmed === true;
                 const dataTransferred = (client as any).writeuppDataTransferred === true;
                 const bothTicked = apptConfirmed && dataTransferred;
@@ -2060,10 +2064,10 @@ export default function Clients() {
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex flex-col gap-1">
                           <span className="font-mono font-semibold text-sm">{client.displayId}</span>
-                          {multiClinicianAllocationEnabled && client.status === "RegistrationPending" && (
+                          {client.status === "RegistrationPending" && (
                             <span className="inline-flex items-center text-[9px] px-1.5 py-0 rounded-full bg-violet-100 text-violet-700 border border-violet-200 w-fit">Registration Pending</span>
                           )}
-                          {multiClinicianAllocationEnabled && client.status === "BookingConfirmed" && (
+                          {client.status === "BookingConfirmed" && (
                             <span className="inline-flex items-center text-[9px] px-1.5 py-0 rounded-full bg-green-100 text-green-700 border border-green-200 w-fit">Booking Confirmed</span>
                           )}
                         </div>
@@ -2224,7 +2228,7 @@ export default function Clients() {
                   </Card>
                 );
               })}
-              {filteredClients.filter(c => multiClinicianAllocationEnabled ? (["AwaitingConfirmation","RegistrationPending","BookingConfirmed"] as string[]).includes(c.status) : c.status === "AwaitingConfirmation").length === 0 && (
+              {filteredClients.filter(c => isAwaitingConfirmationStatus(c.status)).length === 0 && (
                 <p className="text-xs text-muted-foreground text-center py-4">No clients</p>
               )}
             </div>

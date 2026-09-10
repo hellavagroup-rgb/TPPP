@@ -4224,6 +4224,31 @@ export async function registerRoutes(
           : parsedNextStep === "phone" || parsedNextStep === "email"
           ? parsedNextStep
           : undefined;
+      const requestedFormIds = Array.isArray(req.body?.formIds)
+        ? Array.from(new Set(req.body.formIds.filter(
+            (id: unknown): id is string => typeof id === "string" && id.length > 0,
+          )))
+        : [];
+      if (req.tenant.contactPreferenceEnabled && !contactPreference) {
+        return res.status(400).json({ error: "Choose whether to send the intake form or call the client" });
+      }
+      if (contactPreference === "email") {
+        if (!req.tenant.formsEnabled) {
+          return res.status(400).json({ error: "Forms must be enabled before an intake form can be sent" });
+        }
+        if (requestedFormIds.length === 0) {
+          return res.status(400).json({ error: "Select an intake form to send" });
+        }
+        const requestedForms = await Promise.all(
+          requestedFormIds.map((id) => storage.getFormTemplateById(id)),
+        );
+        if (requestedForms.some((form) => !form)) {
+          return res.status(404).json({ error: "Selected intake form not found" });
+        }
+        if (requestedForms.some((form) => form!.tenantId !== req.tenant!.id)) {
+          return res.status(403).json({ error: "Access denied" });
+        }
+      }
 
       const [newClient] = await db.insert(clients).values({
         displayId,
@@ -4239,11 +4264,51 @@ export async function registerRoutes(
         needsAdminCall: contactPreference === "phone" ? true : false,
       }).returning();
 
+      let formDelivery = null;
+      if (contactPreference === "email") {
+        const protocol = req.headers["x-forwarded-proto"] || "https";
+        const host = req.headers.host || "localhost:5000";
+        formDelivery = await executeFormDeliveryBatch({
+          tenant: {
+            id: req.tenant.id,
+            name: req.tenant.name,
+            fromEmail: req.tenant.fromEmail,
+            primaryColor: req.tenant.primaryColor,
+          },
+          clientId: newClient.id,
+          formIds: requestedFormIds,
+          baseUrl: `${protocol}://${host}`,
+        }, {
+          getClient: (id) => storage.getClientById(id),
+          getForm: (id) => storage.getFormTemplateById(id),
+          prepare: (id, ids, tenantId) => storage.prepareFormDeliveries(id, ids, tenantId),
+          list: (id, tenantId) => storage.getFormDeliveries(id, tenantId),
+          claim: (id, tenantId, lease, stale) => storage.claimFormDelivery(id, tenantId, lease, stale),
+          finish: (id, tenantId, lease, status, error) => storage.finishFormDeliveryClaim(id, tenantId, lease, status, error),
+          updateClient: (id, updates) => storage.updateClient(id, updates),
+          buildEmail: (form, url, tenantContext) => generateFormInviteEmail(form.title, url, tenantContext),
+          sendEmail,
+          activity: (action, form, convertedClient, details = {}) => recordActivity(req, action, "form", form.id, {
+            clientDisplayId: convertedClient.displayId,
+            formTitle: form.title,
+            ...details,
+          }, req.tenant!.id),
+          uuid: () => crypto.randomUUID(),
+          now: () => new Date(),
+        });
+      }
+
       await db
         .update(intakeMessages)
         .set({ status: "linked", linkedClientId: newClient.id })
         .where(eq(intakeMessages.id, message.id));
-      res.json({ success: true, client: newClient });
+      const currentClient = await storage.getClientById(newClient.id);
+      res.json({
+        success: contactPreference !== "email" || formDelivery?.success === true,
+        client: currentClient || newClient,
+        nextStep: contactPreference || null,
+        formDelivery,
+      });
     } catch (error: any) {
       console.error("[convert-to-client] error:", error?.code, error?.message, error);
       // Drizzle wraps the underlying postgres error — the code may be on error.cause

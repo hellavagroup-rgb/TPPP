@@ -10,8 +10,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Mail, UserPlus, EyeOff, Eye, RefreshCw, AlertTriangle } from "lucide-react";
 import { format } from "date-fns";
+import { classifyIntakeNextStepAnswer } from "@shared/intakeNextStep";
 
 interface IntakeMessage {
   id: string;
@@ -26,6 +28,11 @@ interface IntakeMessage {
   linkedClientId: string | null;
   receivedAt: string;
   threadId: string | null;
+}
+
+interface IntakeFormOption {
+  id: string;
+  title: string;
 }
 
 const STATUS_BADGE: Record<IntakeMessage["status"], { label: string; variant: "default" | "secondary" | "outline" }> = {
@@ -95,10 +102,15 @@ export default function IntakeInbox() {
   const [viewingMessage, setViewingMessage] = useState<IntakeMessage | null>(null);
   const [convertingMessage, setConvertingMessage] = useState<IntakeMessage | null>(null);
   const [overrideNextStep, setOverrideNextStep] = useState<"email" | "phone" | null>(null);
+  const [selectedIntakeFormId, setSelectedIntakeFormId] = useState<string>("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [showIgnored, setShowIgnored] = useState(false);
 
-  const { data: tenant } = useQuery<{ contactPreferenceEnabled?: boolean }>({
+  const { data: tenant } = useQuery<{
+    contactPreferenceEnabled?: boolean;
+    formsEnabled?: boolean;
+    registrationFormTemplateId?: string | null;
+  }>({
     queryKey: ["/api/tenant"],
     queryFn: async () => {
       const res = await apiRequest("GET", "/api/tenant");
@@ -108,6 +120,18 @@ export default function IntakeInbox() {
   });
 
   const contactPreferenceEnabled = tenant?.contactPreferenceEnabled === true;
+  const { data: forms = [] } = useQuery<IntakeFormOption[]>({
+    queryKey: ["/api/forms"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/forms");
+      if (!res.ok) throw new Error("Failed to load forms");
+      return res.json();
+    },
+  });
+  const intakeForms = forms.filter((form) => form.id !== tenant?.registrationFormTemplateId);
+  const defaultIntakeForm = intakeForms.find((form) =>
+    /intake/i.test(form.title) && !/draft|do not use/i.test(form.title),
+  ) || intakeForms[0];
 
   const { data: messages = [], isLoading } = useQuery<IntakeMessage[]>({
     queryKey: ["/api/intake-messages"],
@@ -140,11 +164,16 @@ export default function IntakeInbox() {
   }
 
   const convertMutation = useMutation({
-    mutationFn: async ({ id, contactPreference }: { id: string; contactPreference?: "email" | "phone" | null }) => {
-      const body: Record<string, string> = {};
+    mutationFn: async ({ id, contactPreference, formIds }: {
+      id: string;
+      contactPreference?: "email" | "phone" | null;
+      formIds?: string[];
+    }) => {
+      const body: { contactPreference?: "email" | "phone"; formIds?: string[] } = {};
       if (contactPreference === "email" || contactPreference === "phone") {
         body.contactPreference = contactPreference;
       }
+      if (contactPreference === "email" && formIds?.length) body.formIds = formIds;
       const res = await fetch(`/api/intake-messages/${id}/convert-to-client`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -158,10 +187,26 @@ export default function IntakeInbox() {
       return res.json();
     },
     onSuccess: (data) => {
-      toast({
-        title: "Client record created",
-        description: `Created with pending ID ${data.client?.displayId}. Assign a WriteUpp W-number once allocated.`,
-      });
+      toast(data.nextStep === "email" && data.formDelivery?.success !== true
+        ? {
+            title: "Client created, but form not sent",
+            description: `${data.client?.displayId} remains Pending. Open the client record to retry sending the form.`,
+            variant: "destructive",
+          }
+        : data.nextStep === "email"
+        ? {
+            title: "Client created and intake form sent",
+            description: `${data.client?.displayId} has moved to Forms Sent.`,
+          }
+        : data.nextStep === "phone"
+        ? {
+            title: "Client created — call required",
+            description: `${data.client?.displayId} is marked for an administrator call.`,
+          }
+        : {
+            title: "Client record created",
+            description: `Created with pending ID ${data.client?.displayId}.`,
+          });
       setConvertingMessage(null);
       queryClient.invalidateQueries({ queryKey: ["/api/intake-messages"] });
       queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
@@ -377,10 +422,9 @@ export default function IntakeInbox() {
                                 onClick={() => {
                                   // Derive the parser's detected next step from extractedData to pre-fill the dialog
                                   const nextStepValue = extractedField(msg.extractedData, "next step", "helpful next", "most helpful", "what would");
-                                  const detectedNextStep: "email" | "phone" | null = nextStepValue
-                                    ? (/call/i.test(nextStepValue) ? "phone" : "email")
-                                    : null;
+                                  const detectedNextStep = classifyIntakeNextStepAnswer(nextStepValue);
                                   setOverrideNextStep(detectedNextStep);
+                                  setSelectedIntakeFormId(detectedNextStep === "email" ? (defaultIntakeForm?.id || "") : "");
                                   setConvertingMessage(msg);
                                 }}
                               >
@@ -436,10 +480,22 @@ export default function IntakeInbox() {
           open={!!convertingMessage}
           contactPreferenceEnabled={contactPreferenceEnabled}
           overrideNextStep={overrideNextStep}
-          onChangeNextStep={setOverrideNextStep}
+          onChangeNextStep={(value) => {
+            setOverrideNextStep(value);
+            if (value === "email" && !selectedIntakeFormId) {
+              setSelectedIntakeFormId(defaultIntakeForm?.id || "");
+            }
+          }}
+          intakeForms={intakeForms}
+          selectedIntakeFormId={selectedIntakeFormId}
+          onChangeIntakeForm={setSelectedIntakeFormId}
           isPending={convertMutation.isPending}
           onConfirm={() =>
-            convertMutation.mutate({ id: convertingMessage.id, contactPreference: overrideNextStep })
+            convertMutation.mutate({
+              id: convertingMessage.id,
+              contactPreference: overrideNextStep,
+              formIds: overrideNextStep === "email" && selectedIntakeFormId ? [selectedIntakeFormId] : [],
+            })
           }
           onClose={() => setConvertingMessage(null)}
         />
@@ -454,6 +510,9 @@ interface ConvertConfirmDialogProps {
   contactPreferenceEnabled: boolean;
   overrideNextStep: "email" | "phone" | null;
   onChangeNextStep: (v: "email" | "phone") => void;
+  intakeForms: IntakeFormOption[];
+  selectedIntakeFormId: string;
+  onChangeIntakeForm: (id: string) => void;
   isPending: boolean;
   onConfirm: () => void;
   onClose: () => void;
@@ -465,6 +524,9 @@ function ConvertConfirmDialog({
   contactPreferenceEnabled,
   overrideNextStep,
   onChangeNextStep,
+  intakeForms,
+  selectedIntakeFormId,
+  onChangeIntakeForm,
   isPending,
   onConfirm,
   onClose,
@@ -574,6 +636,34 @@ function ConvertConfirmDialog({
                 <Label htmlFor="cp-phone">Call client</Label>
               </div>
             </RadioGroup>
+            {overrideNextStep === "email" && (
+              <div className="mt-3 space-y-2">
+                <Label htmlFor="intake-form">Intake form to send</Label>
+                <Select value={selectedIntakeFormId} onValueChange={onChangeIntakeForm}>
+                  <SelectTrigger id="intake-form" data-testid="select-intake-form">
+                    <SelectValue placeholder="Select an intake form" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {intakeForms.map((form) => (
+                      <SelectItem key={form.id} value={form.id}>{form.title}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Confirming will create the client, send this form, and move them to Forms Sent.
+                </p>
+              </div>
+            )}
+            {overrideNextStep === "phone" && (
+              <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                This client asked for a call. Confirming will mark the new client record as requiring an administrator call.
+              </div>
+            )}
+            {!overrideNextStep && (
+              <p className="mt-3 text-xs text-muted-foreground">
+                The client was not sure what should happen next. Choose whether to send the intake form or call them.
+              </p>
+            )}
           </div>
         )}
 
@@ -583,10 +673,23 @@ function ConvertConfirmDialog({
           </Button>
           <Button
             onClick={onConfirm}
-            disabled={isPending || !dupChecked}
+            disabled={
+              isPending
+              || !dupChecked
+              || (contactPreferenceEnabled && !overrideNextStep)
+              || (overrideNextStep === "email" && !selectedIntakeFormId)
+            }
             data-testid="button-confirm-convert"
           >
-            {isPending ? "Converting…" : !dupChecked ? "Checking…" : "Confirm"}
+            {isPending
+              ? "Converting…"
+              : !dupChecked
+              ? "Checking…"
+              : overrideNextStep === "email"
+              ? "Confirm and send intake form"
+              : overrideNextStep === "phone"
+              ? "Confirm — call required"
+              : "Confirm"}
           </Button>
         </DialogFooter>
       </DialogContent>

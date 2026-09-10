@@ -1,3 +1,5 @@
+import { classifyIntakeNextStepAnswer } from "@shared/intakeNextStep";
+
 /**
  * Parses structured label/value email bodies produced by web intake forms.
  *
@@ -91,8 +93,7 @@ function buildResult(fields: Record<string, string>): ParsedIntakeEmail {
     if (matchesAny(label, EMAIL_LABELS) && !email) email = value;
     if (matchesAny(label, PHONE_LABELS) && !phone) phone = value;
     if (matchesNextStep(label) && !nextStep) {
-      // Answer containing "call" → phone workflow; anything else → email (send intake form)
-      nextStep = /call/i.test(value) ? "phone" : "email";
+      nextStep = classifyIntakeNextStepAnswer(value);
     }
   }
   return { fields, name, email, phone, nextStep };

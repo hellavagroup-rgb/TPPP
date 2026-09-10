@@ -19,6 +19,7 @@ import { forceReseedDatabase } from "./seed";
 import { seedDemoData } from "./seedDemo";
 import { parseIntakeEmailBody } from "./intakeParser";
 import { buildIntakeClientSummary } from "./intakeClientSummary";
+import { findUniqueOrphanedIntakeMessageId } from "./intakeMessageLinking";
 import { syncAllActiveConnections } from "./gmailSync";
 import { requireTenant } from './middleware/tenant';
 import { requireSuperAdmin } from './middleware/superAdmin';
@@ -4258,25 +4259,43 @@ export async function registerRoutes(
         }
       }
 
-      const [newClient] = await db.insert(clients).values({
-        displayId,
-        email: clientEmail,
-        phone: clientPhone || null,
-        referralSource: "Online Intake Form",
-        presentingIssues: presentingRaw ? [presentingRaw] : [],
-        insurer: insurerRaw ?? null,
-        status: "New",
-        tenantId: req.tenant.id,
-        notes: notes ?? null,
-        contactPreference: contactPreference ?? null,
-        needsAdminCall: contactPreference === "phone" ? true : false,
-      }).returning();
+      // Create the client and preserve its source enquiry in one transaction.
+      // External form delivery happens afterwards and cannot orphan the link.
+      const newClient = await db.transaction(async (tx) => {
+        const [created] = await tx.insert(clients).values({
+          displayId,
+          email: clientEmail,
+          phone: clientPhone || null,
+          referralSource: "Online Intake Form",
+          presentingIssues: presentingRaw ? [presentingRaw] : [],
+          insurer: insurerRaw ?? null,
+          status: "New",
+          tenantId: req.tenant!.id,
+          notes: notes ?? null,
+          contactPreference: contactPreference ?? null,
+          needsAdminCall: contactPreference === "phone",
+        }).returning();
+        if (!created) throw new Error("INTAKE_CLIENT_NOT_CREATED");
+
+        const linked = await tx
+          .update(intakeMessages)
+          .set({ status: "linked", linkedClientId: created.id })
+          .where(and(
+            eq(intakeMessages.id, message.id),
+            eq(intakeMessages.tenantId, req.tenant!.id),
+            eq(intakeMessages.status, "new"),
+          ))
+          .returning({ id: intakeMessages.id });
+        if (!linked.length) throw new Error("INTAKE_MESSAGE_NOT_LINKED");
+        return created;
+      });
 
       let formDelivery = null;
       if (contactPreference === "email") {
         const protocol = req.headers["x-forwarded-proto"] || "https";
         const host = req.headers.host || "localhost:5000";
-        formDelivery = await executeFormDeliveryBatch({
+        try {
+          formDelivery = await executeFormDeliveryBatch({
           tenant: {
             id: req.tenant.id,
             name: req.tenant.name,
@@ -4303,13 +4322,17 @@ export async function registerRoutes(
           }, req.tenant!.id),
           uuid: () => crypto.randomUUID(),
           now: () => new Date(),
-        });
+          });
+        } catch (deliveryError) {
+          console.error("Converted client created, but intake form delivery failed:", deliveryError);
+          formDelivery = {
+            success: false,
+            outcomes: [],
+            message: "Client created, but the intake form could not be sent",
+          };
+        }
       }
 
-      await db
-        .update(intakeMessages)
-        .set({ status: "linked", linkedClientId: newClient.id })
-        .where(eq(intakeMessages.id, message.id));
       const currentClient = await storage.getClientById(newClient.id);
       res.json({
         success: contactPreference !== "email" || formDelivery?.success === true,
@@ -4338,11 +4361,34 @@ export async function registerRoutes(
       const client = await storage.getClientById(req.params.id);
       if (!client) return res.status(404).json({ error: "Client not found" });
       if (client.tenantId !== req.tenant?.id) return res.status(403).json({ error: "Access denied" });
-      const [message] = await db
+      let [message] = await db
         .select()
         .from(intakeMessages)
         .where(and(eq(intakeMessages.linkedClientId, req.params.id), eq(intakeMessages.tenantId, req.tenant.id)))
         .limit(1);
+      if (!message) {
+        // Legacy recovery: permanent deletion used to null the source link. Only
+        // recover an already-processed message when exactly one orphan has the
+        // same real client email; ambiguity must remain a 404.
+        const orphanedMessages = await db
+          .select()
+          .from(intakeMessages)
+          .where(and(
+            eq(intakeMessages.tenantId, req.tenant.id),
+            eq(intakeMessages.status, "linked"),
+            isNull(intakeMessages.linkedClientId),
+          ));
+        const recoveredId = findUniqueOrphanedIntakeMessageId(
+          client.email,
+          orphanedMessages.map((candidate) => {
+            const reparsed = parseIntakeEmailBody(candidate.body || "");
+            const extractedEmail = reparsed.email || Object.entries(candidate.extractedData || {})
+              .find(([label]) => label.toLowerCase().includes("email"))?.[1];
+            return { id: candidate.id, email: extractedEmail };
+          }),
+        );
+        message = orphanedMessages.find((candidate) => candidate.id === recoveredId);
+      }
       if (!message) return res.status(404).json({ error: "No linked intake message" });
 
       // Always re-parse the body — the new parser handles forwarded emails and

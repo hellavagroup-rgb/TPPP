@@ -35,6 +35,7 @@ export const tenants = pgTable("tenants", {
   defaultLocationType: text("default_location_type").default("online"),
   // CY&A feature flags — all default false so existing tenants are unaffected
   contactPreferenceEnabled: boolean("contact_preference_enabled").default(false),
+  intakeClientSummaryEnabled: boolean("intake_client_summary_enabled").default(false),
   multiClinicianAllocationEnabled: boolean("multi_clinician_allocation_enabled").default(false),
   autoAllocationEmailEnabled: boolean("auto_allocation_email_enabled").default(false),
   registrationFormEnabled: boolean("registration_form_enabled").default(false),

@@ -18,6 +18,7 @@ import { sendEmail, buildFromAddress, generateFormInviteEmail, generatePasswordR
 import { forceReseedDatabase } from "./seed";
 import { seedDemoData } from "./seedDemo";
 import { parseIntakeEmailBody } from "./intakeParser";
+import { buildIntakeClientSummary } from "./intakeClientSummary";
 import { syncAllActiveConnections } from "./gmailSync";
 import { requireTenant } from './middleware/tenant';
 import { requireSuperAdmin } from './middleware/superAdmin';
@@ -4165,7 +4166,6 @@ export async function registerRoutes(
         }
         return undefined;
       };
-
       // Email — only use the extracted field if it differs from the sender's address.
       // When they're the same the form was filled in by a referrer (not the client),
       // so we generate a unique placeholder to avoid duplicate-email conflicts.
@@ -4201,12 +4201,20 @@ export async function registerRoutes(
 
       // Build a concise summary in notes — full structured data is accessible via the linked intake message
       const notesLines: string[] = [];
-      if (isReferrerEmail && message.fromAddress) {
-        notesLines.push(`Referred by: ${message.fromAddress}`);
-      }
       const nameForNote = rawFullName || [firstName, lastName].filter(Boolean).join(" ");
-      if (nameForNote) notesLines.push(`Client name: ${nameForNote}`);
-      if (dobRaw) notesLines.push(`Date of birth: ${dobRaw}`);
+      if (req.tenant.intakeClientSummaryEnabled) {
+        notesLines.push(...buildIntakeClientSummary({
+          fields: parsed,
+          fallbackClientName: nameForNote || undefined,
+          email: extractedEmail,
+        }));
+      } else {
+        if (isReferrerEmail && message.fromAddress) {
+          notesLines.push(`Referred by: ${message.fromAddress}`);
+        }
+        if (nameForNote) notesLines.push(`Client name: ${nameForNote}`);
+        if (dobRaw) notesLines.push(`Date of birth: ${dobRaw}`);
+      }
       // Fall back to raw body only when parser produced no structured fields at all
       if (notesLines.length === 0 && !parsed && message.body) {
         notesLines.push("--- Original enquiry (unparsed) ---");
@@ -5335,6 +5343,7 @@ export async function registerRoutes(
         gmailIntakeEnabled: z.boolean().optional(),
         // CY&A feature flags
         contactPreferenceEnabled: z.boolean().optional(),
+        intakeClientSummaryEnabled: z.boolean().optional(),
         multiClinicianAllocationEnabled: z.boolean().optional(),
         autoAllocationEmailEnabled: z.boolean().optional(),
         registrationFormEnabled: z.boolean().optional(),

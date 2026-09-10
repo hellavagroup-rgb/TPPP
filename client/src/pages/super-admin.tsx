@@ -136,6 +136,7 @@ interface TenantSummary {
   gmailIntakeEnabled: boolean;
   // CY&A flags
   contactPreferenceEnabled: boolean;
+  intakeClientSummaryEnabled: boolean;
   multiClinicianAllocationEnabled: boolean;
   autoAllocationEmailEnabled: boolean;
   registrationFormEnabled: boolean;
@@ -456,6 +457,7 @@ const FEATURE_FLAGS: { key: keyof TenantDetail; label: string; description: stri
   { key: "gmailIntakeEnabled", label: "Intake Inbox / Gmail", description: "Gmail integration for intake email processing" },
   // CY&A flags
   { key: "contactPreferenceEnabled", label: "Next Step Routing", description: "Shows a 'Send intake form' / 'Call client' selector when creating or editing clients, and routes incoming intake form answers to the correct workflow (email or phone call)", group: "cya" },
+  { key: "intakeClientSummaryEnabled", label: "Intake Client Summary", description: "Adds the adult/client name, email address, and child's name to converted client cards so administrators do not need to enter these notes manually", group: "cya" },
   { key: "multiClinicianAllocationEnabled", label: "Multi-Clinician Allocation", description: "Enables offering multiple clinician/slot options to a client", group: "cya" },
   { key: "autoAllocationEmailEnabled", label: "Auto Allocation Email", description: "Automatically triggers the options email on allocation", group: "cya" },
   { key: "registrationFormEnabled", label: "Registration Form", description: "Enables the registration form + T&C step before booking is confirmed", group: "cya" },

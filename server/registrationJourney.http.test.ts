@@ -505,7 +505,7 @@ describe("registration journey HTTP routes", () => {
     expect(h.state.submissions).toHaveLength(0);
 
     const payload = JSON.stringify({
-      paymentType: "insurer", insurerDetails: "Policy", termsVersion: 4,
+      paymentType: "insurer", insurerName: "Bupa", insurancePolicyNumber: "Policy", preauthorisationCode: "Auth", termsVersion: 4,
       registrationTemplateUpdatedAt: "2026-09-06T12:00:00.000Z",
       registrationResponses: { address: "1 High Street", agreement: "Yes" },
     });
@@ -521,6 +521,9 @@ describe("registration journey HTTP routes", () => {
     expect(h.state.client.termsAcceptedAt).toBeInstanceOf(Date);
     expect(h.state.client.termsAcceptedVersion).toBe(4);
     expect(h.state.client.termsAcceptedContent).toContain("Current registration terms");
+    expect(h.state.client.insurerDetails).toBe(
+      "Insurer name: Bupa\nInsurance policy number: Policy\nPreauthorisation code: Auth",
+    );
     expect(h.state.submissions[0].responses.agreement).toBe("Yes");
   });
 
@@ -535,7 +538,7 @@ describe("registration journey HTTP routes", () => {
     ]);
     const hidden = await request("/api/public/register/client-a/registration-token", {
       method: "POST",
-      body: JSON.stringify({ paymentType: "insurer", termsVersion: 4, registrationTemplateUpdatedAt: "2026-09-06T12:00:00.000Z", registrationResponses: { hasPolicy: "no", agreement: "Yes" } }),
+      body: JSON.stringify({ paymentType: "insurer", insurerName: "Bupa", insurancePolicyNumber: "Policy", preauthorisationCode: "Auth", termsVersion: 4, registrationTemplateUpdatedAt: "2026-09-06T12:00:00.000Z", registrationResponses: { hasPolicy: "no", agreement: "Yes" } }),
     });
     expect(hidden.status).toBe(200);
 
@@ -567,7 +570,7 @@ describe("registration journey HTTP routes", () => {
     configureRegistrationTemplate(fields);
     const hidden = await request("/api/public/register/client-a/registration-token", {
       method: "POST",
-      body: JSON.stringify({ paymentType: "insurer", termsVersion: 4, registrationTemplateUpdatedAt: "2026-09-06T12:00:00.000Z", registrationResponses: { hasReferral: "no", agreement: "Yes" } }),
+      body: JSON.stringify({ paymentType: "insurer", insurerName: "Bupa", insurancePolicyNumber: "Policy", preauthorisationCode: "Auth", termsVersion: 4, registrationTemplateUpdatedAt: "2026-09-06T12:00:00.000Z", registrationResponses: { hasReferral: "no", agreement: "Yes" } }),
     });
     expect(hidden.status).toBe(200);
 
@@ -641,7 +644,7 @@ describe("registration journey HTTP routes", () => {
       registrationToken: "registration-token", registrationTokenExpiresAt: new Date(Date.now() + 60_000),
     } });
     configureRegistrationTemplate([]);
-    const payload = JSON.stringify({ paymentType: "insurer", insurerDetails: "Policy", termsVersion: 4, registrationTemplateUpdatedAt: "2026-09-06T12:00:00.000Z", registrationResponses: { agreement: "Yes" } });
+    const payload = JSON.stringify({ paymentType: "insurer", insurerName: "Bupa", insurancePolicyNumber: "Policy", preauthorisationCode: "Auth", termsVersion: 4, registrationTemplateUpdatedAt: "2026-09-06T12:00:00.000Z", registrationResponses: { agreement: "Yes" } });
     const first = await request("/api/public/register/client-a/registration-token", { method: "POST", body: payload });
     const retry = await request("/api/public/register/client-a/registration-token", { method: "POST", body: payload });
 

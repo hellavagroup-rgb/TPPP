@@ -85,6 +85,37 @@ export function registrationCompletionBranch(input: {
     : "confirm";
 }
 
+export type RegistrationInsurerDetails = {
+  insurerName: string;
+  insurancePolicyNumber: string;
+  preauthorisationCode: string;
+};
+
+export function formatRegistrationInsurerDetails(
+  details: RegistrationInsurerDetails,
+): string {
+  return [
+    `Insurer name: ${details.insurerName.trim()}`,
+    `Insurance policy number: ${details.insurancePolicyNumber.trim()}`,
+    `Preauthorisation code: ${details.preauthorisationCode.trim()}`,
+  ].join("\n");
+}
+
+export function parseRegistrationInsurerDetails(
+  value: string | null | undefined,
+): RegistrationInsurerDetails {
+  const text = value || "";
+  const insurerName = text.match(/^Insurer name:\s*(.*)$/mi)?.[1]?.trim();
+  const insurancePolicyNumber = text.match(/^Insurance policy number:\s*(.*)$/mi)?.[1]?.trim();
+  const preauthorisationCode = text.match(/^Preauthorisation code:\s*(.*)$/mi)?.[1]?.trim();
+  return {
+    // Legacy combined values remain visible rather than being discarded.
+    insurerName: insurerName ?? text.trim(),
+    insurancePolicyNumber: insurancePolicyNumber ?? "",
+    preauthorisationCode: preauthorisationCode ?? "",
+  };
+}
+
 export function nextTermsVersion(contentChanged: boolean, currentVersion: number): number {
   return contentChanged ? currentVersion + 1 : currentVersion;
 }

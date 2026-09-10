@@ -36,6 +36,8 @@ import {
   registrationCompletionBranch,
   registrationPaymentPrerequisite,
   isCorrelatedRegistrationCheckout,
+  formatRegistrationInsurerDetails,
+  parseRegistrationInsurerDetails,
   registrationRetryResponse,
   validateRegistrationConsent,
 } from "./registrationWorkflow";
@@ -2385,6 +2387,9 @@ export async function registerRoutes(
           stripeAvailable: isStripeConfigured(publicStripeKey),
         })
         : null;
+      const savedInsurer = client.status === "BookingConfirmed"
+        ? parseRegistrationInsurerDetails(null)
+        : parseRegistrationInsurerDetails(client.insurerDetails);
 
       res.json({
         tenantName: tenant?.name || "",
@@ -2400,7 +2405,9 @@ export async function registerRoutes(
         alreadySubmitted: client.status === "BookingConfirmed",
         // Pre-fill form data if already saved (e.g. returning after Stripe cancel)
         savedPaymentType: client.paymentType || null,
-        savedInsurerDetails: client.status === "BookingConfirmed" ? null : (client.insurerDetails || null),
+        savedInsurerName: savedInsurer.insurerName || null,
+        savedInsurancePolicyNumber: savedInsurer.insurancePolicyNumber || null,
+        savedPreauthorisationCode: savedInsurer.preauthorisationCode || null,
         registrationTemplate: registrationTemplate ? {
           id: registrationTemplate.id,
           title: registrationTemplate.title,
@@ -2418,7 +2425,14 @@ export async function registerRoutes(
   // POST /api/public/register/:clientId/:registrationToken — submit registration form
   app.post("/api/public/register/:clientId/:registrationToken", async (req, res) => {
     try {
-      const { paymentType, insurerDetails, termsVersion, registrationTemplateUpdatedAt } = req.body;
+      const {
+        paymentType,
+        insurerName,
+        insurancePolicyNumber,
+        preauthorisationCode,
+        termsVersion,
+        registrationTemplateUpdatedAt,
+      } = req.body;
       const responses = req.body.registrationResponses ?? req.body.responses;
 
       // Validate paymentType against allowlist
@@ -2543,6 +2557,17 @@ export async function registerRoutes(
         const registrationConsent = findRegistrationConsent(registrationTemplate?.fields, responses);
         const consentError = validateRegistrationConsent(registrationConsent?.accepted === true, termsVersion, tenant.registrationTermsVersion);
         if (consentError) return res.status(registrationConsent?.accepted === true ? 409 : 400).json({ error: consentError });
+        if (validatedPaymentType === "insurer") {
+          if (!String(insurerName || "").trim()) {
+            return res.status(400).json({ error: "Insurer name is required" });
+          }
+          if (!String(insurancePolicyNumber || "").trim()) {
+            return res.status(400).json({ error: "Insurance policy number is required" });
+          }
+          if (!String(preauthorisationCode || "").trim()) {
+            return res.status(400).json({ error: "Preauthorisation code is required" });
+          }
+        }
 
         const paymentPrerequisite = registrationPaymentPrerequisite({
           paymentType: validatedPaymentType,
@@ -2570,7 +2595,13 @@ export async function registerRoutes(
         const claimed = await db.transaction(async (tx) => {
           const claimedRows = await tx.update(clients).set({
             paymentType: validatedPaymentType,
-            insurerDetails: validatedPaymentType === "insurer" ? (insurerDetails || null) : null,
+            insurerDetails: validatedPaymentType === "insurer"
+              ? formatRegistrationInsurerDetails({
+                  insurerName,
+                  insurancePolicyNumber,
+                  preauthorisationCode,
+                })
+              : null,
             status: "RegistrationPending",
             registrationPaymentAttemptKey: claimedPaymentAttemptKey,
             termsAcceptedAt: new Date(),

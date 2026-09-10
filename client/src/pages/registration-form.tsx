@@ -22,7 +22,9 @@ interface RegistrationData {
   paymentEligibility: "stripe_required" | "confirm_after_form" | "client_rate_required" | "stripe_unavailable" | null;
   alreadySubmitted: boolean;
   savedPaymentType: "self_pay" | "insurer" | null;
-  savedInsurerDetails: string | null;
+  savedInsurerName: string | null;
+  savedInsurancePolicyNumber: string | null;
+  savedPreauthorisationCode: string | null;
   registrationTemplate?: { id: string; title?: string; fields: any[] } | null;
   registrationTemplateUpdatedAt?: string | null;
 }
@@ -37,7 +39,9 @@ export default function RegistrationForm() {
   const registrationToken = params?.registrationToken || "";
 
   const [paymentType, setPaymentType] = useState<"self_pay" | "insurer">("self_pay");
-  const [insurerDetails, setInsurerDetails] = useState("");
+  const [insurerName, setInsurerName] = useState("");
+  const [insurancePolicyNumber, setInsurancePolicyNumber] = useState("");
+  const [preauthorisationCode, setPreauthorisationCode] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [prefilled, setPrefilled] = useState(false);
@@ -62,7 +66,9 @@ export default function RegistrationForm() {
   useEffect(() => {
     if (data && !prefilled) {
       if (data.savedPaymentType) setPaymentType(data.savedPaymentType);
-      if (data.savedInsurerDetails) setInsurerDetails(data.savedInsurerDetails);
+      if (data.savedInsurerName) setInsurerName(data.savedInsurerName);
+      if (data.savedInsurancePolicyNumber) setInsurancePolicyNumber(data.savedInsurancePolicyNumber);
+      if (data.savedPreauthorisationCode) setPreauthorisationCode(data.savedPreauthorisationCode);
       setPrefilled(true);
     }
   }, [data, prefilled]);
@@ -77,7 +83,9 @@ export default function RegistrationForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           paymentType,
-          insurerDetails: paymentType === "insurer" ? insurerDetails : undefined,
+          insurerName: paymentType === "insurer" ? insurerName : undefined,
+          insurancePolicyNumber: paymentType === "insurer" ? insurancePolicyNumber : undefined,
+          preauthorisationCode: paymentType === "insurer" ? preauthorisationCode : undefined,
           termsAccepted: findRegistrationConsent(data.registrationTemplate?.fields, templateValues)?.accepted === true,
           termsVersion: data.termsVersion,
           registrationTemplateUpdatedAt: data.registrationTemplateUpdatedAt,
@@ -106,8 +114,12 @@ export default function RegistrationForm() {
     e.preventDefault();
     setFormError(null);
 
-    if (paymentType === "insurer" && !insurerDetails.trim()) {
-      setFormError("Please enter your insurer name and policy details.");
+    if (paymentType === "insurer" && (
+      !insurerName.trim()
+      || !insurancePolicyNumber.trim()
+      || !preauthorisationCode.trim()
+    )) {
+      setFormError("Please complete all three insurer details.");
       return;
     }
     if (!data) {
@@ -257,19 +269,37 @@ export default function RegistrationForm() {
 
             {/* Insurer details — shown only when insurer is selected */}
             {paymentType === "insurer" && (
-              <div className="space-y-2">
-                <Label htmlFor="insurerDetails" className="text-sm font-medium">
-                  Insurer name &amp; policy reference
-                </Label>
-                <Input
-                  id="insurerDetails"
-                  placeholder="e.g. Bupa / Policy no. 12345678"
-                  value={insurerDetails}
-                  onChange={(e) => setInsurerDetails(e.target.value)}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Please provide the name of your insurer and your policy or authorisation reference number.
-                </p>
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="insurerName" className="text-sm font-medium">Insurer name</Label>
+                  <Input
+                    id="insurerName"
+                    placeholder="e.g. Bupa"
+                    value={insurerName}
+                    onChange={(e) => setInsurerName(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="insurancePolicyNumber" className="text-sm font-medium">Insurance Policy Number</Label>
+                  <Input
+                    id="insurancePolicyNumber"
+                    placeholder="e.g. 12345678"
+                    value={insurancePolicyNumber}
+                    onChange={(e) => setInsurancePolicyNumber(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="preauthorisationCode" className="text-sm font-medium">Preauthorisation code</Label>
+                  <Input
+                    id="preauthorisationCode"
+                    placeholder="Enter the insurer's authorisation code"
+                    value={preauthorisationCode}
+                    onChange={(e) => setPreauthorisationCode(e.target.value)}
+                    required
+                  />
+                </div>
               </div>
             )}
 

@@ -32,6 +32,7 @@ import {
   generateNewReferralEmail,
   generateAllocationOptionsEmail,
   generateBookingConfirmedEmail,
+  generateZoomLinkEmail,
   generateWaitlistUpdateEmail,
   generatePaymentLinkEmail,
   generateClinicianWelcomeEmail,
@@ -185,20 +186,34 @@ describe('Email Outlook rendering — no <style> blocks or class= attributes', (
   });
 
   describe('generateBookingConfirmedEmail', () => {
-    it('is Outlook-safe with a Zoom link', async () => {
+    it('is Outlook-safe and contains no Zoom link', async () => {
       const email = await generateBookingConfirmedEmail(
-        { clinicianName: 'Dr. Grace', day: 'Tuesday', startTime: '11:00', endTime: '12:00', zoomLink: 'https://zoom.us/j/123' },
+        { clinicianName: 'Dr. Grace', day: 'Tuesday', startTime: '11:00', endTime: '12:00' },
         tenant
       );
-      assertOutlookSafe('generateBookingConfirmedEmail (with zoom)', email.html);
+      assertOutlookSafe('generateBookingConfirmedEmail', email.html);
+      expect(email.text).not.toContain('zoom.us');
+      expect(email.text).not.toContain('Join your session');
     });
 
-    it('is Outlook-safe without a Zoom link', async () => {
+    it('is Outlook-safe with no tenant', async () => {
       const email = await generateBookingConfirmedEmail(
-        { clinicianName: 'Dr. Grace', day: null, startTime: '11:00', endTime: '12:00', zoomLink: null },
+        { clinicianName: 'Dr. Grace', day: null, startTime: '11:00', endTime: '12:00' },
         tenantNone
       );
-      assertOutlookSafe('generateBookingConfirmedEmail (no zoom, no tenant)', email.html);
+      assertOutlookSafe('generateBookingConfirmedEmail (no tenant)', email.html);
+    });
+  });
+
+  describe('generateZoomLinkEmail', () => {
+    it('puts the clinician link in a separate Outlook-safe email', async () => {
+      const email = await generateZoomLinkEmail(
+        { clinicianName: 'Dr. Grace', zoomLink: 'https://zoom.us/j/123' },
+        tenant,
+      );
+      assertOutlookSafe('generateZoomLinkEmail', email.html);
+      expect(email.text).toContain('https://zoom.us/j/123');
+      expect(email.text).toContain('future online sessions');
     });
   });
 

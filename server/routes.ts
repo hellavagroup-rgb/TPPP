@@ -14,7 +14,7 @@ import {
   type InsertFormTemplate
 } from "@shared/schema";
 import { z } from "zod";
-import { sendEmail, buildFromAddress, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateFormCompletedNotificationEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail, generateClinicianWelcomeEmail, generateAdminInviteEmail, generateAllocationOptionsEmail, generateBookingConfirmedEmail, generateRegistrationInviteEmail, getFormCompletionPageContent, GENERIC_PRACTICE_NAME } from "./email";
+import { sendEmail, buildFromAddress, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateFormCompletedNotificationEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail, generateClinicianWelcomeEmail, generateAdminInviteEmail, generateAllocationOptionsEmail, generateBookingConfirmedEmail, generateZoomLinkEmail, generateRegistrationInviteEmail, getFormCompletionPageContent, GENERIC_PRACTICE_NAME } from "./email";
 import { forceReseedDatabase } from "./seed";
 import { seedDemoData } from "./seedDemo";
 import { parseIntakeEmailBody } from "./intakeParser";
@@ -56,6 +56,30 @@ function formatActivitySlot(slot: { type?: string | null; day?: string | null; d
   const time = [slot.startTime, slot.endTime].filter(Boolean).join("–");
   const location = slot.locationType === "in_person" ? "in person" : "online";
   return [day, time, location].filter(Boolean).join(" · ");
+}
+
+async function sendOnlineZoomFollowUp(input: {
+  clientEmail: string;
+  clinicianName: string;
+  zoomLink?: string | null;
+  locationType?: string | null;
+  tenant: { id: string; name: string; fromEmail: string | null; primaryColor: string | null };
+  idempotencyKey: string;
+}): Promise<boolean> {
+  if (input.locationType !== "online" || !input.zoomLink) return false;
+  const email = await generateZoomLinkEmail({
+    clinicianName: input.clinicianName,
+    zoomLink: input.zoomLink,
+  }, input.tenant);
+  const delivery = await sendEmail({
+    ...email,
+    to: input.clientEmail,
+    idempotencyKey: input.idempotencyKey,
+  });
+  if (!delivery.success) {
+    console.error(`Zoom follow-up delivery failed: ${delivery.outcome}`);
+  }
+  return delivery.success;
 }
 
 type RegistrationField = {
@@ -1409,9 +1433,18 @@ export async function registerRoutes(
             date: slotRow?.date || null,
             startTime: slotRow?.startTime || '',
             endTime: slotRow?.endTime || '',
-            zoomLink: confirmedClinician?.zoomLink || null,
           }, tcBook);
-          await sendEmail({ ...bookEmail, to: updated.email });
+          const bookingDelivery = await sendEmail({ ...bookEmail, to: updated.email });
+          if (bookingDelivery.success && tcBook) {
+            await sendOnlineZoomFollowUp({
+              clientEmail: updated.email,
+              clinicianName: clinicianUser?.name || 'Your Clinician',
+              zoomLink: confirmedClinician?.zoomLink,
+              locationType: slotRow?.locationType,
+              tenant: tcBook,
+              idempotencyKey: `zoom-follow-up-${updated.id}-${updated.assignedSlotId || "no-slot"}`,
+            });
+          }
           console.log(`Booking confirmed email sent to client ${req.params.id} (manual advance)`);
         } catch (bookEmailErr) {
           console.error('Failed to send booking confirmed email (manual advance):', bookEmailErr);
@@ -2343,12 +2376,20 @@ export async function registerRoutes(
           const email = await generateBookingConfirmedEmail({
             clinicianName: clinicianUser?.name || "Your Clinician",
             type: slot?.type || null, day: slot?.day || null, date: slot?.date || null,
-            startTime: slot?.startTime || "", endTime: slot?.endTime || "", zoomLink: confirmedClinician?.zoomLink || null,
+            startTime: slot?.startTime || "", endTime: slot?.endTime || "",
           }, context);
           const delivery = await sendEmail({ ...email, to: client.email });
           if (delivery.success) {
             await db.update(clients).set({ bookingConfirmationSentAt: new Date() })
               .where(and(eq(clients.id, client.id), isNull(clients.bookingConfirmationSentAt)));
+            await sendOnlineZoomFollowUp({
+              clientEmail: client.email,
+              clinicianName: clinicianUser?.name || "Your Clinician",
+              zoomLink: confirmedClinician?.zoomLink,
+              locationType: slot?.locationType,
+              tenant: context,
+              idempotencyKey: `zoom-follow-up-${client.id}-${selectedOption.slotId}`,
+            });
           }
         } catch (error) {
           console.error("Failed to send booking confirmed email after option selection:", error);
@@ -2763,7 +2804,6 @@ export async function registerRoutes(
             date: slotRow?.date || null,
             startTime: slotRow?.startTime || '',
             endTime: slotRow?.endTime || '',
-            zoomLink: confirmedClinician?.zoomLink || null,
           }, tcBook);
           const delivery = await sendEmail({
             ...bookEmail,
@@ -2774,6 +2814,16 @@ export async function registerRoutes(
             return res.status(502).json({ error: "Booking confirmation could not be delivered. Please retry." });
           }
           bookingEmailDelivered = true;
+          if (tcBook) {
+            await sendOnlineZoomFollowUp({
+              clientEmail: client.email,
+              clinicianName: clinicianUser?.name || 'Your Clinician',
+              zoomLink: confirmedClinician?.zoomLink,
+              locationType: slotRow?.locationType,
+              tenant: tcBook,
+              idempotencyKey: `registration-zoom-follow-up-${client.id}-${paymentAttemptKey}`,
+            });
+          }
         } catch (bookEmailErr) {
           console.error('Failed to send booking confirmed email (non-Stripe registration):', bookEmailErr);
           return res.status(502).json({ error: "Booking confirmation could not be delivered. Please retry." });
@@ -4866,7 +4916,6 @@ export async function registerRoutes(
                   date: slotRow?.date || null,
                   startTime: slotRow?.startTime || '',
                   endTime: slotRow?.endTime || '',
-                  zoomLink: confirmedClinician?.zoomLink || null,
                 }, tcBook);
               const delivery = await sendEmail({
                 ...bookEmail,
@@ -4877,6 +4926,16 @@ export async function registerRoutes(
                 throw new Error(`Booking confirmation delivery ${delivery.outcome}`);
               }
               bookingEmailDelivered = true;
+               if (tcBook) {
+                 await sendOnlineZoomFollowUp({
+                   clientEmail: client.email,
+                   clinicianName: clinicianUser?.name || 'Your Clinician',
+                   zoomLink: confirmedClinician?.zoomLink,
+                   locationType: slotRow?.locationType,
+                   tenant: tcBook,
+                   idempotencyKey: `stripe-zoom-follow-up-${client.id}-${paymentIntentId || session.id}`,
+                 });
+               }
             } catch (bookEmailErr) {
               console.error('Failed to send booking confirmed email (Stripe webhook):', bookEmailErr);
               throw bookEmailErr;

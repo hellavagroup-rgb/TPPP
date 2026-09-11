@@ -584,7 +584,6 @@ export interface BookingConfirmedDetails {
   date?: string | null;
   startTime: string;
   endTime: string;
-  zoomLink?: string | null;
 }
 
 export async function generateBookingConfirmedEmail(
@@ -610,7 +609,7 @@ export async function generateBookingConfirmedEmail(
     const bodyText = replacePlaceholders(storedTemplate.bodyText, {
       clinician_name: details.clinicianName,
       appointment_time: slotDisplay,
-      zoom_link: details.zoomLink || 'To be provided by your clinician',
+      zoom_link: '',
       practice_name: practiceName,
     });
     const subject = replacePlaceholders(storedTemplate.subject, { practice_name: practiceName });
@@ -623,16 +622,12 @@ export async function generateBookingConfirmedEmail(
     };
   }
 
-  const zoomSection = details.zoomLink
-    ? `\nJoin your session here: ${details.zoomLink}\n`
-    : '';
-
   const defaultBody = `Your booking is confirmed.
 
 Appointment Details:
 Clinician: ${details.clinicianName}
 Time: ${slotDisplay}
-${zoomSection}
+
 If you have any questions or need to make changes, please don't hesitate to contact us.
 
 Warm regards,
@@ -643,6 +638,39 @@ ${practiceName} Team`;
     subject: `Booking Confirmed - ${practiceName}`,
     html: wrapInHtmlTemplate(defaultBody, 'Booking Confirmed', practiceName, tenant?.primaryColor),
     text: defaultBody,
+    from: buildFromAddress(tenant),
+  };
+}
+
+export async function generateZoomLinkEmail(
+  details: { clinicianName: string; zoomLink: string },
+  tenant?: TenantContext,
+): Promise<EmailOptions> {
+  const practiceName = tenant?.name || GENERIC_PRACTICE_NAME;
+  const storedTemplate = await getStoredTemplate('zoom_link_follow_up', tenant?.id);
+  const defaultBody = `Here is the Zoom link for your online sessions with ${details.clinicianName}.
+
+Join your session here: ${details.zoomLink}
+
+Please save this link — it will be used for all of your future online sessions.
+
+Warm regards,
+${practiceName} Team`;
+  const bodyText = storedTemplate
+    ? replacePlaceholders(storedTemplate.bodyText, {
+        clinician_name: details.clinicianName,
+        zoom_link: details.zoomLink,
+        practice_name: practiceName,
+      })
+    : defaultBody;
+  const subject = storedTemplate
+    ? replacePlaceholders(storedTemplate.subject, { practice_name: practiceName })
+    : `Your Zoom link - ${practiceName}`;
+  return {
+    to: '',
+    subject,
+    html: wrapInHtmlTemplate(bodyText, 'Your Zoom Link', practiceName, tenant?.primaryColor),
+    text: bodyText,
     from: buildFromAddress(tenant),
   };
 }

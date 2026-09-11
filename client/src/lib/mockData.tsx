@@ -84,6 +84,8 @@ export interface FormField {
   options?: string[]; // For select, radio, checkbox
   required?: boolean;
   isTermsAcceptance?: boolean;
+  isConsentConfirmation?: boolean;
+  isConsentDate?: boolean;
   placeholder?: string;
   conditional?: {
     fieldId: string;

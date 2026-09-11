@@ -618,6 +618,7 @@ export default function Clients() {
   const [viewResponsesClient, setViewResponsesClient] = useState<ClientType | null>(null);
   const [submissions, setSubmissions] = useState<any[]>([]);
   const [loadingSubmissions, setLoadingSubmissions] = useState(false);
+  const [viewingRegistration, setViewingRegistration] = useState(false);
 
   // View Original Enquiry State (standalone dialog from Kanban dropdown)
   const [viewEnquiryClient, setViewEnquiryClient] = useState<ClientType | null>(null);
@@ -652,6 +653,7 @@ export default function Clients() {
   };
 
   const handleOpenViewResponses = async (client: ClientType) => {
+    setViewingRegistration(false);
     setViewResponsesClient(client);
     setIsViewResponsesOpen(true);
     setLoadingSubmissions(true);
@@ -664,6 +666,23 @@ export default function Clients() {
       setSubmissions(data);
     } catch (error) {
       toast({ title: "Error", description: "Failed to load form responses.", variant: "destructive" });
+      setSubmissions([]);
+    } finally {
+      setLoadingSubmissions(false);
+    }
+  };
+
+  const handleOpenRegistrationForm = async (client: ClientType) => {
+    setViewResponsesClient(client);
+    setViewingRegistration(true);
+    setIsViewResponsesOpen(true);
+    setLoadingSubmissions(true);
+    try {
+      const response = await apiRequest("GET", `/api/clients/${client.id}/registration-submission`);
+      if (!response.ok) throw new Error("Failed to fetch registration form");
+      setSubmissions([await response.json()]);
+    } catch {
+      toast({ title: "Error", description: "Failed to load the registration form.", variant: "destructive" });
       setSubmissions([]);
     } finally {
       setLoadingSubmissions(false);
@@ -731,14 +750,42 @@ export default function Clients() {
         } else {
           displayValue = escapeHtml(String(value));
         }
+        const consent = (submission.registrationConsentEvidence || [])
+          .find((item: any) => item.fieldId === field.id);
         content += `
           <div class="field">
             <div class="label">${escapeHtml(String(field.label))}</div>
             <div class="value">${displayValue}</div>
+            ${consent ? `<div class="meta">Consent accepted automatically on ${escapeHtml(formatDateUK(consent.acceptedAt))}</div>` : ''}
           </div>
         `;
       }
     });
+
+    if (submission.registrationConsentEvidence?.length) {
+      content += '<h2>Consent evidence</h2>';
+      submission.registrationConsentEvidence.forEach((consent: any) => {
+        const answer = Array.isArray(consent.answer) ? consent.answer.join(', ') : String(consent.answer);
+        content += `
+          <div class="field">
+            <div class="label">${escapeHtml(consent.statement || 'Consent confirmation')}</div>
+            <div class="value">${escapeHtml(answer)}</div>
+            <div class="meta">Consent accepted automatically on ${escapeHtml(formatDateUK(consent.acceptedAt))}</div>
+          </div>
+        `;
+      });
+    } else if (submission.legacyConsentEvidence && submission.termsAcceptedAt) {
+      content += '<h2>Consent evidence</h2><div class="meta">Field-level consent evidence is unavailable for this historical registration.</div>';
+    }
+    if (submission.termsAcceptedAt) {
+      content += `<div class="meta">Terms accepted automatically on ${escapeHtml(formatDateUK(submission.termsAcceptedAt))}</div>`;
+    }
+    if (submission.termsAcceptedVersion) {
+      content += `<div class="meta">Terms version: ${escapeHtml(String(submission.termsAcceptedVersion))}</div>`;
+    }
+    if (submission.termsAcceptedContent) {
+      content += `<div class="field"><div class="label">Accepted terms snapshot</div><div class="value">${escapeHtml(String(submission.termsAcceptedContent)).replace(/\n/g, '<br>')}</div></div>`;
+    }
 
     content += '</body></html>';
 
@@ -1805,6 +1852,11 @@ export default function Clients() {
                           <DropdownMenuItem onClick={() => handleOpenViewResponses(client)}>
                             <Eye className="h-4 w-4 mr-2" /> View Responses
                           </DropdownMenuItem>
+                          {client.registrationFormSubmissionId && (
+                            <DropdownMenuItem onClick={() => handleOpenRegistrationForm(client)}>
+                              <FileText className="h-4 w-4 mr-2" /> View Registration Form
+                            </DropdownMenuItem>
+                          )}
                           <DropdownMenuItem onClick={() => handleOpenManualAllocate(client)}>
                             <CalendarCheck className="h-4 w-4 mr-2" /> Allocate to Clinician
                           </DropdownMenuItem>
@@ -1904,6 +1956,11 @@ export default function Clients() {
                               <DropdownMenuItem onClick={() => handleOpenViewResponses(client)}>
                                 <Eye className="h-4 w-4 mr-2" /> View Responses
                               </DropdownMenuItem>
+                              {client.registrationFormSubmissionId && (
+                                <DropdownMenuItem onClick={() => handleOpenRegistrationForm(client)}>
+                                  <FileText className="h-4 w-4 mr-2" /> View Registration Form
+                                </DropdownMenuItem>
+                              )}
                             </>
                           )}
                           {client.status === "OptionsSent" && (
@@ -2092,6 +2149,11 @@ export default function Clients() {
                                 <DropdownMenuItem onClick={() => handleOpenViewResponses(client)}>
                                   <Eye className="h-4 w-4 mr-2" /> View Responses
                                 </DropdownMenuItem>
+                                {client.registrationFormSubmissionId && (
+                                  <DropdownMenuItem onClick={() => handleOpenRegistrationForm(client)}>
+                                    <FileText className="h-4 w-4 mr-2" /> View Registration Form
+                                  </DropdownMenuItem>
+                                )}
                                 {stripeEnabled && (
                                   <>
                                     <DropdownMenuSeparator />
@@ -2288,6 +2350,11 @@ export default function Clients() {
                         <DropdownMenuItem onClick={() => handleOpenViewResponses(client)}>
                           <Eye className="h-4 w-4 mr-2" /> View Responses
                         </DropdownMenuItem>
+                        {client.registrationFormSubmissionId && (
+                          <DropdownMenuItem onClick={() => handleOpenRegistrationForm(client)}>
+                            <FileText className="h-4 w-4 mr-2" /> View Registration Form
+                          </DropdownMenuItem>
+                        )}
                         {stripeEnabled && !client.isArchived && (
                           <>
                             <DropdownMenuSeparator />
@@ -3417,10 +3484,12 @@ export default function Clients() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <FileText className="h-5 w-5" />
-              Form Responses - {viewResponsesClient?.displayId}
+              {viewingRegistration ? "Registration Form" : "Form Responses"} - {viewResponsesClient?.displayId}
             </DialogTitle>
             <DialogDescription>
-              Review submitted form responses for this client.
+              {viewingRegistration
+                ? "Review the registration submission linked to this client."
+                : "Review submitted intake form responses for this client."}
             </DialogDescription>
           </DialogHeader>
           
@@ -3490,6 +3559,8 @@ export default function Clients() {
                           }
                         }
                         
+                        const consent = (submission.registrationConsentEvidence || [])
+                          .find((item: any) => item.fieldId === field.id);
                         return (
                           <div key={field.id} className="grid grid-cols-3 gap-2 py-2 border-b last:border-b-0">
                             <div className="font-medium text-sm text-muted-foreground col-span-1">
@@ -3497,11 +3568,53 @@ export default function Clients() {
                             </div>
                             <div className="text-sm col-span-2">
                               {displayValue}
+                              {consent && (
+                                <div className="text-xs text-muted-foreground mt-1">
+                                  Consent accepted automatically on {formatDateUK(consent.acceptedAt)}
+                                </div>
+                              )}
                             </div>
                           </div>
                         );
                       })}
                     </div>
+                    {(submission.registrationConsentEvidence?.length > 0 || submission.termsAcceptedAt) && (
+                      <div className="mt-5 pt-4 border-t space-y-3">
+                        <h4 className="font-semibold">Consent evidence</h4>
+                        {submission.legacyConsentEvidence && !submission.registrationConsentEvidence?.length && (
+                          <div className="text-xs text-muted-foreground">
+                            Field-level consent evidence is unavailable for this historical registration.
+                          </div>
+                        )}
+                        {(submission.registrationConsentEvidence || []).map((consent: any) => (
+                          <div key={consent.fieldId} className="rounded-md bg-muted/40 p-3">
+                            <div className="font-medium text-sm">{consent.statement || "Consent confirmation"}</div>
+                            <div className="text-sm mt-1">
+                              Answer: {Array.isArray(consent.answer) ? consent.answer.join(", ") : String(consent.answer)}
+                            </div>
+                            <div className="text-xs text-muted-foreground mt-1">
+                              Consent accepted automatically on {formatDateUK(consent.acceptedAt)}
+                            </div>
+                          </div>
+                        ))}
+                        {submission.termsAcceptedAt && (
+                          <div className="text-xs text-muted-foreground">
+                            Terms accepted automatically on {formatDateUK(submission.termsAcceptedAt)}
+                          </div>
+                        )}
+                        {submission.termsAcceptedVersion && (
+                          <div className="text-xs text-muted-foreground">
+                            Terms version: {submission.termsAcceptedVersion}
+                          </div>
+                        )}
+                        {submission.termsAcceptedContent && (
+                          <div className="rounded-md border p-3">
+                            <div className="font-medium text-sm mb-1">Accepted terms snapshot</div>
+                            <div className="text-sm whitespace-pre-wrap">{submission.termsAcceptedContent}</div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

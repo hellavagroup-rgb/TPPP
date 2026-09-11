@@ -45,7 +45,11 @@ import {
 } from "./registrationWorkflow";
 import { executeFormDeliveryBatch, FormDeliveryRequestError, submittedPacketIsComplete } from "./formDeliveryWorkflow";
 import { shouldReleaseClientAllocation } from "./clientAllocationWorkflow";
-import { findRegistrationConsent } from "@shared/registrationConsent";
+import {
+  activeRegistrationFields,
+  buildRegistrationConsentEvidence,
+  findRegistrationConsent,
+} from "@shared/registrationConsent";
 
 function formatActivitySlot(slot: { type?: string | null; day?: string | null; date?: string | null; startTime?: string | null; endTime?: string | null; locationType?: string | null }): string {
   const day = slot.type === "SpecificDate" ? slot.date : slot.day;
@@ -1238,6 +1242,15 @@ export async function registerRoutes(
       
       // Add workflow timestamps based on status change
       const updateData = { ...req.body };
+      for (const protectedField of [
+        "registrationFormSubmissionId",
+        "registrationPaymentAttemptKey",
+        "termsAcceptedAt",
+        "termsAcceptedVersion",
+        "termsAcceptedContent",
+      ]) {
+        delete updateData[protectedField];
+      }
       // CY&A: auto-set needsAdminCall when contactPreference changes to/from phone
       if ("contactPreference" in updateData) {
         updateData.needsAdminCall = updateData.contactPreference === "phone";
@@ -2369,6 +2382,7 @@ export async function registerRoutes(
       if (tenant.registrationFormTemplateId && !registrationTemplate) {
         return res.status(503).json({ error: "Registration form configuration is unavailable" });
       }
+      const activeFields = activeRegistrationFields(registrationTemplate?.fields);
       const completedRetry = isCompletedRegistrationRetry(client, req.params.registrationToken, client.status);
       if (!completedRetry && !isActiveRegistrationToken(client, req.params.registrationToken)) {
         return res.status(403).json({ error: "Invalid or expired token" });
@@ -2414,7 +2428,7 @@ export async function registerRoutes(
           id: registrationTemplate.id,
           title: registrationTemplate.title,
           description: registrationTemplate.description,
-          fields: registrationTemplate.fields,
+          fields: activeRegistrationFields(registrationTemplate.fields),
         } : null,
         registrationTemplateUpdatedAt: registrationTemplate?.updatedAt?.toISOString() || null,
       });
@@ -2461,6 +2475,7 @@ export async function registerRoutes(
       if (tenant.registrationFormTemplateId && !registrationTemplate) {
         return res.status(503).json({ error: "Registration form configuration is unavailable" });
       }
+      const activeFields = activeRegistrationFields(registrationTemplate?.fields);
       let registrationTenantStripeKey: string | null = null;
       if (tenant.stripeSecretKey) {
         try { registrationTenantStripeKey = decryptSecret(tenant.stripeSecretKey); } catch { /* handled as unavailable */ }
@@ -2548,15 +2563,15 @@ export async function registerRoutes(
         if (client.status !== "OptionSelected") {
           return res.status(409).json({ error: "Registration has already been completed" });
         }
-        if (registrationTemplate) {
+          if (registrationTemplate) {
           if (!registrationTemplateUpdatedAt
             || registrationTemplateUpdatedAt !== registrationTemplate.updatedAt.toISOString()) {
             return res.status(409).json({ error: "The registration form has changed. Please reload and review the current version." });
           }
-          const responseError = requiredRegistrationFieldError(registrationTemplate.fields, responses);
+          const responseError = requiredRegistrationFieldError(activeFields, responses);
           if (responseError) return res.status(400).json({ error: responseError });
         }
-        const registrationConsent = findRegistrationConsent(registrationTemplate?.fields, responses);
+        const registrationConsent = findRegistrationConsent(activeFields, responses);
         const consentError = validateRegistrationConsent(registrationConsent?.accepted === true, termsVersion, tenant.registrationTermsVersion);
         if (consentError) return res.status(registrationConsent?.accepted === true ? 409 : 400).json({ error: consentError });
         if (validatedPaymentType === "insurer") {
@@ -2594,6 +2609,12 @@ export async function registerRoutes(
         // The form record, its client linkage, consent snapshot and state claim
         // are one database transaction. Do not leave RegistrationPending unless
         // the exact submitted packet is durable and reachable from the client.
+        const acceptedAt = new Date();
+        const registrationConsentEvidence = buildRegistrationConsentEvidence(
+          activeFields,
+          responses,
+          acceptedAt,
+        );
         const claimed = await db.transaction(async (tx) => {
           const claimedRows = await tx.update(clients).set({
             paymentType: validatedPaymentType,
@@ -2606,7 +2627,7 @@ export async function registerRoutes(
               : null,
             status: "RegistrationPending",
             registrationPaymentAttemptKey: claimedPaymentAttemptKey,
-            termsAcceptedAt: new Date(),
+            termsAcceptedAt: acceptedAt,
             termsAcceptedVersion: tenant.registrationTermsVersion,
             termsAcceptedContent: registrationConsent!.evidenceContent,
             updatedAt: new Date(),
@@ -2626,7 +2647,11 @@ export async function registerRoutes(
             registrationAttemptKey: claimedPaymentAttemptKey,
             registrationTemplateTitle: registrationTemplate.title,
             registrationTemplateDescription: registrationTemplate.description,
-            registrationTemplateFields: registrationTemplate.fields,
+            registrationTemplateFields: activeFields,
+            registrationConsentEvidence,
+            registrationTermsAcceptedAt: acceptedAt,
+            registrationTermsAcceptedVersion: tenant.registrationTermsVersion,
+            registrationTermsAcceptedContent: registrationConsent!.evidenceContent,
           }).returning({ id: formSubmissions.id });
           if (!submission) throw new Error("REGISTRATION_SUBMISSION_NOT_PERSISTED");
 
@@ -2876,7 +2901,10 @@ export async function registerRoutes(
         return res.status(403).json({ error: "Access denied" });
       }
 
-      const submissions = await storage.getFormSubmissionsByClientId(req.params.id);
+      const submissions = (await storage.getFormSubmissionsByClientId(req.params.id))
+        .filter(sub =>
+          sub.id !== client.registrationFormSubmissionId
+          && sub.tenantId === req.tenant?.id);
       
       // Enrich with form template info
       const enrichedSubmissions = await Promise.all(
@@ -2896,6 +2924,32 @@ export async function registerRoutes(
       res.json(enrichedSubmissions);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch submissions" });
+    }
+  });
+
+  app.get("/api/clients/:id/registration-submission", requireAdmin, async (req, res) => {
+    try {
+      const client = await storage.getClientById(req.params.id);
+      if (!client) return res.status(404).json({ error: "Client not found" });
+      if (client.tenantId !== req.tenant?.id) return res.status(403).json({ error: "Access denied" });
+      if (!client.registrationFormSubmissionId) return res.status(404).json({ error: "Registration form not found" });
+      const submission = (await storage.getFormSubmissionsByClientId(client.id))
+        .find(sub => sub.id === client.registrationFormSubmissionId);
+      if (!submission || submission.tenantId !== req.tenant?.id) {
+        return res.status(404).json({ error: "Registration form not found" });
+      }
+      res.json({
+        ...submission,
+        formTitle: submission.registrationTemplateTitle || "Registration Form",
+        formDescription: submission.registrationTemplateDescription || "",
+        formFields: submission.registrationTemplateFields || [],
+        termsAcceptedAt: submission.registrationTermsAcceptedAt || client.termsAcceptedAt,
+        termsAcceptedVersion: submission.registrationTermsAcceptedVersion || client.termsAcceptedVersion,
+        termsAcceptedContent: submission.registrationTermsAcceptedContent || client.termsAcceptedContent,
+        legacyConsentEvidence: !submission.registrationConsentEvidence,
+      });
+    } catch {
+      res.status(500).json({ error: "Failed to fetch registration form" });
     }
   });
 

@@ -123,6 +123,10 @@ const h = vi.hoisted(() => {
     getClientClinicianOptionByToken: vi.fn(async (token: string) =>
       state.options.find(option => option.selectionToken === token)),
     getClientClinicianOptions: vi.fn(async () => state.options.map(option => ({ ...option }))),
+    getFormSubmissionsByClientId: vi.fn(async (clientId: string) =>
+      state.submissions.filter(submission => submission.clientId === clientId).map(submission => ({ ...submission }))),
+    getFormTemplateById: vi.fn(async (id: string) =>
+      state.registrationTemplate?.id === id ? { ...state.registrationTemplate } : undefined),
     createAuditLog: vi.fn(async (activity: any) => {
       state.activities.push(activity);
       return activity;
@@ -525,6 +529,60 @@ describe("registration journey HTTP routes", () => {
       "Insurer name: Bupa\nInsurance policy number: Policy\nPreauthorisation code: Auth",
     );
     expect(h.state.submissions[0].responses.agreement).toBe("Yes");
+    expect(h.state.submissions[0].registrationConsentEvidence).toEqual([{
+      fieldId: "agreement",
+      statement: "I agree to the terms and conditions",
+      answer: "Yes",
+      acceptedAt: h.state.client.termsAcceptedAt.toISOString(),
+    }]);
+    expect(h.state.submissions[0].registrationTermsAcceptedAt).toBe(h.state.client.termsAcceptedAt);
+    expect(h.state.submissions[0].registrationTermsAcceptedVersion).toBe(4);
+    expect(h.state.submissions[0].registrationTermsAcceptedContent).toContain("Current registration terms");
+  });
+
+  it("omits only explicitly marked consent-date fields from new registrations", async () => {
+    resetState({ client: {
+      status: "OptionSelected", registrationToken: "registration-token",
+      registrationTokenExpiresAt: new Date(Date.now() + 60_000),
+    } });
+    configureRegistrationTemplate([
+      { id: "manualConsentDate", type: "date", label: "Date of Consent", required: true, isConsentDate: true },
+      { id: "birthDate", type: "date", label: "Date of birth", required: true },
+    ]);
+    const rendered = await request("/api/public/register/client-a/registration-token");
+    expect(rendered.body.registrationTemplate.fields.map((field: any) => field.id)).toEqual([
+      "birthDate", "terms-copy", "agreement",
+    ]);
+    const submitted = await request("/api/public/register/client-a/registration-token", {
+      method: "POST",
+      body: JSON.stringify({
+        paymentType: "insurer", insurerName: "Bupa", insurancePolicyNumber: "Policy",
+        preauthorisationCode: "Auth", termsVersion: 4,
+        registrationTemplateUpdatedAt: "2026-09-06T12:00:00.000Z",
+        registrationResponses: { birthDate: "2010-04-03", agreement: "Yes" },
+      }),
+    });
+    expect(submitted.status).toBe(200);
+    expect(h.state.submissions[0].registrationTemplateFields.map((field: any) => field.id)).not.toContain("manualConsentDate");
+    expect(h.state.submissions[0].responses.birthDate).toBe("2010-04-03");
+  });
+
+  it("keeps registration and intake submissions in separate tenant-scoped admin routes", async () => {
+    h.state.client.registrationFormSubmissionId = "registration-1";
+    h.state.submissions = [
+      { id: "registration-1", clientId: "client-a", tenantId: "tenant-a", formTemplateId: null, registrationTemplateTitle: "Registration", registrationTemplateFields: [] },
+      { id: "intake-1", clientId: "client-a", tenantId: "tenant-a", formTemplateId: null, responses: {} },
+      { id: "foreign-intake", clientId: "client-a", tenantId: "tenant-b", formTemplateId: null, responses: {} },
+    ];
+    const intake = await request("/api/clients/client-a/submissions");
+    expect(intake.status).toBe(200);
+    expect(intake.body.map((submission: any) => submission.id)).toEqual(["intake-1"]);
+    const registration = await request("/api/clients/client-a/registration-submission");
+    expect(registration.status).toBe(200);
+    expect(registration.body).toMatchObject({ id: "registration-1", formTitle: "Registration" });
+
+    h.state.client.tenantId = "tenant-b";
+    expect((await request("/api/clients/client-a/registration-submission")).status).toBe(403);
   });
 
   it("does not require a hidden conditional field, but requires it when shown", async () => {

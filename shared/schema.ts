@@ -283,6 +283,10 @@ export const formSubmissions = pgTable("form_submissions", {
   registrationTemplateTitle: text("registration_template_title"),
   registrationTemplateDescription: text("registration_template_description"),
   registrationTemplateFields: json("registration_template_fields"),
+  registrationConsentEvidence: json("registration_consent_evidence"),
+  registrationTermsAcceptedAt: timestamp("registration_terms_accepted_at"),
+  registrationTermsAcceptedVersion: integer("registration_terms_accepted_version"),
+  registrationTermsAcceptedContent: text("registration_terms_accepted_content"),
 }, (table) => [
   uniqueIndex("form_submissions_registration_attempt_key_unique")
     .on(table.registrationAttemptKey)

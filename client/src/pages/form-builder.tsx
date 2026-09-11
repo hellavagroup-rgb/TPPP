@@ -533,6 +533,30 @@ export default function FormBuilder() {
                                 onCheckedChange={(checked) => updateField(selectedField.id, { required: checked })}
                             />
                             </div>
+                            {(selectedField.type === "radio" || selectedField.type === "checkbox") && (
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <Label>Consent confirmation</Label>
+                                  <p className="text-xs text-muted-foreground">Record affirmative answers with the server acceptance date</p>
+                                </div>
+                                <Switch
+                                  checked={selectedField.isConsentConfirmation === true}
+                                  onCheckedChange={(checked) => updateField(selectedField.id, { isConsentConfirmation: checked })}
+                                />
+                              </div>
+                            )}
+                            {selectedField.type === "date" && (
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <Label>Automatic consent date</Label>
+                                  <p className="text-xs text-muted-foreground">Hide this field in registration and use the server submission date</p>
+                                </div>
+                                <Switch
+                                  checked={selectedField.isConsentDate === true}
+                                  onCheckedChange={(checked) => updateField(selectedField.id, { isConsentDate: checked })}
+                                />
+                              </div>
+                            )}
                         </>
                         )}
                         
@@ -550,6 +574,9 @@ export default function FormBuilder() {
                                     setFields(current => current.map(field => ({
                                       ...field,
                                       isTermsAcceptance: field.id === selectedField.id ? checked : false,
+                                      isConsentConfirmation: field.id === selectedField.id && checked
+                                        ? true
+                                        : field.isConsentConfirmation,
                                     })));
                                   }}
                                 />

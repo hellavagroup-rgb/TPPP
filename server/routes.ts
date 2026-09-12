@@ -35,6 +35,7 @@ import {
   isActiveRegistrationToken,
   isCompletedRegistrationRetry,
   optionSelectionProgression,
+  resolveAgreedSessionRate,
   registrationCompletionBranch,
   registrationPaymentPrerequisite,
   isCorrelatedRegistrationCheckout,
@@ -1912,6 +1913,7 @@ export async function registerRoutes(
         registrationEmailAttemptKey: effectiveAttemptKey,
         registrationEmailClaimId: claimId,
         registrationEmailSendingAt: new Date(),
+        registrationEmailSentAt: null,
         updatedAt: new Date(),
       }).where(and(
         eq(clients.id, client.id),
@@ -1931,26 +1933,26 @@ export async function registerRoutes(
       }
       claimedAttemptKey = effectiveAttemptKey;
       claimedClaimId = claimId;
-      const tokenIsUsable = client.registrationToken && !client.registrationTokenRevokedAt
-        && (!client.registrationTokenExpiresAt || client.registrationTokenExpiresAt > new Date());
-      let token = tokenIsUsable ? client.registrationToken! : crypto.randomBytes(32).toString("hex");
-      // Persist the bearer token before sending so a successfully delivered link
-      // can never point at a token that was not saved. The workflow status remains
-      // unchanged until delivery succeeds. The token compare-and-swap ensures two
-      // concurrent first sends cannot email different tokens.
-      const tokenCondition = client.registrationToken
-        ? eq(clients.registrationToken, client.registrationToken)
-        : isNull(clients.registrationToken);
+      // A recovered attempt must reuse the exact token already sent to the
+      // provider. Keep it pending so the previously delivered link remains active
+      // until the replacement email is accepted.
+      let token = recoverableAttempt && client.registrationEmailPendingToken
+        ? client.registrationEmailPendingToken
+        : recoverableAttempt && client.registrationToken
+          ? client.registrationToken
+        : crypto.randomBytes(32).toString("hex");
       const tokenUpdate = await db.update(clients).set({
-        registrationToken: token,
-        registrationTokenExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-        registrationTokenRevokedAt: null,
+        registrationEmailPendingToken: token,
         updatedAt: new Date(),
-      }).where(and(eq(clients.id, client.id), eq(clients.tenantId, req.tenant.id), tokenCondition))
-        .returning({ registrationToken: clients.registrationToken });
+      }).where(and(
+        eq(clients.id, client.id),
+        eq(clients.tenantId, req.tenant.id),
+        eq(clients.registrationEmailAttemptKey, effectiveAttemptKey),
+        eq(clients.registrationEmailClaimId, claimId),
+      )).returning({ registrationEmailPendingToken: clients.registrationEmailPendingToken });
       if (!tokenUpdate.length) {
         const current = await storage.getClientById(client.id);
-        if (!current?.registrationToken) {
+        if (!current?.registrationEmailPendingToken) {
           await db.update(clients).set({
             registrationEmailSendingAt: null,
             registrationEmailAttemptKey: null,
@@ -1965,7 +1967,7 @@ export async function registerRoutes(
           claimedClaimId = null;
           return res.status(409).json({ error: "Registration is already being prepared. Please retry." });
         }
-        token = current.registrationToken;
+        token = current.registrationEmailPendingToken;
       }
       const registrationUrl = `${appBase.replace(/\/$/, "")}/register/${client.id}/${token}`;
       const tenantContext = { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor };
@@ -1983,6 +1985,10 @@ export async function registerRoutes(
           // Unknown transport outcome retains the provider key for deduplication.
           registrationEmailAttemptKey: delivery.outcome === "rejected" ? null : effectiveAttemptKey,
           registrationEmailClaimId: null,
+          ...(delivery.outcome === "rejected" ? {
+            registrationEmailSentAt: client.registrationEmailSentAt,
+            registrationEmailPendingToken: null,
+          } : {}),
           updatedAt: new Date(),
         }).where(and(
           eq(clients.id, client.id),
@@ -1997,6 +2003,10 @@ export async function registerRoutes(
         registrationEmailSentAt: new Date(),
         registrationEmailSendingAt: null,
         registrationEmailClaimId: null,
+        registrationEmailPendingToken: null,
+        registrationToken: token,
+        registrationTokenExpiresAt: null,
+        registrationTokenRevokedAt: null,
         status: "OptionSelected",
         updatedAt: new Date(),
       }).where(and(
@@ -2014,7 +2024,7 @@ export async function registerRoutes(
       await recordActivity(req, "activity_registration_sent", "client", client.id, { clientDisplayId: client.displayId });
       claimedAttemptKey = null;
       claimedClaimId = null;
-      return res.json({ success: true, resent: tokenIsUsable });
+      return res.json({ success: true, resent: !!client.registrationEmailSentAt });
     } catch (error) {
       if (claimedAttemptKey && claimedClaimId) {
         await db.update(clients).set({
@@ -2023,6 +2033,10 @@ export async function registerRoutes(
           // an ambiguous retry is deduplicated by Resend.
           registrationEmailAttemptKey: providerAcceptedSend ? claimedAttemptKey : null,
           registrationEmailClaimId: null,
+          ...(!providerAcceptedSend ? {
+            registrationEmailSentAt: client.registrationEmailSentAt,
+            registrationEmailPendingToken: null,
+          } : {}),
           updatedAt: new Date(),
         }).where(and(
           eq(clients.id, req.params.clientId),
@@ -2359,8 +2373,7 @@ export async function registerRoutes(
         const priorSelected = clinicianOptionId && priorOptions.find(option => option.id === clinicianOptionId && option.status === "selected");
         if (priorSelected) {
           const tenant = await storage.getTenantById(optionRow.tenantId);
-          if (tenant?.registrationFormEnabled && client.registrationToken && !client.registrationTokenRevokedAt
-            && (!client.registrationTokenExpiresAt || client.registrationTokenExpiresAt > new Date())) {
+          if (tenant?.registrationFormEnabled && client.registrationToken && !client.registrationTokenRevokedAt) {
             return res.json({ selected: true, registrationUrl: `/register/${optionRow.clientId}/${client.registrationToken}`, idempotent: true });
           }
           if (client.status === "BookingConfirmed") return res.json({ selected: true, bookingConfirmed: true, idempotent: true });
@@ -2419,6 +2432,14 @@ export async function registerRoutes(
 
       try {
         await db.transaction(async (tx) => {
+          const [selectedClinician] = await tx.select({
+            sessionRatePence: clinicians.sessionRatePence,
+          }).from(clinicians).where(and(
+            eq(clinicians.id, selectedOption.clinicianId),
+            eq(clinicians.tenantId, optionRow.tenantId),
+          )).limit(1);
+          if (!selectedClinician) throw new Error("SELECTED_CLINICIAN_NOT_FOUND");
+          const clinicianRatePence = resolveAgreedSessionRate(null, selectedClinician.sessionRatePence);
           // Options are not holds. Claim exactly the selected slot with a conditional
           // update so two clients cannot both select it.
           if (!selectedOption.slotId) throw new Error("Selected option has no appointment slot");
@@ -2460,9 +2481,13 @@ export async function registerRoutes(
             status: nextStatus,
             assignedClinicianId: selectedOption.clinicianId,
             assignedSlotId: selectedOption.slotId,
+            agreedRatePence: drizzleSql`CASE
+              WHEN ${clients.agreedRatePence} > 0 THEN ${clients.agreedRatePence}
+              ELSE ${clinicianRatePence}
+            END`,
             zoomLinkSentAt: null,
             registrationToken,
-            registrationTokenExpiresAt: registrationEnabled ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) : null,
+            registrationTokenExpiresAt: null,
             registrationTokenRevokedAt: null,
             updatedAt: new Date(),
           }).where(and(eq(clients.id, optionRow.clientId), eq(clients.status, "OptionsSent")))
@@ -2481,6 +2506,9 @@ export async function registerRoutes(
         }
         if (message === "SELECTION_ALREADY_SUBMITTED") {
           return res.status(409).json({ error: "Selection has already been submitted" });
+        }
+        if (message === "SELECTED_CLINICIAN_NOT_FOUND") {
+          return res.status(404).json({ error: "Selected clinician not found" });
         }
         throw err;
       }

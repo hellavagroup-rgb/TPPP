@@ -110,7 +110,13 @@ const h = vi.hoisted(() => {
         if (patch.status === "RegistrationPending" && state.client.status !== "OptionSelected") return [];
         if (patch.status === "BookingConfirmed" && !["OptionsSent", "RegistrationPending"].includes(state.client.status)) return [];
         if (patch.stripeCheckoutUrl && state.client.stripeCheckoutUrl) return [];
-        Object.assign(state.client, patch);
+        const resolvedPatch = { ...patch };
+        if (resolvedPatch.agreedRatePence && typeof resolvedPatch.agreedRatePence === "object") {
+          resolvedPatch.agreedRatePence = state.client.agreedRatePence > 0
+            ? state.client.agreedRatePence
+            : state.clinician.sessionRatePence;
+        }
+        Object.assign(state.client, resolvedPatch);
         return [state.client];
       }),
     }),
@@ -119,6 +125,8 @@ const h = vi.hoisted(() => {
 
   const storage: any = new Proxy({
     getClientById: vi.fn(async () => state.client?.id ? { ...state.client } : undefined),
+    getClinicianById: vi.fn(async (id: string) =>
+      state.clinician?.id === id ? { ...state.clinician } : undefined),
     getTenantById: vi.fn(async () => state.tenant?.id ? { ...state.tenant } : undefined),
     getClientClinicianOptionByToken: vi.fn(async (token: string) =>
       state.options.find(option => option.selectionToken === token)),
@@ -248,6 +256,7 @@ function resetState(overrides: { client?: any; tenant?: any } = {}) {
     registrationEmailSendingAt: null,
     registrationEmailAttemptKey: null,
     registrationEmailClaimId: null,
+    registrationEmailPendingToken: null,
     registrationPaymentAttemptKey: null,
     stripeCheckoutUrl: null,
     stripePaymentLinkId: null,
@@ -268,7 +277,13 @@ function resetState(overrides: { client?: any; tenant?: any } = {}) {
     id: "slot-a", tenantId: "tenant-a", clinicianId: "clinician-a", isBooked: false,
     type: "SpecificDate", date: "2026-09-10", startTime: "10:00", endTime: "11:00",
   };
-  h.state.clinician = { id: "clinician-a", tenantId: "tenant-a", userId: "user-a", zoomLink: null };
+  h.state.clinician = {
+    id: "clinician-a",
+    tenantId: "tenant-a",
+    userId: "user-a",
+    zoomLink: null,
+    sessionRatePence: 11000,
+  };
   h.state.activities = [];
   h.state.emails = [];
   h.state.paymentLinks = [];
@@ -386,8 +401,22 @@ describe("registration journey HTTP routes", () => {
     expect(first.body.registrationUrl).toMatch(/^\/register\/client-a\//);
     expect(retry.body).toMatchObject({ registrationUrl: first.body.registrationUrl, idempotent: true });
     expect(h.state.client.status).toBe("OptionSelected");
+    expect(h.state.client.agreedRatePence).toBe(12000);
+    expect(h.state.client.registrationTokenExpiresAt).toBeNull();
     expect(h.state.activities.filter(a => a.action === "activity_appointment_option_selected")).toHaveLength(1);
     expect(h.state.emails).toHaveLength(0);
+  });
+
+  it("applies the selected clinician rate when the client has no specific rate", async () => {
+    h.state.client.agreedRatePence = null;
+    h.state.clinician.sessionRatePence = 13500;
+
+    const response = await request("/api/public/options/selection-token-a/select", {
+      method: "POST", body: JSON.stringify({ clinicianOptionId: "option-a" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(h.state.client.agreedRatePence).toBe(13500);
   });
 
   it("confirms directly when registration is off and sends one confirmation", async () => {
@@ -454,9 +483,21 @@ describe("registration journey HTTP routes", () => {
     expect(retry.body).toMatchObject({ success: true, idempotent: true });
     expect(h.state.emails).toHaveLength(1);
     expect(h.state.activities.filter(a => a.action === "activity_registration_sent")).toHaveLength(1);
+    const originalToken = h.state.client.registrationToken;
+    expect(h.state.client.registrationTokenExpiresAt).toBeNull();
+
+    const resent = await request("/api/clients/client-a/send-registration", {
+      method: "POST", body: JSON.stringify({ attemptKey: "new-admin-resend-654321" }),
+    });
+    expect(resent.status).toBe(200);
+    expect(h.state.client.registrationToken).not.toBe(originalToken);
+    expect(h.state.client.registrationTokenExpiresAt).toBeNull();
+    expect(h.state.emails).toHaveLength(2);
 
     resetState({ client: {
       status: "Assigned", assignedClinicianId: "clinician-a", assignedSlotId: "slot-a",
+      registrationToken: "previously-delivered-token",
+      registrationEmailPendingToken: "recovery-token",
       registrationEmailAttemptKey: ATTEMPT_KEY,
       registrationEmailSendingAt: new Date(Date.now() - 10 * 60 * 1000),
     } });
@@ -465,7 +506,44 @@ describe("registration journey HTTP routes", () => {
     });
     expect(recovered.status).toBe(200);
     expect(h.state.emails[0].idempotencyKey).toBe(`registration-client-a-${ATTEMPT_KEY}`);
+    expect(h.state.client.registrationToken).toBe("recovery-token");
+    expect(h.state.client.registrationEmailPendingToken).toBeNull();
     expect(h.state.activities.filter(a => a.action === "activity_registration_sent")).toHaveLength(1);
+
+    resetState({ client: {
+      status: "Assigned", assignedClinicianId: "clinician-a", assignedSlotId: "slot-a",
+      registrationToken: "pre-migration-recovery-token",
+      registrationEmailPendingToken: null,
+      registrationEmailAttemptKey: ATTEMPT_KEY,
+      registrationEmailSendingAt: new Date(Date.now() - 10 * 60 * 1000),
+    } });
+    const migratedRecovery = await request("/api/clients/client-a/send-registration", {
+      method: "POST", body: JSON.stringify({ attemptKey: "post-migration-attempt-654321" }),
+    });
+    expect(migratedRecovery.status).toBe(200);
+    expect(h.state.emails[0].idempotencyKey).toBe(`registration-client-a-${ATTEMPT_KEY}`);
+    expect(h.state.client.registrationToken).toBe("pre-migration-recovery-token");
+  });
+
+  it("keeps the previously delivered link active when a resend is rejected", async () => {
+    const previousSentAt = new Date("2026-09-01T12:00:00Z");
+    resetState({ client: {
+      status: "Assigned",
+      assignedClinicianId: "clinician-a",
+      assignedSlotId: "slot-a",
+      registrationToken: "previously-delivered-token",
+      registrationEmailSentAt: previousSentAt,
+    } });
+    h.state.emailResult = { success: false, outcome: "rejected" };
+
+    const response = await request("/api/clients/client-a/send-registration", {
+      method: "POST", body: JSON.stringify({ attemptKey: "rejected-resend-654321" }),
+    });
+
+    expect(response.status).toBe(502);
+    expect(h.state.client.registrationToken).toBe("previously-delivered-token");
+    expect(h.state.client.registrationEmailPendingToken).toBeNull();
+    expect(h.state.client.registrationEmailSentAt).toEqual(previousSentAt);
   });
 
   it("rejects stale consent before mutating registration", async () => {

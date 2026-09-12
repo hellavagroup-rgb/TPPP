@@ -5,6 +5,7 @@ import {
   isCompletedRegistrationRetry,
   nextTermsVersion,
   optionSelectionProgression,
+  resolveAgreedSessionRate,
   registrationCompletionBranch,
   registrationPaymentPrerequisite,
   isCorrelatedRegistrationCheckout,
@@ -19,11 +20,12 @@ describe("registration security decisions", () => {
     expect(validateRegistrationConsent(true, 3, 3)).toBeNull();
   });
 
-  it("rejects revoked and expired bearer registration tokens", () => {
+  it("keeps bearer registration tokens active until revoked or replaced", () => {
     const now = new Date("2025-01-02T00:00:00Z");
-    expect(isActiveRegistrationToken({ registrationToken: "a", registrationTokenExpiresAt: new Date("2025-01-03"), registrationTokenRevokedAt: null }, "a", now)).toBe(true);
-    expect(isActiveRegistrationToken({ registrationToken: "a", registrationTokenExpiresAt: new Date("2025-01-01"), registrationTokenRevokedAt: null }, "a", now)).toBe(false);
-    expect(isActiveRegistrationToken({ registrationToken: "a", registrationTokenExpiresAt: null, registrationTokenRevokedAt: now }, "a", now)).toBe(false);
+    expect(isActiveRegistrationToken({ registrationToken: "a", registrationTokenExpiresAt: new Date("2025-01-03"), registrationTokenRevokedAt: null }, "a")).toBe(true);
+    expect(isActiveRegistrationToken({ registrationToken: "a", registrationTokenExpiresAt: new Date("2025-01-01"), registrationTokenRevokedAt: null }, "a")).toBe(true);
+    expect(isActiveRegistrationToken({ registrationToken: "a", registrationTokenExpiresAt: null, registrationTokenRevokedAt: now }, "a")).toBe(false);
+    expect(isActiveRegistrationToken({ registrationToken: "replacement", registrationTokenExpiresAt: null, registrationTokenRevokedAt: null }, "a")).toBe(false);
   });
 
   it("recognizes a completed response-loss retry despite token revocation", () => {
@@ -58,6 +60,13 @@ describe("registration security decisions", () => {
   it("skips registration when the tenant feature is off", () => {
     expect(optionSelectionProgression(false)).toEqual({ status: "BookingConfirmed", requiresRegistration: false });
     expect(optionSelectionProgression(true)).toEqual({ status: "OptionSelected", requiresRegistration: true });
+  });
+
+  it("uses an explicit client rate before the selected clinician's default", () => {
+    expect(resolveAgreedSessionRate(15000, 12000)).toBe(15000);
+    expect(resolveAgreedSessionRate(null, 12000)).toBe(12000);
+    expect(resolveAgreedSessionRate(0, 12000)).toBe(12000);
+    expect(resolveAgreedSessionRate(null, null)).toBeNull();
   });
 
   it("selects Stripe and direct-confirmation branches consistently", () => {

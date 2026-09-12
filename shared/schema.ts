@@ -206,6 +206,7 @@ export const clients = pgTable("clients", {
   registrationEmailSendingAt: timestamp("registration_email_sending_at"),
   registrationEmailAttemptKey: text("registration_email_attempt_key"),
   registrationEmailClaimId: text("registration_email_claim_id"),
+  registrationEmailPendingToken: text("registration_email_pending_token"),
   termsAcceptedAt: timestamp("terms_accepted_at"),
   termsAcceptedVersion: integer("terms_accepted_version"),
   termsAcceptedContent: text("terms_accepted_content"),

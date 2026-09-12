@@ -5,10 +5,9 @@ export function isActiveRegistrationToken(token: {
   registrationToken: string | null;
   registrationTokenExpiresAt: Date | null;
   registrationTokenRevokedAt: Date | null;
-}, supplied: string, now = new Date()): boolean {
+}, supplied: string): boolean {
   return token.registrationToken === supplied
-    && !token.registrationTokenRevokedAt
-    && (!token.registrationTokenExpiresAt || token.registrationTokenExpiresAt > now);
+    && !token.registrationTokenRevokedAt;
 }
 
 export function isCompletedRegistrationRetry(
@@ -43,6 +42,17 @@ export function optionSelectionProgression(registrationEnabled: boolean): {
   return registrationEnabled
     ? { status: "OptionSelected", requiresRegistration: true }
     : { status: "BookingConfirmed", requiresRegistration: false };
+}
+
+export function resolveAgreedSessionRate(
+  clientRatePence: number | null,
+  clinicianRatePence: number | null,
+): number | null {
+  return clientRatePence && clientRatePence > 0
+    ? clientRatePence
+    : clinicianRatePence && clinicianRatePence > 0
+      ? clinicianRatePence
+      : null;
 }
 
 export function validateRegistrationConsent(termsAccepted: unknown, suppliedVersion: unknown, currentVersion: number): string | null {

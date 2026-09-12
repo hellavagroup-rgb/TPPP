@@ -210,6 +210,7 @@ export const clients = pgTable("clients", {
   termsAcceptedVersion: integer("terms_accepted_version"),
   termsAcceptedContent: text("terms_accepted_content"),
   bookingConfirmationSentAt: timestamp("booking_confirmation_sent_at"),
+  zoomLinkSentAt: timestamp("zoom_link_sent_at"),
   // Timestamps
   intakeDate: timestamp("intake_date").defaultNow().notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),

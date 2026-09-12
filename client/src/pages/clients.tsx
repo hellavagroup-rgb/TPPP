@@ -81,6 +81,7 @@ import { apiRequest } from "@/lib/queryClient";
 import type { Client as ClientType, Clinician, FormTemplate as FormTemplateType, TimeSlot } from "@shared/schema";
 import { useInsurers, useAddInsurer } from "@/hooks/use-insurers";
 import { useAuth } from "@/lib/auth";
+import { isValidZoomLink } from "@shared/bookingZoom";
 
 type ClinicianWithAvailability = Clinician & { name: string; availability: TimeSlot[] };
 
@@ -334,6 +335,20 @@ export default function Clients() {
         }
       }
       toast({ title: "Options not resent", description, variant: "destructive" });
+    },
+  });
+
+  const sendZoomLinkMutation = useMutation({
+    mutationFn: async (clientId: string) => {
+      const response = await apiRequest("POST", `/api/clients/${clientId}/send-zoom-link`, {});
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      toast({ title: "Zoom link sent", description: "The clinician's Zoom link was emailed to the client." });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Zoom link not sent", description: error.message.replace(/^\d+:\s*/, ""), variant: "destructive" });
     },
   });
 
@@ -2331,6 +2346,11 @@ export default function Clients() {
                     ) : (client as any).slotLocationType === "online" ? (
                       <span className="inline-block text-[11px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-300 leading-tight">Online</span>
                     ) : null}
+                    {showConfirmedState && (client as any).slotLocationType === "online" && !(client as any).zoomLinkSentAt && (
+                      <Badge variant="destructive" className="gap-1">
+                        <AlertTriangle className="h-3 w-3" /> Zoom link pending
+                      </Badge>
+                    )}
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button variant="ghost" size="icon">
@@ -2353,6 +2373,15 @@ export default function Clients() {
                         {client.registrationFormSubmissionId && (
                           <DropdownMenuItem onClick={() => handleOpenRegistrationForm(client)}>
                             <FileText className="h-4 w-4 mr-2" /> View Registration Form
+                          </DropdownMenuItem>
+                        )}
+                        {showConfirmedState && (client as any).slotLocationType === "online" && !(client as any).zoomLinkSentAt && (
+                          <DropdownMenuItem
+                            disabled={sendZoomLinkMutation.isPending || !isValidZoomLink(clinicians.find(c => c.id === client.assignedClinicianId)?.zoomLink)}
+                            onClick={() => sendZoomLinkMutation.mutate(client.id)}
+                            data-testid={`button-send-zoom-link-${client.id}`}
+                          >
+                            <Mail className="h-4 w-4 mr-2" /> Send Zoom Link
                           </DropdownMenuItem>
                         )}
                         {stripeEnabled && !client.isArchived && (
@@ -2691,10 +2720,12 @@ export default function Clients() {
                         
                         const isSelectedForOptions = multiClinicianAllocationEnabled && selectedOptions.some(o => o.clinicianId === clinician.id && o.slotId === slot.id);
                         // Disable booked slots always; also disable zero-capacity clinicians unless override is on
-                        const isSlotUnavailable = slot.isBooked || (!showAllClinicians && (clinician.maxNewClients ?? 0) === 0);
+                        const missingZoomLink = (slot as any).locationType === "online" && !isValidZoomLink(clinician.zoomLink);
+                        const isSlotUnavailable = slot.isBooked || missingZoomLink || (!showAllClinicians && (clinician.maxNewClients ?? 0) === 0);
                         return (
                           <Button 
                             key={slot.id}
+                            title={missingZoomLink ? `${clinician.name} needs a valid Zoom link before this online option can be sent.` : undefined}
                             variant={isSelectedForOptions ? "default" : slot.isBooked ? "ghost" : "outline"}
                             disabled={!isSelectedForOptions && isSlotUnavailable}
                             className={`justify-start h-auto py-2 px-3 text-xs relative ${

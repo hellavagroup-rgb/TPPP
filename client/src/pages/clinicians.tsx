@@ -11,11 +11,12 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { MapPin, Building, Users, Shield, Edit, Briefcase, Lock, Mail, MessageSquare, Phone, Trash2, UserX, Plus, PoundSterling } from "lucide-react";
+import { MapPin, Building, Users, Shield, Edit, Briefcase, Lock, Mail, MessageSquare, Phone, Trash2, UserX, Plus, PoundSterling, AlertTriangle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { Clinician, TimeSlot } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
 import { useInsurers } from "@/hooks/use-insurers";
+import { isValidZoomLink } from "@shared/bookingZoom";
 
 const CONTACT_METHODS = ["Email", "Text", "WhatsApp"];
 
@@ -63,6 +64,12 @@ function getSlotCounts(availability?: TimeSlot[]) {
   });
   
   return { available, pending };
+}
+
+function hasActiveOnlineAvailability(availability?: TimeSlot[]) {
+  return availability?.some(slot =>
+    !slot.isBooked && slot.type !== "Vacation" && slot.locationType === "online" && isSlotActive(slot)
+  ) === true;
 }
 
 export default function Clinicians() {
@@ -303,6 +310,11 @@ export default function Clinicians() {
                       {clinician.worksWithCouples && (
                         <Badge variant="secondary" className="text-[10px] font-normal bg-indigo-50 text-indigo-700 hover:bg-indigo-100">
                           Couples
+                        </Badge>
+                      )}
+                      {hasActiveOnlineAvailability(clinician.availability) && !isValidZoomLink(clinician.zoomLink) && (
+                        <Badge variant="destructive" className="text-[10px] gap-1" data-testid={`warning-missing-zoom-${clinician.id}`}>
+                          <AlertTriangle className="h-3 w-3" /> Online slots need Zoom link
                         </Badge>
                       )}
                     </div>
@@ -658,7 +670,11 @@ export default function Clinicians() {
                   placeholder="https://zoom.us/j/..."
                   data-testid="input-zoom-link"
                 />
-                <p className="text-[10px] text-muted-foreground">Personal Zoom link sent to clients in booking confirmation emails.</p>
+                <p className={`text-[10px] ${editedClinician.zoomLink && !isValidZoomLink(editedClinician.zoomLink) ? "text-destructive" : "text-muted-foreground"}`}>
+                  {editedClinician.zoomLink && !isValidZoomLink(editedClinician.zoomLink)
+                    ? "Enter a valid https://zoom.us link."
+                    : "Sent separately to clients with confirmed online appointments."}
+                </p>
               </div>
 
               <div className="flex items-center justify-between border p-3 rounded-md bg-amber-50/50">

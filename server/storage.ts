@@ -25,6 +25,7 @@ import {
   type HistoricalActivitySources,
   type RecentActivityCategory,
 } from "./activity";
+import { shouldResetZoomDelivery } from "@shared/bookingZoom";
 import { UNALLOCATED_CLIENT_STATUSES } from "./strandedAllocationRepair";
 
 export type StrandedAllocationRepairRow = {
@@ -781,6 +782,7 @@ export class DatabaseStorage implements IStorage {
         assignedClinicianId: clinicianId,
         assignedSlotId: slotId,
         assignedSlot: slotString,
+        zoomLinkSentAt: null,
         allocationMethod: allocationMethod,
         allocationReason: allocationReason || null,
         allocatedAt: new Date(),
@@ -809,6 +811,10 @@ export class DatabaseStorage implements IStorage {
     const isAllocatedStatus = newStatus === "Assigned" || newStatus === "AwaitingConfirmation" || newStatus === "Scheduled";
     // Only consider it a reassign if a NEW slot is being assigned (different from current)
     const isReassigning = newSlotId !== null && newSlotId !== existingClient.assignedSlotId;
+    const zoomDeliveryIdentityChanged = shouldResetZoomDelivery(existingClient, {
+      assignedClinicianId: newClinicianId,
+      assignedSlotId: newSlotId,
+    });
 
     // Check if client has any allocation (either by slotId or legacy slot string)
     const hasAllocation = oldClinicianId && (oldSlotIdToRelease || existingClient.assignedSlot);
@@ -857,6 +863,7 @@ export class DatabaseStorage implements IStorage {
             assignedSlotId: null,
             assignedSlot: null,
             assignedClinicianId: null,
+            zoomLinkSentAt: null,
             confirmedAt: new Date(),
             updatedAt: new Date()
           }).where(eq(clients.id, clientId));
@@ -909,6 +916,7 @@ export class DatabaseStorage implements IStorage {
           assignedClinicianId: newClinicianId,
           assignedSlotId: newSlotId,
           assignedSlot: slotString,
+          ...(zoomDeliveryIdentityChanged ? { zoomLinkSentAt: null } : {}),
           updatedAt: new Date()
         };
         if (newStatus === "Assigned") {
@@ -949,6 +957,7 @@ export class DatabaseStorage implements IStorage {
           assignedClinicianId: null,
           assignedSlotId: null,
           assignedSlot: null,
+          zoomLinkSentAt: null,
           updatedAt: new Date()
         }).where(eq(clients.id, clientId));
         return;

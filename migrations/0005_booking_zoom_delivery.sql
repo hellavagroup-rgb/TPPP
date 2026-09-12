@@ -1,0 +1,1 @@
+ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "zoom_link_sent_at" timestamp;

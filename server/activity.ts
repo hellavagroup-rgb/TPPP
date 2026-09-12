@@ -32,6 +32,7 @@ export const RECENT_ACTIVITY_ACTIONS = [
   "activity_appointment_options_declined",
   "activity_registration_submitted",
   "activity_booking_confirmed",
+  "activity_zoom_link_sent",
   "activity_slot_added",
   "activity_slot_removed",
   "activity_slot_location_changed",
@@ -64,6 +65,7 @@ export const RECENT_ACTIVITY_CATEGORY_ACTIONS = {
     "activity_appointment_options_declined",
     "activity_registration_submitted",
     "activity_booking_confirmed",
+    "activity_zoom_link_sent",
   ],
   tasks: [
     "activity_task_created",
@@ -225,6 +227,8 @@ export function toRecentActivityItem(log: AuditLog): RecentActivityItem {
       return { id: log.id, eventType: "client", title: "Client registration submitted", description: `${clientDisplayId} submitted their registration.`, actorName, timestamp: log.timestamp };
     case "activity_booking_confirmed":
       return { id: log.id, eventType: "client", title: "Booking confirmed", description: `${clientDisplayId}'s appointment is confirmed.`, actorName, timestamp: log.timestamp };
+    case "activity_zoom_link_sent":
+      return { id: log.id, eventType: "client", title: "Zoom link sent", description: `${clientDisplayId}'s clinician Zoom link was sent.`, actorName, timestamp: log.timestamp };
     case "activity_slot_added":
       return { id: log.id, eventType: "availability", title: "Availability added", description: `${clinicianName} added ${number(details, "slotCount", 1)} slot${number(details, "slotCount", 1) === 1 ? "" : "s"}${slotDescription ? `: ${slotDescription}` : ""}.`, actorName, timestamp: log.timestamp };
     case "activity_slot_removed":

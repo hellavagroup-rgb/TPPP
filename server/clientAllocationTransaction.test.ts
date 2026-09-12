@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PgDialect } from "drizzle-orm/pg-core";
 
 const dbMock = vi.hoisted(() => ({
   transaction: vi.fn(),
@@ -9,6 +10,7 @@ vi.mock("./db", () => ({ db: dbMock }));
 import {
   ClientAllocationUpdateError,
   DatabaseStorage,
+  ManualAssignmentError,
 } from "./storage";
 
 type State = {
@@ -31,6 +33,9 @@ function transactionalState(
     const draft = structuredClone(state);
     let updateNumber = 0;
     const tx = {
+      delete: vi.fn(() => ({
+        where: vi.fn(async () => undefined),
+      })),
       update: vi.fn(() => {
         updateNumber += 1;
         const target = updateNumber === 1
@@ -174,4 +179,347 @@ describe("DatabaseStorage.updateClientAndReleaseSlot", () => {
 
     expect(state.clinician.currentLoad).toBe(0);
   });
+});
+
+type AssignmentState = {
+  client: {
+    id: string;
+    tenantId: string;
+    displayId: string;
+    status: string;
+    assignedSlotId: string | null;
+    assignedSlot: string | null;
+    assignedClinicianId: string | null;
+  };
+  clinician: { id: string; tenantId: string; currentLoad: number };
+  slot: {
+    id: string;
+    tenantId: string;
+    clinicianId: string;
+    isBooked: boolean;
+    type: "Recurring" | "SpecificDate";
+    day: string | null;
+    date: string | null;
+    startTime: string;
+  };
+};
+
+function assignmentTransactions(
+  state: AssignmentState,
+  failOn: "slot" | "clinician" | "client" | null = null,
+  missing: "client" | "clinician" | "slot" | null = null,
+) {
+  let previous = Promise.resolve();
+  dbMock.transaction.mockImplementation(async (callback) => {
+    const run = previous.then(async () => {
+      const draft = structuredClone(state);
+      let selectNumber = 0;
+      let updateNumber = 0;
+      const tx = {
+        select: vi.fn(() => {
+          selectNumber += 1;
+          const row = selectNumber === 1
+            ? (missing === "client" ? undefined : draft.client)
+            : selectNumber === 2
+              ? (missing === "clinician" ? undefined : draft.clinician)
+              : (missing === "slot" ? undefined : draft.slot);
+          const query = {
+            from() {
+              return query;
+            },
+            where() {
+              return query;
+            },
+            for: vi.fn(async () => [row]),
+            then<TResult1 = unknown, TResult2 = never>(
+              onfulfilled?: ((value: unknown) => TResult1 | PromiseLike<TResult1>) | null,
+              onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+            ) {
+              return Promise.resolve([row]).then(onfulfilled, onrejected);
+            },
+          };
+          return query;
+        }),
+        update: vi.fn(() => {
+          updateNumber += 1;
+          const target = updateNumber === 1
+            ? "slot"
+            : updateNumber === 2
+              ? "clinician"
+              : "client";
+          let values: Record<string, unknown> = {};
+          const execute = async () => {
+            if (target === failOn) throw new Error(`${target} update failed`);
+            if (target === "slot") {
+              if (draft.slot.isBooked) return [];
+              Object.assign(draft.slot, values);
+              return [{ id: draft.slot.id }];
+            }
+            if (target === "clinician") {
+              draft.clinician.currentLoad += 1;
+              return [{ id: draft.clinician.id }];
+            }
+            Object.assign(draft.client, values);
+            return [draft.client];
+          };
+          const query = {
+            set(nextValues: Record<string, unknown>) {
+              values = nextValues;
+              return query;
+            },
+            where() {
+              return query;
+            },
+            returning() {
+              return execute();
+            },
+          };
+          return query;
+        }),
+      };
+
+      const result = await callback(tx);
+      Object.assign(state.slot, draft.slot);
+      Object.assign(state.clinician, draft.clinician);
+      Object.assign(state.client, draft.client);
+      return result;
+    });
+    previous = run.then(() => undefined, () => undefined);
+    return run;
+  });
+}
+
+describe("DatabaseStorage.assignClinicianToClient", () => {
+  let state: AssignmentState;
+
+  beforeEach(() => {
+    dbMock.transaction.mockReset();
+    state = {
+      client: {
+        id: "client-1",
+        tenantId: "tenant-1",
+        displayId: "W00000001",
+        status: "Forms Completed",
+        assignedSlotId: null,
+        assignedSlot: null,
+        assignedClinicianId: null,
+      },
+      clinician: { id: "clinician-1", tenantId: "tenant-1", currentLoad: 2 },
+      slot: {
+        id: "slot-1",
+        tenantId: "tenant-1",
+        clinicianId: "clinician-1",
+        isBooked: false,
+        type: "Recurring",
+        day: "Monday",
+        date: null,
+        startTime: "09:00",
+      },
+    };
+  });
+
+  it("claims the slot, increments workload, and assigns the client atomically", async () => {
+    assignmentTransactions(state);
+
+    const result = await new DatabaseStorage().assignClinicianToClient(
+      "client-1", "clinician-1", "slot-1", "tenant-1", "manual", "Admin choice",
+    );
+
+    expect(result).toMatchObject({
+      status: "Assigned",
+      assignedClinicianId: "clinician-1",
+      assignedSlotId: "slot-1",
+      assignedSlot: "Monday 09:00",
+    });
+    expect(state.slot.isBooked).toBe(true);
+    expect(state.clinician.currentLoad).toBe(3);
+  });
+
+  it.each(["client", "clinician", "slot"] as const)(
+    "rejects a cross-tenant %s without changing any records",
+    async (resource) => {
+      state[resource].tenantId = "tenant-2";
+      assignmentTransactions(state);
+      const original = structuredClone(state);
+
+      await expect(new DatabaseStorage().assignClinicianToClient(
+        "client-1", "clinician-1", "slot-1", "tenant-1",
+      )).rejects.toMatchObject({ reason: "access_denied" });
+      expect(state).toEqual(original);
+    },
+  );
+
+  it.each([
+    ["client", "client_not_found"],
+    ["clinician", "clinician_not_found"],
+    ["slot", "slot_not_found"],
+  ] as const)("reports a missing %s without changing any records", async (resource, reason) => {
+    assignmentTransactions(state, null, resource);
+    const original = structuredClone(state);
+
+    await expect(new DatabaseStorage().assignClinicianToClient(
+      "client-1", "clinician-1", "slot-1", "tenant-1",
+    )).rejects.toMatchObject({ reason });
+    expect(state).toEqual(original);
+  });
+
+  it("rejects a slot owned by a different clinician", async () => {
+    state.slot.clinicianId = "clinician-2";
+    assignmentTransactions(state);
+    const original = structuredClone(state);
+
+    await expect(new DatabaseStorage().assignClinicianToClient(
+      "client-1", "clinician-1", "slot-1", "tenant-1",
+    )).rejects.toMatchObject({ reason: "slot_clinician_mismatch" });
+    expect(state).toEqual(original);
+  });
+
+  it("rejects a client with only a legacy assigned-slot marker", async () => {
+    state.client.assignedSlot = "Tuesday 14:00";
+    assignmentTransactions(state);
+    const original = structuredClone(state);
+
+    await expect(new DatabaseStorage().assignClinicianToClient(
+      "client-1", "clinician-1", "slot-1", "tenant-1",
+    )).rejects.toMatchObject({ reason: "client_already_assigned" });
+    expect(state).toEqual(original);
+  });
+
+  it("rejects an occupied slot without changing client or workload", async () => {
+    state.slot.isBooked = true;
+    assignmentTransactions(state);
+    const original = structuredClone(state);
+
+    await expect(new DatabaseStorage().assignClinicianToClient(
+      "client-1", "clinician-1", "slot-1", "tenant-1",
+    )).rejects.toMatchObject({ reason: "slot_unavailable" });
+    expect(state).toEqual(original);
+  });
+
+  it("allows only one of two concurrent claims to commit", async () => {
+    assignmentTransactions(state);
+    const storage = new DatabaseStorage();
+
+    const results = await Promise.allSettled([
+      storage.assignClinicianToClient("client-1", "clinician-1", "slot-1", "tenant-1"),
+      storage.assignClinicianToClient("client-1", "clinician-1", "slot-1", "tenant-1"),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((result) => result.status === "rejected");
+    expect(rejected).toMatchObject({
+      reason: expect.objectContaining({ reason: "slot_unavailable" }),
+    });
+    expect(state.clinician.currentLoad).toBe(3);
+  });
+
+  it("allows only one of two different clients to claim the same slot concurrently", async () => {
+    let transactionNumber = 0;
+    let slotClaimed = false;
+    let workloadIncrements = 0;
+    let clientAssignments = 0;
+    const slotClaimQueries: Array<{ sql: string; params: unknown[] }> = [];
+    const dialect = new PgDialect();
+    dbMock.transaction.mockImplementation(async (callback) => {
+      transactionNumber += 1;
+      const clientNumber = transactionNumber;
+      let selectNumber = 0;
+      let updateNumber = 0;
+      const tx = {
+        select: vi.fn(() => {
+          selectNumber += 1;
+          const row = selectNumber === 1
+            ? { ...state.client, id: `client-${clientNumber}` }
+            : selectNumber === 2
+              ? state.clinician
+              : state.slot;
+          const query = {
+            from() {
+              return query;
+            },
+            where() {
+              return query;
+            },
+            async for() {
+              await Promise.resolve();
+              return [row];
+            },
+            then<TResult1 = unknown, TResult2 = never>(
+              onfulfilled?: ((value: unknown) => TResult1 | PromiseLike<TResult1>) | null,
+              onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+            ) {
+              return Promise.resolve([row]).then(onfulfilled, onrejected);
+            },
+          };
+          return query;
+        }),
+        update: vi.fn(() => {
+          updateNumber += 1;
+          const target = updateNumber === 1
+            ? "slot"
+            : updateNumber === 2
+              ? "clinician"
+              : "client";
+          const query = {
+            set() {
+              return query;
+            },
+            where(condition: unknown) {
+              if (target === "slot") {
+                slotClaimQueries.push(dialect.sqlToQuery(condition as any));
+              }
+              return query;
+            },
+            async returning() {
+              if (target === "slot") {
+                if (slotClaimed) return [];
+                slotClaimed = true;
+                return [{ id: state.slot.id }];
+              }
+              if (target === "clinician") {
+                workloadIncrements += 1;
+                return [{ id: state.clinician.id }];
+              }
+              clientAssignments += 1;
+              return [{ ...state.client, id: `client-${clientNumber}`, status: "Assigned" }];
+            },
+          };
+          return query;
+        }),
+      };
+      return callback(tx);
+    });
+
+    const storage = new DatabaseStorage();
+    const results = await Promise.allSettled([
+      storage.assignClinicianToClient("client-1", "clinician-1", "slot-1", "tenant-1"),
+      storage.assignClinicianToClient("client-2", "clinician-1", "slot-1", "tenant-1"),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect(workloadIncrements).toBe(1);
+    expect(clientAssignments).toBe(1);
+    expect(slotClaimQueries).toHaveLength(2);
+    for (const claim of slotClaimQueries) {
+      expect(claim.sql).toContain('"time_slots"."id" = ');
+      expect(claim.sql).toContain('"time_slots"."tenant_id" = ');
+      expect(claim.sql).toContain('"time_slots"."clinician_id" = ');
+      expect(claim.sql).toContain('"time_slots"."is_booked" = ');
+      expect(claim.params).toEqual(["slot-1", "tenant-1", "clinician-1", false]);
+    }
+  });
+
+  it.each(["slot", "clinician", "client"] as const)(
+    "rolls back every assignment mutation when the %s update fails",
+    async (failurePoint) => {
+      assignmentTransactions(state, failurePoint);
+      const original = structuredClone(state);
+
+      await expect(new DatabaseStorage().assignClinicianToClient(
+        "client-1", "clinician-1", "slot-1", "tenant-1",
+      )).rejects.toBeInstanceOf(ManualAssignmentError);
+      expect(state).toEqual(original);
+    },
+  );
 });

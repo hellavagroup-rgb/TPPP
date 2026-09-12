@@ -51,6 +51,27 @@ export class ClientAllocationUpdateError extends Error {
   }
 }
 
+export type ManualAssignmentFailure =
+  | "client_not_found"
+  | "clinician_not_found"
+  | "slot_not_found"
+  | "access_denied"
+  | "client_already_assigned"
+  | "slot_clinician_mismatch"
+  | "slot_unavailable"
+  | "mutation_failed";
+
+export class ManualAssignmentError extends Error {
+  constructor(
+    public readonly reason: ManualAssignmentFailure,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "ManualAssignmentError";
+  }
+}
+
 class ClientMissingDuringAllocationUpdateError extends Error {}
 
 // Storage interface for all CRUD operations
@@ -105,7 +126,7 @@ export interface IStorage {
   archiveClient(id: string, reason?: string, category?: string): Promise<Client | undefined>;
   restoreClient(id: string): Promise<Client | undefined>;
   deleteClientPermanently(id: string): Promise<boolean>;
-  assignClinicianToClient(clientId: string, clinicianId: string, slotId: string, allocationMethod?: "form" | "manual", allocationReason?: string): Promise<void>;
+  assignClinicianToClient(clientId: string, clinicianId: string, slotId: string, tenantId: string, allocationMethod?: "form" | "manual", allocationReason?: string): Promise<Client>;
   reassignClient(clientId: string, newClinicianId: string | null, newSlotId: string | null, newStatus: string): Promise<Client | undefined>;
   repairStrandedClientAllocations(ipAddress?: string | null): Promise<StrandedAllocationRepairResult>;
   
@@ -764,42 +785,119 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async assignClinicianToClient(clientId: string, clinicianId: string, slotId: string, allocationMethod: "form" | "manual" = "form", allocationReason?: string): Promise<void> {
-    // Get the slot details
-    const [slot] = await db.select().from(timeSlots).where(eq(timeSlots.id, slotId));
-    
-    if (!slot) throw new Error("Slot not found");
+  async assignClinicianToClient(
+    clientId: string,
+    clinicianId: string,
+    slotId: string,
+    tenantId: string,
+    allocationMethod: "form" | "manual" = "form",
+    allocationReason?: string,
+  ): Promise<Client> {
+    try {
+      return await db.transaction(async (tx) => {
+        const [client] = await tx.select()
+          .from(clients)
+          .where(eq(clients.id, clientId))
+          .for("update");
+        if (!client) {
+          throw new ManualAssignmentError("client_not_found", "Client not found");
+        }
+        if (client.tenantId !== tenantId) {
+          throw new ManualAssignmentError("access_denied", "Access denied");
+        }
+        if (client.assignedSlotId || client.assignedClinicianId || client.assignedSlot) {
+          if (client.assignedSlotId === slotId) {
+            throw new ManualAssignmentError(
+              "slot_unavailable",
+              "The selected appointment slot is no longer available",
+            );
+          }
+          throw new ManualAssignmentError(
+            "client_already_assigned",
+            "This client already has a clinician assignment",
+          );
+        }
 
-    // Store slot identifier: "day startTime" for recurring, "date startTime" for specific date
-    const slotString = slot.type === "SpecificDate" 
-      ? `${slot.date} ${slot.startTime}` 
-      : `${slot.day} ${slot.startTime}`;
+        const [clinician] = await tx.select().from(clinicians).where(eq(clinicians.id, clinicianId));
+        if (!clinician) {
+          throw new ManualAssignmentError("clinician_not_found", "Clinician not found");
+        }
+        if (clinician.tenantId !== tenantId) {
+          throw new ManualAssignmentError("access_denied", "Access denied");
+        }
 
-    // Start transaction
-    await db.transaction(async (tx) => {
-      // Update client
-      await tx.update(clients).set({
-        status: "Assigned",
-        assignedClinicianId: clinicianId,
-        assignedSlotId: slotId,
-        assignedSlot: slotString,
-        zoomLinkSentAt: null,
-        allocationMethod: allocationMethod,
-        allocationReason: allocationReason || null,
-        allocatedAt: new Date(),
-        updatedAt: new Date()
-      }).where(eq(clients.id, clientId));
+        const [slot] = await tx.select().from(timeSlots).where(eq(timeSlots.id, slotId));
+        if (!slot) {
+          throw new ManualAssignmentError("slot_not_found", "Appointment slot not found");
+        }
+        if (slot.tenantId !== tenantId) {
+          throw new ManualAssignmentError("access_denied", "Access denied");
+        }
+        if (slot.clinicianId !== clinicianId) {
+          throw new ManualAssignmentError(
+            "slot_clinician_mismatch",
+            "The selected appointment slot does not belong to this clinician",
+          );
+        }
 
-      // Mark slot as booked
-      await tx.update(timeSlots).set({
-        isBooked: true
-      }).where(eq(timeSlots.id, slotId));
+        const claimedSlots = await tx.update(timeSlots)
+          .set({ isBooked: true })
+          .where(and(
+            eq(timeSlots.id, slotId),
+            eq(timeSlots.tenantId, tenantId),
+            eq(timeSlots.clinicianId, clinicianId),
+            eq(timeSlots.isBooked, false),
+          ))
+          .returning({ id: timeSlots.id });
+        if (claimedSlots.length !== 1) {
+          throw new ManualAssignmentError(
+            "slot_unavailable",
+            "The selected appointment slot is no longer available",
+          );
+        }
 
-      // Increment clinician load
-      await tx.update(clinicians).set({
-        currentLoad: sql`${clinicians.currentLoad} + 1`
-      }).where(eq(clinicians.id, clinicianId));
-    });
+        const updatedClinicians = await tx.update(clinicians)
+          .set({ currentLoad: sql`${clinicians.currentLoad} + 1` })
+          .where(and(
+            eq(clinicians.id, clinicianId),
+            eq(clinicians.tenantId, tenantId),
+          ))
+          .returning({ id: clinicians.id });
+        if (updatedClinicians.length !== 1) {
+          throw new Error("Clinician workload update failed");
+        }
+
+        const slotString = slot.type === "SpecificDate"
+          ? `${slot.date} ${slot.startTime}`
+          : `${slot.day} ${slot.startTime}`;
+        const [updatedClient] = await tx.update(clients).set({
+          status: "Assigned",
+          assignedClinicianId: clinicianId,
+          assignedSlotId: slotId,
+          assignedSlot: slotString,
+          zoomLinkSentAt: null,
+          allocationMethod,
+          allocationReason: allocationReason || null,
+          allocatedAt: new Date(),
+          updatedAt: new Date(),
+        }).where(and(
+          eq(clients.id, clientId),
+          eq(clients.tenantId, tenantId),
+        )).returning();
+        if (!updatedClient) {
+          throw new Error("Client assignment update failed");
+        }
+
+        return updatedClient;
+      });
+    } catch (error) {
+      if (error instanceof ManualAssignmentError) throw error;
+      throw new ManualAssignmentError(
+        "mutation_failed",
+        "The client, slot, and clinician could not be updated together",
+        { cause: error },
+      );
+    }
   }
 
   async reassignClient(clientId: string, newClinicianId: string | null, newSlotId: string | null, newStatus: string): Promise<Client | undefined> {

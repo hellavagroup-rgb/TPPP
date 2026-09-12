@@ -5,7 +5,7 @@ import path from "path";
 import fs from "fs";
 import multer from "multer";
 import ExcelJS from "exceljs";
-import { ClientAllocationUpdateError, storage } from "./storage";
+import { ClientAllocationUpdateError, ManualAssignmentError, storage } from "./storage";
 import { setupAuth, requireAuth, requireAdmin, requireClinician, hashPassword, auditLog, destroySessionsForUser } from "./auth";
 import passport from "passport";
 import { 
@@ -1553,21 +1553,51 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Missing clinicianId or slotId" });
       }
 
-      const clientToAssign = await storage.getClientById(req.params.clientId);
-      if (!clientToAssign) return res.status(404).json({ error: "Client not found" });
-      if (clientToAssign.tenantId !== req.tenant?.id) return res.status(403).json({ error: "Access denied" });
+      if (!req.tenant?.id) return res.status(403).json({ error: "Access denied" });
 
-      await storage.assignClinicianToClient(req.params.clientId, clinicianId, slotId, allocationMethod, allocationReason);
-      
-      const updated = await storage.getClientById(req.params.clientId);
-      const slot = await storage.getTimeSlotById(slotId);
-      await recordActivity(req, "activity_client_allocated", "client", req.params.clientId, {
-        clientDisplayId: updated?.displayId || clientToAssign.displayId,
-        clinicianName: await getClinicianActivityName(clinicianId),
-        slotDescription: slot ? formatActivitySlot(slot) : "",
-      });
+      const updated = await storage.assignClinicianToClient(
+        req.params.clientId,
+        clinicianId,
+        slotId,
+        req.tenant.id,
+        allocationMethod,
+        allocationReason,
+      );
+      try {
+        const slot = await storage.getTimeSlotById(slotId);
+        await recordActivity(req, "activity_client_allocated", "client", req.params.clientId, {
+          clientDisplayId: updated.displayId,
+          clinicianName: await getClinicianActivityName(clinicianId),
+          slotDescription: slot ? formatActivitySlot(slot) : "",
+        });
+      } catch (activityError) {
+        console.error("Failed to record manual assignment activity:", activityError);
+      }
       res.json(updated);
     } catch (error) {
+      if (error instanceof ManualAssignmentError) {
+        if (error.reason === "access_denied") {
+          return res.status(403).json({ error: error.message });
+        }
+        if (
+          error.reason === "client_not_found"
+          || error.reason === "clinician_not_found"
+          || error.reason === "slot_not_found"
+        ) {
+          return res.status(404).json({ error: error.message });
+        }
+        if (
+          error.reason === "client_already_assigned"
+          ||
+          error.reason === "slot_clinician_mismatch"
+          || error.reason === "slot_unavailable"
+        ) {
+          return res.status(409).json({ error: error.message });
+        }
+        return res.status(500).json({
+          error: "Assignment could not be completed. The client, slot, and clinician were left unchanged.",
+        });
+      }
       res.status(500).json({ error: "Failed to assign clinician" });
     }
   });

@@ -2005,7 +2005,7 @@ export async function registerRoutes(
         registrationEmailClaimId: null,
         registrationEmailPendingToken: null,
         registrationToken: token,
-        registrationTokenExpiresAt: null,
+        registrationTokenExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
         registrationTokenRevokedAt: null,
         status: "OptionSelected",
         updatedAt: new Date(),
@@ -2373,7 +2373,8 @@ export async function registerRoutes(
         const priorSelected = clinicianOptionId && priorOptions.find(option => option.id === clinicianOptionId && option.status === "selected");
         if (priorSelected) {
           const tenant = await storage.getTenantById(optionRow.tenantId);
-          if (tenant?.registrationFormEnabled && client.registrationToken && !client.registrationTokenRevokedAt) {
+          if (tenant?.registrationFormEnabled && client.registrationToken && !client.registrationTokenRevokedAt
+            && (!client.registrationTokenExpiresAt || client.registrationTokenExpiresAt > new Date())) {
             return res.json({ selected: true, registrationUrl: `/register/${optionRow.clientId}/${client.registrationToken}`, idempotent: true });
           }
           if (client.status === "BookingConfirmed") return res.json({ selected: true, bookingConfirmed: true, idempotent: true });
@@ -2487,7 +2488,7 @@ export async function registerRoutes(
             END`,
             zoomLinkSentAt: null,
             registrationToken,
-            registrationTokenExpiresAt: null,
+            registrationTokenExpiresAt: registrationEnabled ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) : null,
             registrationTokenRevokedAt: null,
             updatedAt: new Date(),
           }).where(and(eq(clients.id, optionRow.clientId), eq(clients.status, "OptionsSent")))

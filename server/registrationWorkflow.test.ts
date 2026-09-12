@@ -20,12 +20,12 @@ describe("registration security decisions", () => {
     expect(validateRegistrationConsent(true, 3, 3)).toBeNull();
   });
 
-  it("keeps bearer registration tokens active until revoked or replaced", () => {
+  it("keeps bearer registration tokens active until expiry, revocation, or replacement", () => {
     const now = new Date("2025-01-02T00:00:00Z");
-    expect(isActiveRegistrationToken({ registrationToken: "a", registrationTokenExpiresAt: new Date("2025-01-03"), registrationTokenRevokedAt: null }, "a")).toBe(true);
-    expect(isActiveRegistrationToken({ registrationToken: "a", registrationTokenExpiresAt: new Date("2025-01-01"), registrationTokenRevokedAt: null }, "a")).toBe(true);
-    expect(isActiveRegistrationToken({ registrationToken: "a", registrationTokenExpiresAt: null, registrationTokenRevokedAt: now }, "a")).toBe(false);
-    expect(isActiveRegistrationToken({ registrationToken: "replacement", registrationTokenExpiresAt: null, registrationTokenRevokedAt: null }, "a")).toBe(false);
+    expect(isActiveRegistrationToken({ registrationToken: "a", registrationTokenExpiresAt: new Date("2025-01-03"), registrationTokenRevokedAt: null }, "a", now)).toBe(true);
+    expect(isActiveRegistrationToken({ registrationToken: "a", registrationTokenExpiresAt: new Date("2025-01-01"), registrationTokenRevokedAt: null }, "a", now)).toBe(false);
+    expect(isActiveRegistrationToken({ registrationToken: "a", registrationTokenExpiresAt: null, registrationTokenRevokedAt: now }, "a", now)).toBe(false);
+    expect(isActiveRegistrationToken({ registrationToken: "replacement", registrationTokenExpiresAt: null, registrationTokenRevokedAt: null }, "a", now)).toBe(false);
   });
 
   it("recognizes a completed response-loss retry despite token revocation", () => {

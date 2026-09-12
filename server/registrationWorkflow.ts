@@ -5,9 +5,10 @@ export function isActiveRegistrationToken(token: {
   registrationToken: string | null;
   registrationTokenExpiresAt: Date | null;
   registrationTokenRevokedAt: Date | null;
-}, supplied: string): boolean {
+}, supplied: string, now = new Date()): boolean {
   return token.registrationToken === supplied
-    && !token.registrationTokenRevokedAt;
+    && !token.registrationTokenRevokedAt
+    && (!token.registrationTokenExpiresAt || token.registrationTokenExpiresAt > now);
 }
 
 export function isCompletedRegistrationRetry(

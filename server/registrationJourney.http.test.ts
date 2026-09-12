@@ -402,7 +402,7 @@ describe("registration journey HTTP routes", () => {
     expect(retry.body).toMatchObject({ registrationUrl: first.body.registrationUrl, idempotent: true });
     expect(h.state.client.status).toBe("OptionSelected");
     expect(h.state.client.agreedRatePence).toBe(12000);
-    expect(h.state.client.registrationTokenExpiresAt).toBeNull();
+    expect(h.state.client.registrationTokenExpiresAt).toBeInstanceOf(Date);
     expect(h.state.activities.filter(a => a.action === "activity_appointment_option_selected")).toHaveLength(1);
     expect(h.state.emails).toHaveLength(0);
   });
@@ -484,14 +484,14 @@ describe("registration journey HTTP routes", () => {
     expect(h.state.emails).toHaveLength(1);
     expect(h.state.activities.filter(a => a.action === "activity_registration_sent")).toHaveLength(1);
     const originalToken = h.state.client.registrationToken;
-    expect(h.state.client.registrationTokenExpiresAt).toBeNull();
+    expect(h.state.client.registrationTokenExpiresAt).toBeInstanceOf(Date);
 
     const resent = await request("/api/clients/client-a/send-registration", {
       method: "POST", body: JSON.stringify({ attemptKey: "new-admin-resend-654321" }),
     });
     expect(resent.status).toBe(200);
     expect(h.state.client.registrationToken).not.toBe(originalToken);
-    expect(h.state.client.registrationTokenExpiresAt).toBeNull();
+    expect(h.state.client.registrationTokenExpiresAt).toBeInstanceOf(Date);
     expect(h.state.emails).toHaveLength(2);
 
     resetState({ client: {

@@ -358,7 +358,7 @@ function NotificationsTab() {
   );
 }
 
-function EmailTemplatesTab() {
+function EmailTemplatesTab({ zoomLinkEmailEnabled }: { zoomLinkEmailEnabled: boolean }) {
   const queryClient = useQueryClient();
   const [editingTemplate, setEditingTemplate] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ name: "", subject: "", bodyText: "" });
@@ -420,7 +420,9 @@ function EmailTemplatesTab() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {DEFAULT_TEMPLATES.map((defaultTemplate) => {
+          {DEFAULT_TEMPLATES
+            .filter((template) => template.templateKey !== "zoom_link_follow_up" || zoomLinkEmailEnabled)
+            .map((defaultTemplate) => {
             const template = getTemplateData(defaultTemplate.templateKey);
             const isEditing = editingTemplate === defaultTemplate.templateKey;
             const wasSaved = templates?.some((t) => t.templateKey === defaultTemplate.templateKey);
@@ -1702,7 +1704,7 @@ export default function Settings() {
         </TabsContent>
 
         <TabsContent value="email-templates">
-          <EmailTemplatesTab />
+          <EmailTemplatesTab zoomLinkEmailEnabled={tenant?.zoomLinkEmailEnabled === true} />
         </TabsContent>
 
         {registrationFormEnabled && (

@@ -1442,7 +1442,9 @@ export async function registerRoutes(
               tenantId: req.tenant?.id,
               tenantStripeKey: req.tenant?.stripeSecretKey,
               practiceName: req.tenant?.name,
-              childName: childNameFromClientNotes(updated.notes),
+              childName: req.tenant?.intakeClientSummaryEnabled === true
+                ? childNameFromClientNotes(updated.notes)
+                : undefined,
               previousPaymentLinkId: updated.stripePaymentLinkId,
             });
             if (checkoutResult) {
@@ -2905,7 +2907,9 @@ export async function registerRoutes(
             tenantId: client.tenantId,
             tenantStripeKey: registrationTenantStripeKey,
             practiceName: tenant?.name || null,
-            childName: childNameFromClientNotes(client.notes),
+            childName: tenant?.intakeClientSummaryEnabled === true
+              ? childNameFromClientNotes(client.notes)
+              : undefined,
             previousPaymentLinkId: client.stripePaymentLinkId,
             idempotencyKey: `registration-payment-${client.id}-${paymentAttemptKey}`,
             registrationAttemptKey: paymentAttemptKey,
@@ -4858,7 +4862,9 @@ export async function registerRoutes(
         tenantId: req.tenant?.id,
         tenantStripeKey: req.tenant?.stripeSecretKey,
         practiceName: req.tenant?.name,
-        childName: childNameFromClientNotes(client.notes),
+        childName: req.tenant?.intakeClientSummaryEnabled === true
+          ? childNameFromClientNotes(client.notes)
+          : undefined,
         previousPaymentLinkId: client.stripePaymentLinkId,
       });
 

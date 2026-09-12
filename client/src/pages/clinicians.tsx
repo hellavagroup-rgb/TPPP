@@ -661,21 +661,23 @@ export default function Clinicians() {
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <Label>Zoom Link</Label>
-                <Input
-                  type="url"
-                  value={editedClinician.zoomLink || ""}
-                  onChange={(e) => setEditedClinician({...editedClinician, zoomLink: e.target.value})}
-                  placeholder="https://zoom.us/j/..."
-                  data-testid="input-zoom-link"
-                />
-                <p className={`text-[10px] ${editedClinician.zoomLink && !isValidZoomLink(editedClinician.zoomLink) ? "text-destructive" : "text-muted-foreground"}`}>
-                  {editedClinician.zoomLink && !isValidZoomLink(editedClinician.zoomLink)
-                    ? "Enter a valid https://zoom.us link."
-                    : "Sent separately to clients with confirmed online appointments."}
-                </p>
-              </div>
+              {tenant?.zoomLinkEmailEnabled === true && (
+                <div className="space-y-2">
+                  <Label>Zoom Link</Label>
+                  <Input
+                    type="url"
+                    value={editedClinician.zoomLink || ""}
+                    onChange={(e) => setEditedClinician({...editedClinician, zoomLink: e.target.value})}
+                    placeholder="https://zoom.us/j/..."
+                    data-testid="input-zoom-link"
+                  />
+                  <p className={`text-[10px] ${editedClinician.zoomLink && !isValidZoomLink(editedClinician.zoomLink) ? "text-destructive" : "text-muted-foreground"}`}>
+                    {editedClinician.zoomLink && !isValidZoomLink(editedClinician.zoomLink)
+                      ? "Enter a valid https://zoom.us link."
+                      : "Sent separately to clients with confirmed online appointments."}
+                  </p>
+                </div>
+              )}
 
               <div className="flex items-center justify-between border p-3 rounded-md bg-amber-50/50">
                 <div>

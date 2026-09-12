@@ -279,6 +279,7 @@ export class DatabaseStorage implements IStorage {
         allocateForBupa: clinicians.allocateForBupa,
         tier: clinicians.tier,
         therapyMode: clinicians.therapyMode,
+        zoomLink: clinicians.zoomLink,
         isActive: clinicians.isActive,
         sessionRatePence: clinicians.sessionRatePence,
         lastUpdatedAvailability: clinicians.lastUpdatedAvailability,

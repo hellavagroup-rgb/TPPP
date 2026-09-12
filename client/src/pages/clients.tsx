@@ -71,7 +71,7 @@ import {
   ChevronRight,
   X,
 } from "lucide-react";
-import { useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useLocation } from "wouter";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -178,6 +178,15 @@ export default function Clients() {
       return res.json();
     },
   });
+
+  useEffect(() => {
+    const linkedClientId = new URLSearchParams(window.location.search).get("clientId");
+    if (!linkedClientId || !clients.some((client) => client.id === linkedClientId)) return;
+    setShowConfirmedState(true);
+    window.requestAnimationFrame(() => {
+      document.getElementById(`client-${linkedClientId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }, [clients]);
 
   const { data: clinicians = [] } = useQuery<(Clinician & { name: string; availability: any[] })[]>({
     queryKey: ["/api/clinicians"],
@@ -2316,7 +2325,7 @@ export default function Clients() {
         <div className="space-y-3">
           <h3 className="font-semibold text-lg">{showConfirmedState ? "Confirmed Clients" : "Archived/Didn't Engage"}</h3>
           {filteredClients.map(client => (
-            <Card key={client.id} className="shadow-sm">
+            <Card key={client.id} id={`client-${client.id}`} className="shadow-sm">
               <CardContent className="p-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">

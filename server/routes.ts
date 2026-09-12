@@ -68,6 +68,7 @@ async function sendOnlineZoomFollowUp(input: {
   locationType?: string | null;
   tenant: { id: string; name: string; fromEmail: string | null; primaryColor: string | null };
   idempotencyKey: string;
+  notifyAdminsOnFailure?: boolean;
 }): Promise<boolean> {
   if (!onlineBookingNeedsZoomLink(input.locationType) || !isValidZoomLink(input.zoomLink)) return false;
   const zoomLink = input.zoomLink!;
@@ -85,6 +86,30 @@ async function sendOnlineZoomFollowUp(input: {
   });
   if (!delivery.success) {
     console.error(`Zoom follow-up delivery failed: ${delivery.outcome}`);
+    if (input.notifyAdminsOnFailure) {
+      const failureKey = crypto.createHash("sha256").update(input.idempotencyKey).digest("hex");
+      await db.transaction(async (tx) => {
+        await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${input.tenant.id}:${input.clientId}:${failureKey}`}))`);
+        const existingFailure = await tx.select({ id: auditLogs.id }).from(auditLogs).where(and(
+          eq(auditLogs.tenantId, input.tenant.id),
+          eq(auditLogs.action, "activity_zoom_link_delivery_failed"),
+          eq(auditLogs.resourceType, "client"),
+          eq(auditLogs.resourceId, input.clientId),
+          drizzleSql`${auditLogs.details}->>'failureKey' = ${failureKey}`,
+        )).limit(1);
+        if (!existingFailure.length) {
+          await tx.insert(auditLogs).values({
+            userId: null,
+            tenantId: input.tenant.id,
+            action: "activity_zoom_link_delivery_failed",
+            resourceType: "client",
+            resourceId: input.clientId,
+            ipAddress: null,
+            details: { actorName: "Automatic email", failureKey },
+          });
+        }
+      });
+    }
   } else {
     await db.update(clients).set({ zoomLinkSentAt: new Date(), updatedAt: new Date() })
       .where(and(eq(clients.id, input.clientId), eq(clients.tenantId, input.tenant.id)));
@@ -1468,6 +1493,7 @@ export async function registerRoutes(
               locationType: slotRow?.locationType,
               tenant: tcBook,
               idempotencyKey: `zoom-follow-up-${updated.id}-${updated.assignedSlotId || "no-slot"}`,
+              notifyAdminsOnFailure: true,
             });
           }
           console.log(`Booking confirmed email sent to client ${req.params.id} (manual advance)`);
@@ -2490,6 +2516,7 @@ export async function registerRoutes(
               locationType: slot?.locationType,
               tenant: context,
               idempotencyKey: `zoom-follow-up-${client.id}-${selectedOption.slotId}`,
+              notifyAdminsOnFailure: true,
             });
           }
         } catch (error) {
@@ -2924,6 +2951,7 @@ export async function registerRoutes(
               locationType: slotRow?.locationType,
               tenant: tcBook,
               idempotencyKey: `registration-zoom-follow-up-${client.id}-${paymentAttemptKey}`,
+              notifyAdminsOnFailure: true,
             });
           }
         } catch (bookEmailErr) {
@@ -5037,6 +5065,7 @@ export async function registerRoutes(
                    locationType: slotRow?.locationType,
                    tenant: tcBook,
                    idempotencyKey: `stripe-zoom-follow-up-${client.id}-${paymentIntentId || session.id}`,
+                    notifyAdminsOnFailure: true,
                  });
                }
             } catch (bookEmailErr) {

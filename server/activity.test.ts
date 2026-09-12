@@ -140,6 +140,24 @@ describe("recent activity mapping", () => {
     expect(event.description).toContain("Initial Assessment");
   });
 
+  it("links a Zoom delivery failure to the client without rendering client details", () => {
+    const event = toRecentActivityItem(activityLog({
+      action: "activity_zoom_link_delivery_failed",
+      resourceType: "client",
+      resourceId: "client-1",
+      details: { actorName: "Automatic email", failureKey: "opaque-hash" },
+    }));
+
+    expect(event).toMatchObject({
+      eventType: "client",
+      title: "Automatic Zoom email failed",
+      href: "/clients?clientId=client-1",
+    });
+    expect(event.description).not.toContain("client-1");
+    expect(event.description).not.toContain("opaque-hash");
+    expect(RECENT_ACTIVITY_CATEGORY_ACTIONS.clients).toContain("activity_zoom_link_delivery_failed");
+  });
+
   it("makes failed and retried deliveries visible as form activity", () => {
     const failed = toRecentActivityItem(activityLog({
       action: "activity_form_delivery_failed",

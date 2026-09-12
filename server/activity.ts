@@ -33,6 +33,7 @@ export const RECENT_ACTIVITY_ACTIONS = [
   "activity_registration_submitted",
   "activity_booking_confirmed",
   "activity_zoom_link_sent",
+  "activity_zoom_link_delivery_failed",
   "activity_slot_added",
   "activity_slot_removed",
   "activity_slot_location_changed",
@@ -66,6 +67,7 @@ export const RECENT_ACTIVITY_CATEGORY_ACTIONS = {
     "activity_registration_submitted",
     "activity_booking_confirmed",
     "activity_zoom_link_sent",
+    "activity_zoom_link_delivery_failed",
   ],
   tasks: [
     "activity_task_created",
@@ -95,6 +97,7 @@ export interface RecentActivityItem {
   description?: string;
   actorName?: string;
   timestamp: Date;
+  href?: string;
 }
 
 type TaskActivityFallback = Pick<Task, "id" | "title" | "createdAt" | "tenantId">;
@@ -229,6 +232,16 @@ export function toRecentActivityItem(log: AuditLog): RecentActivityItem {
       return { id: log.id, eventType: "client", title: "Booking confirmed", description: `${clientDisplayId}'s appointment is confirmed.`, actorName, timestamp: log.timestamp };
     case "activity_zoom_link_sent":
       return { id: log.id, eventType: "client", title: "Zoom link sent", description: `${clientDisplayId}'s clinician Zoom link was sent.`, actorName, timestamp: log.timestamp };
+    case "activity_zoom_link_delivery_failed":
+      return {
+        id: log.id,
+        eventType: "client",
+        title: "Automatic Zoom email failed",
+        description: "The provider did not accept the Zoom email. Open the client record to send it manually.",
+        actorName,
+        timestamp: log.timestamp,
+        href: log.resourceId ? `/clients?clientId=${encodeURIComponent(log.resourceId)}` : undefined,
+      };
     case "activity_slot_added":
       return { id: log.id, eventType: "availability", title: "Availability added", description: `${clinicianName} added ${number(details, "slotCount", 1)} slot${number(details, "slotCount", 1) === 1 ? "" : "s"}${slotDescription ? `: ${slotDescription}` : ""}.`, actorName, timestamp: log.timestamp };
     case "activity_slot_removed":

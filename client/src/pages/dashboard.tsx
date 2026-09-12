@@ -36,6 +36,7 @@ interface RecentActivityItem {
   description?: string;
   actorName?: string;
   timestamp: string | Date;
+  href?: string;
 }
 
 function formatTimeAgo(date: string | Date): string {
@@ -113,6 +114,11 @@ function ActivityList({
                 <p className="font-medium text-sm">{activity.title}</p>
                 {activity.description && <p className="text-xs text-muted-foreground mt-0.5">{activity.description}</p>}
                 {activity.actorName && <p className="text-xs text-muted-foreground mt-1">By {activity.actorName}</p>}
+                {activity.href && (
+                  <Link href={activity.href} className="text-xs font-medium text-primary hover:underline mt-1 inline-block">
+                    Open client
+                  </Link>
+                )}
               </div>
             </div>
             <span className="text-xs text-muted-foreground whitespace-nowrap">{formatTimeAgo(activity.timestamp)}</span>

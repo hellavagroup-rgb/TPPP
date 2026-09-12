@@ -271,7 +271,10 @@ export default function IntakeInbox() {
       return res.json();
     },
     onSuccess: (data) => {
-      toast({ title: "Re-parse complete", description: `Updated ${data.updated} message${data.updated !== 1 ? "s" : ""}.` });
+      toast({
+        title: "Inbox refresh complete",
+        description: `Imported ${data.imported ?? 0} missing message${data.imported === 1 ? "" : "s"} and re-parsed ${data.updated} stored message${data.updated !== 1 ? "s" : ""}.`,
+      });
       queryClient.invalidateQueries({ queryKey: ["/api/intake-messages"] });
     },
     onError: () => {
@@ -324,10 +327,10 @@ export default function IntakeInbox() {
                 data-testid="button-reparse"
                 disabled={reParseMutation.isPending}
                 onClick={() => reParseMutation.mutate()}
-                title="Re-parse all messages to fix swapped question/answer columns"
+                title="Check Gmail for missed enquiries and re-parse all stored messages"
               >
                 <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${reParseMutation.isPending ? "animate-spin" : ""}`} />
-                {reParseMutation.isPending ? "Re-parsing…" : "Re-parse"}
+                {reParseMutation.isPending ? "Refreshing…" : "Refresh inbox"}
               </Button>
               <Button
                 size="sm"

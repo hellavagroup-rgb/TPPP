@@ -3991,12 +3991,25 @@ export async function registerRoutes(
     }
   });
 
-  // Backfill: re-parse all existing intake message bodies for this tenant
+  // Recovery: first re-sweep Gmail for messages missed by the incremental
+  // checkpoint, then re-parse every stored intake message for this tenant.
   app.post("/api/intake-messages/backfill-parse", requireAdmin, async (req, res) => {
     try {
       if (!req.tenant?.gmailIntakeEnabled) {
         return res.status(403).json({ error: "Gmail Intake is not enabled for this tenant" });
       }
+      const connections = await db
+        .select()
+        .from(gmailConnections)
+        .where(and(
+          eq(gmailConnections.tenantId, req.tenant.id),
+          eq(gmailConnections.isActive, true),
+        ));
+      let imported = 0;
+      for (const connection of connections) {
+        imported += await syncConnection({ ...connection, historyId: null });
+      }
+
       const rows = await db
         .select()
         .from(intakeMessages)
@@ -4015,7 +4028,7 @@ export async function registerRoutes(
           .where(eq(intakeMessages.id, row.id));
         updated++;
       }
-      res.json({ success: true, updated });
+      res.json({ success: true, imported, updated });
     } catch (error) {
       res.status(500).json({ error: "Backfill failed" });
     }

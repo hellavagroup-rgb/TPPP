@@ -25,7 +25,7 @@ import { requireTenant } from './middleware/tenant';
 import { requireSuperAdmin } from './middleware/superAdmin';
 import { db } from "./db";
 import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, formDeliveries, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs, intakeMessages, gmailConnections, paymentCharges, clientClinicianOptions } from "@shared/schema";
-import { isStripeConfigured, getStripeInstance, createPaymentLink, chargeOffSession, constructWebhookEvent } from "./stripe";
+import { isStripeConfigured, getStripeInstance, createPaymentLink, chargeOffSession, constructWebhookEvent, childNameFromClientNotes } from "./stripe";
 import { encryptSecret, decryptSecret, isEncryptionConfigured } from "./encryption";
 import { getAuthUrl, exchangeCodeForTokens, syncConnection, buildRedirectUri } from "./gmailSync";
 import { isNull, isNotNull, eq, and, or, lt, inArray, desc, like, sql as drizzleSql } from "drizzle-orm";
@@ -1440,6 +1440,7 @@ export async function registerRoutes(
               tenantId: req.tenant?.id,
               tenantStripeKey: req.tenant?.stripeSecretKey,
               practiceName: req.tenant?.name,
+              childName: childNameFromClientNotes(updated.notes),
               previousPaymentLinkId: updated.stripePaymentLinkId,
             });
             if (checkoutResult) {
@@ -2896,6 +2897,7 @@ export async function registerRoutes(
             tenantId: client.tenantId,
             tenantStripeKey: registrationTenantStripeKey,
             practiceName: tenant?.name || null,
+            childName: childNameFromClientNotes(client.notes),
             previousPaymentLinkId: client.stripePaymentLinkId,
             idempotencyKey: `registration-payment-${client.id}-${paymentAttemptKey}`,
             registrationAttemptKey: paymentAttemptKey,
@@ -4847,6 +4849,7 @@ export async function registerRoutes(
         tenantId: req.tenant?.id,
         tenantStripeKey: req.tenant?.stripeSecretKey,
         practiceName: req.tenant?.name,
+        childName: childNameFromClientNotes(client.notes),
         previousPaymentLinkId: client.stripePaymentLinkId,
       });
 

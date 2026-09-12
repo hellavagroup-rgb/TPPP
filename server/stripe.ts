@@ -26,7 +26,12 @@ export function shouldDeactivatePreviousPaymentLink(
 export function paymentLinkCreationIdempotencyKey(baseKey: string): string {
   // Version the key whenever the creation contract changes. This prevents Stripe
   // from replaying a Payment Link created under an older, now-invalid lifecycle.
-  return `${baseKey}-link-v2`;
+  return `${baseKey}-link-v3`;
+}
+
+export function childNameFromClientNotes(notes: string | null | undefined): string | undefined {
+  const childName = notes?.match(/^Child(?:'|’)?s name:\s*(.+)$/im)?.[1]?.trim();
+  return childName ? childName.slice(0, 500) : undefined;
 }
 
 // Creates a persistent (non-expiring) Stripe Payment Link for the client's initial
@@ -43,6 +48,7 @@ export async function createPaymentLink(opts: {
   tenantId?: string | null;
   tenantStripeKey?: string | null;
   practiceName?: string | null;
+  childName?: string;
   idempotencyKey?: string;
   // If the client already has an active link, pass its ID so it is deactivated first
   previousPaymentLinkId?: string | null;
@@ -66,6 +72,7 @@ export async function createPaymentLink(opts: {
   const metadata = {
     clientId: opts.clientId,
     displayId: opts.clientDisplayId,
+    ...(opts.childName ? { childName: opts.childName } : {}),
     ...(opts.tenantId ? { tenantId: opts.tenantId } : {}),
     ...(opts.registrationAttemptKey ? { registrationAttemptKey: opts.registrationAttemptKey } : {}),
   };

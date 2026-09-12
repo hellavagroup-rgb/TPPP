@@ -62,6 +62,7 @@ function formatActivitySlot(slot: { type?: string | null; day?: string | null; d
 }
 
 async function sendOnlineZoomFollowUp(input: {
+  enabled: boolean;
   clientId: string;
   clientEmail: string;
   clinicianName: string;
@@ -71,6 +72,7 @@ async function sendOnlineZoomFollowUp(input: {
   idempotencyKey: string;
   notifyAdminsOnFailure?: boolean;
 }): Promise<boolean> {
+  if (!input.enabled) return false;
   if (!onlineBookingNeedsZoomLink(input.locationType) || !isValidZoomLink(input.zoomLink)) return false;
   const zoomLink = input.zoomLink!;
   const existing = await db.select({ sentAt: clients.zoomLinkSentAt }).from(clients)
@@ -1488,6 +1490,7 @@ export async function registerRoutes(
           const bookingDelivery = await sendEmail({ ...bookEmail, to: updated.email });
           if (bookingDelivery.success && tcBook) {
             await sendOnlineZoomFollowUp({
+              enabled: req.tenant.zoomLinkEmailEnabled === true,
               clientId: updated.id,
               clientEmail: updated.email,
               clinicianName: clinicianUser?.name || 'Your Clinician',
@@ -1624,7 +1627,7 @@ export async function registerRoutes(
         if (clinician.tenantId !== req.tenant?.id) {
           return res.status(403).json({ error: `Clinician ${sel.clinicianId} does not belong to this tenant` });
         }
-        if (onlineBookingNeedsZoomLink(slot.locationType) && !isValidZoomLink(clinician.zoomLink)) {
+        if (req.tenant.zoomLinkEmailEnabled === true && onlineBookingNeedsZoomLink(slot.locationType) && !isValidZoomLink(clinician.zoomLink)) {
           const clinicianName = await getClinicianActivityName(clinician.id);
           return res.status(409).json({ error: `${clinicianName} needs a valid Zoom link before online appointment options can be sent. Add it in Clinicians and try again.` });
         }
@@ -1744,7 +1747,7 @@ export async function registerRoutes(
           db.select().from(timeSlots).where(eq(timeSlots.id, option.slotId)).limit(1).then(rows => rows[0]),
           db.select().from(clinicians).where(eq(clinicians.id, option.clinicianId)).limit(1).then(rows => rows[0]),
         ]);
-        if (onlineBookingNeedsZoomLink(slot?.locationType) && !isValidZoomLink(clinician?.zoomLink)) {
+        if (req.tenant.zoomLinkEmailEnabled === true && onlineBookingNeedsZoomLink(slot?.locationType) && !isValidZoomLink(clinician?.zoomLink)) {
           const clinicianName = await getClinicianActivityName(clinician?.id);
           return res.status(409).json({ error: `${clinicianName} needs a valid Zoom link before these online options can be resent.` });
         }
@@ -1798,6 +1801,9 @@ export async function registerRoutes(
       const client = await storage.getClientById(req.params.clientId);
       if (!client) return res.status(404).json({ error: "Client not found" });
       if (client.tenantId !== req.tenant?.id) return res.status(403).json({ error: "Access denied" });
+      if (req.tenant.zoomLinkEmailEnabled !== true) {
+        return res.status(409).json({ error: "Zoom link emails are not enabled for this practice" });
+      }
       if (client.status !== "BookingConfirmed" || !client.assignedClinicianId || !client.assignedSlotId) {
         return res.status(409).json({ error: "A Zoom link can only be sent for a confirmed, allocated booking" });
       }
@@ -1819,6 +1825,7 @@ export async function registerRoutes(
       }
       const clinicianName = await getClinicianActivityName(clinician.id);
       const sent = await sendOnlineZoomFollowUp({
+        enabled: true,
         clientId: client.id,
         clientEmail: client.email,
         clinicianName,
@@ -2539,6 +2546,7 @@ export async function registerRoutes(
             await db.update(clients).set({ bookingConfirmationSentAt: new Date() })
               .where(and(eq(clients.id, client.id), isNull(clients.bookingConfirmationSentAt)));
             await sendOnlineZoomFollowUp({
+              enabled: tenant.zoomLinkEmailEnabled === true,
               clientId: client.id,
               clientEmail: client.email,
               clinicianName: clinicianUser?.name || "Your Clinician",
@@ -2975,6 +2983,7 @@ export async function registerRoutes(
           bookingEmailDelivered = true;
           if (tcBook) {
             await sendOnlineZoomFollowUp({
+              enabled: tenant.zoomLinkEmailEnabled === true,
               clientId: client.id,
               clientEmail: client.email,
               clinicianName: clinicianUser?.name || 'Your Clinician',
@@ -5103,6 +5112,7 @@ export async function registerRoutes(
               bookingEmailDelivered = true;
                if (tcBook) {
                  await sendOnlineZoomFollowUp({
+                   enabled: paymentTenant.zoomLinkEmailEnabled === true,
                    clientId: client.id,
                    clientEmail: client.email,
                    clinicianName: clinicianUser?.name || 'Your Clinician',
@@ -5684,6 +5694,7 @@ export async function registerRoutes(
         autoAllocationEmailEnabled: z.boolean().optional(),
         registrationFormEnabled: z.boolean().optional(),
         bookingConfirmedEmailEnabled: z.boolean().optional(),
+        zoomLinkEmailEnabled: z.boolean().optional(),
         writeuppChecklistEnabled: z.boolean().optional(),
         oneOffSlotsEnabled: z.boolean().optional(),
         clinicianProfileConfig: z.object({

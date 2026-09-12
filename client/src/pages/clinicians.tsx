@@ -312,7 +312,7 @@ export default function Clinicians() {
                           Couples
                         </Badge>
                       )}
-                      {hasActiveOnlineAvailability(clinician.availability) && !isValidZoomLink(clinician.zoomLink) && (
+                      {tenant?.zoomLinkEmailEnabled === true && hasActiveOnlineAvailability(clinician.availability) && !isValidZoomLink(clinician.zoomLink) && (
                         <Badge variant="destructive" className="text-[10px] gap-1" data-testid={`warning-missing-zoom-${clinician.id}`}>
                           <AlertTriangle className="h-3 w-3" /> Online slots need Zoom link
                         </Badge>

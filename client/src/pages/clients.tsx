@@ -154,6 +154,7 @@ export default function Clients() {
   // CY&A feature flags (all default false — existing tenants unaffected)
   const contactPreferenceEnabled = tenant?.contactPreferenceEnabled === true;
   const multiClinicianAllocationEnabled = tenant?.multiClinicianAllocationEnabled === true;
+  const zoomLinkEmailEnabled = tenant?.zoomLinkEmailEnabled === true;
   const writeuppChecklistEnabled = tenant?.writeuppChecklistEnabled === true;
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedClient, setSelectedClient] = useState<ClientType | null>(null);
@@ -1020,7 +1021,9 @@ export default function Clients() {
   };
 
   // Unified filtering based on toggle states and search term
-  const pendingZoomLinkClients = clients.filter(client => isPendingZoomDelivery(client as any));
+  const pendingZoomLinkClients = zoomLinkEmailEnabled
+    ? clients.filter(client => isPendingZoomDelivery(client as any))
+    : [];
 
   const filteredClients = clients.filter(client => {
     const matchesSearch = searchTerm === "" || client.displayId.toLowerCase().includes(searchTerm.toLowerCase());
@@ -1701,7 +1704,7 @@ export default function Clients() {
             />
             <Label htmlFor="show-confirmed" className="text-sm cursor-pointer">Show Confirmed</Label>
           </div>
-          {showConfirmedState && (
+          {showConfirmedState && zoomLinkEmailEnabled && (
             <div className="flex items-center gap-2">
               <Switch
                 id="show-pending-zoom-links"
@@ -2381,7 +2384,7 @@ export default function Clients() {
                     ) : (client as any).slotLocationType === "online" ? (
                       <span className="inline-block text-[11px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-300 leading-tight">Online</span>
                     ) : null}
-                    {showConfirmedState && isPendingZoomDelivery(client as any) && (
+                    {showConfirmedState && zoomLinkEmailEnabled && isPendingZoomDelivery(client as any) && (
                       <Badge
                         variant="destructive"
                         className="gap-1"
@@ -2417,7 +2420,7 @@ export default function Clients() {
                             <FileText className="h-4 w-4 mr-2" /> View Registration Form
                           </DropdownMenuItem>
                         )}
-                        {showConfirmedState && isPendingZoomDelivery(client as any) && (
+                        {showConfirmedState && zoomLinkEmailEnabled && isPendingZoomDelivery(client as any) && (
                           <DropdownMenuItem
                             disabled={sendZoomLinkMutation.isPending || !isValidZoomLink(clinicians.find(c => c.id === client.assignedClinicianId)?.zoomLink)}
                             onClick={() => sendZoomLinkMutation.mutate(client.id)}
@@ -2766,7 +2769,7 @@ export default function Clients() {
                         
                         const isSelectedForOptions = multiClinicianAllocationEnabled && selectedOptions.some(o => o.clinicianId === clinician.id && o.slotId === slot.id);
                         // Disable booked slots always; also disable zero-capacity clinicians unless override is on
-                        const missingZoomLink = (slot as any).locationType === "online" && !isValidZoomLink(clinician.zoomLink);
+                        const missingZoomLink = zoomLinkEmailEnabled && (slot as any).locationType === "online" && !isValidZoomLink(clinician.zoomLink);
                         const isSlotUnavailable = slot.isBooked || missingZoomLink || (!showAllClinicians && (clinician.maxNewClients ?? 0) === 0);
                         return (
                           <Button 

@@ -47,6 +47,7 @@ export const tenants = pgTable("tenants", {
   registrationTermsVersion: integer("registration_terms_version").notNull().default(1),
   registrationTermsUpdatedAt: timestamp("registration_terms_updated_at").defaultNow().notNull(),
   bookingConfirmedEmailEnabled: boolean("booking_confirmed_email_enabled").default(false),
+  zoomLinkEmailEnabled: boolean("zoom_link_email_enabled").default(false),
   writeuppChecklistEnabled: boolean("writeup_checklist_enabled").default(false),
   oneOffSlotsEnabled: boolean("one_off_slots_enabled").default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),

@@ -252,9 +252,20 @@ Appointment Details:
 Clinician: {{clinician_name}}
 Time: {{appointment_time}}
 
+If you have any questions or need to make changes, please don't hesitate to contact us.
+
+Warm regards,
+{{practice_name}} Team`,
+  },
+  {
+    templateKey: "zoom_link_follow_up",
+    name: "Zoom Link",
+    subject: "Your Zoom link - {{practice_name}}",
+    bodyText: `Here is the Zoom link for your online sessions with {{clinician_name}}.
+
 Join your session here: {{zoom_link}}
 
-If you have any questions or need to make changes, please don't hesitate to contact us.
+Please save this link — it will be used for all of your future online sessions.
 
 Warm regards,
 {{practice_name}} Team`,

@@ -523,3 +523,226 @@ describe("DatabaseStorage.assignClinicianToClient", () => {
     },
   );
 });
+
+type ReassignmentState = {
+  client: AssignmentState["client"];
+  oldClinician: AssignmentState["clinician"];
+  newClinician: AssignmentState["clinician"];
+  oldSlot: AssignmentState["slot"];
+  newSlot: AssignmentState["slot"];
+};
+
+function reassignmentTransactions(
+  state: ReassignmentState,
+  failOn: "claim" | "release" | "oldClinician" | "client" | "newClinician" | null = null,
+) {
+  let previous = Promise.resolve();
+  const claimQueries: Array<{ sql: string; params: unknown[] }> = [];
+  const lockRequests: string[] = [];
+  const dialect = new PgDialect();
+  dbMock.transaction.mockImplementation(async (callback) => {
+    const run = previous.then(async () => {
+      const draft = structuredClone(state);
+      let selectNumber = 0;
+      let updateNumber = 0;
+      const tx = {
+        select: vi.fn(() => {
+          selectNumber += 1;
+          const rows = [
+            draft.client.tenantId === "tenant-1" ? draft.client : undefined,
+            draft.oldClinician.tenantId === "tenant-1" ? draft.oldClinician : undefined,
+            draft.newClinician.tenantId === "tenant-1" ? draft.newClinician : undefined,
+            draft.newSlot.tenantId === "tenant-1" ? draft.newSlot : undefined,
+          ];
+          const query = {
+            from() { return query; },
+            where() { return query; },
+            for: vi.fn(async (mode: string) => {
+              lockRequests.push(mode);
+              return [rows[selectNumber - 1]];
+            }),
+            then<TResult1 = unknown, TResult2 = never>(
+              onfulfilled?: ((value: unknown) => TResult1 | PromiseLike<TResult1>) | null,
+              onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+            ) {
+              return Promise.resolve([rows[selectNumber - 1]]).then(onfulfilled, onrejected);
+            },
+          };
+          return query;
+        }),
+        update: vi.fn(() => {
+          updateNumber += 1;
+          let target = (["claim", "release", "oldClinician", "client", "newClinician"] as const)[updateNumber - 1];
+          let values: Record<string, unknown> = {};
+          const query = {
+            set(nextValues: Record<string, unknown>) {
+              values = nextValues;
+              // A duplicate request sees the newly assigned slot while holding
+              // the client lock, so it becomes a status-only client update.
+              if (updateNumber === 1 && "status" in nextValues) target = "client";
+              return query;
+            },
+            where(condition: unknown) {
+              if (target === "claim") claimQueries.push(dialect.sqlToQuery(condition as any));
+              return query;
+            },
+            async returning() {
+              if (target === failOn) throw new Error(`${target} update failed`);
+              if (target === "claim") {
+                if (draft.newSlot.isBooked) return [];
+                Object.assign(draft.newSlot, values);
+                return [{ id: draft.newSlot.id }];
+              }
+              if (target === "release") {
+                Object.assign(draft.oldSlot, values);
+                return [];
+              }
+              if (target === "oldClinician") {
+                draft.oldClinician.currentLoad = Math.max(0, draft.oldClinician.currentLoad - 1);
+                return [];
+              }
+              if (target === "client") {
+                Object.assign(draft.client, values);
+                return [draft.client];
+              }
+              draft.newClinician.currentLoad += 1;
+              return [{ id: draft.newClinician.id }];
+            },
+            then<TResult1 = unknown, TResult2 = never>(
+              onfulfilled?: ((value: unknown) => TResult1 | PromiseLike<TResult1>) | null,
+              onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+            ) {
+              return query.returning().then(onfulfilled, onrejected);
+            },
+          };
+          return query;
+        }),
+      };
+      const result = await callback(tx);
+      Object.assign(state.client, draft.client);
+      Object.assign(state.oldClinician, draft.oldClinician);
+      Object.assign(state.newClinician, draft.newClinician);
+      Object.assign(state.oldSlot, draft.oldSlot);
+      Object.assign(state.newSlot, draft.newSlot);
+      return result;
+    });
+    previous = run.then(() => undefined, () => undefined);
+    return run;
+  });
+  return { claimQueries, lockRequests };
+}
+
+describe("DatabaseStorage.reassignClient", () => {
+  let state: ReassignmentState;
+
+  beforeEach(() => {
+    dbMock.transaction.mockReset();
+    state = {
+      client: {
+        id: "client-1",
+        tenantId: "tenant-1",
+        displayId: "W00000001",
+        status: "Assigned",
+        assignedSlotId: "slot-old",
+        assignedSlot: "Monday 09:00",
+        assignedClinicianId: "clinician-old",
+      },
+      oldClinician: { id: "clinician-old", tenantId: "tenant-1", currentLoad: 3 },
+      newClinician: { id: "clinician-new", tenantId: "tenant-1", currentLoad: 1 },
+      oldSlot: {
+        id: "slot-old", tenantId: "tenant-1", clinicianId: "clinician-old",
+        isBooked: true, type: "Recurring", day: "Monday", date: null, startTime: "09:00",
+      },
+      newSlot: {
+        id: "slot-new", tenantId: "tenant-1", clinicianId: "clinician-new",
+        isBooked: false, type: "Recurring", day: "Tuesday", date: null, startTime: "10:00",
+      },
+    };
+  });
+
+  it.each(["client", "oldClinician", "newClinician", "newSlot"] as const)(
+    "rejects a cross-tenant %s without changing records",
+    async (resource) => {
+      state[resource].tenantId = "tenant-2";
+      reassignmentTransactions(state);
+      const original = structuredClone(state);
+
+      const operation = new DatabaseStorage().reassignClient(
+        "client-1", "clinician-new", "slot-new", "Assigned", "tenant-1",
+      );
+      if (resource === "client") await expect(operation).resolves.toBeUndefined();
+      else await expect(operation).rejects.toBeTruthy();
+      expect(state).toEqual(original);
+    },
+  );
+
+  it("claims only an available tenant-and-clinician-scoped slot", async () => {
+    const { claimQueries, lockRequests } = reassignmentTransactions(state);
+
+    await new DatabaseStorage().reassignClient(
+      "client-1", "clinician-new", "slot-new", "Assigned", "tenant-1",
+    );
+
+    expect(lockRequests).toEqual(["update"]);
+    expect(claimQueries).toHaveLength(1);
+    expect(claimQueries[0].sql).toContain('"time_slots"."tenant_id" = ');
+    expect(claimQueries[0].sql).toContain('"time_slots"."clinician_id" = ');
+    expect(claimQueries[0].sql).toContain('"time_slots"."is_booked" = ');
+    expect(claimQueries[0].params).toEqual(["slot-new", "tenant-1", "clinician-new", false]);
+    expect(state).toMatchObject({
+      client: { assignedClinicianId: "clinician-new", assignedSlotId: "slot-new" },
+      oldClinician: { currentLoad: 2 },
+      newClinician: { currentLoad: 2 },
+      oldSlot: { isBooked: false },
+      newSlot: { isBooked: true },
+    });
+  });
+
+  it("rejects an occupied new slot without releasing the old allocation", async () => {
+    state.newSlot.isBooked = true;
+    reassignmentTransactions(state);
+    const original = structuredClone(state);
+
+    await expect(new DatabaseStorage().reassignClient(
+      "client-1", "clinician-new", "slot-new", "Assigned", "tenant-1",
+    )).rejects.toThrow("Slot is already booked");
+    expect(state).toEqual(original);
+  });
+
+  it("rejects a different clinician paired with the client's current slot", async () => {
+    reassignmentTransactions(state);
+    const original = structuredClone(state);
+
+    await expect(new DatabaseStorage().reassignClient(
+      "client-1", "clinician-new", "slot-old", "Assigned", "tenant-1",
+    )).rejects.toThrow("Current slot does not belong to selected clinician");
+    expect(state).toEqual(original);
+  });
+
+  it("lets only one of two competing reassignment requests commit", async () => {
+    reassignmentTransactions(state);
+    const storage = new DatabaseStorage();
+    const results = await Promise.allSettled([
+      storage.reassignClient("client-1", "clinician-new", "slot-new", "Assigned", "tenant-1"),
+      storage.reassignClient("client-1", "clinician-new", "slot-new", "Assigned", "tenant-1"),
+    ]);
+
+    expect(results.filter(result => result.status === "fulfilled")).toHaveLength(2);
+    expect(state.oldClinician.currentLoad).toBe(2);
+    expect(state.newClinician.currentLoad).toBe(2);
+    expect(state.client.assignedSlotId).toBe("slot-new");
+  });
+
+  it.each(["claim", "release", "oldClinician", "client", "newClinician"] as const)(
+    "rolls back all reassignment mutations when the %s mutation fails",
+    async (failurePoint) => {
+      reassignmentTransactions(state, failurePoint);
+      const original = structuredClone(state);
+
+      await expect(new DatabaseStorage().reassignClient(
+        "client-1", "clinician-new", "slot-new", "Assigned", "tenant-1",
+      )).rejects.toThrow();
+      expect(state).toEqual(original);
+    },
+  );
+});

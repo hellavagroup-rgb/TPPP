@@ -188,9 +188,14 @@ export async function registerRoutes(
     }
   };
 
-  const getClinicianActivityName = async (clinicianId: string | null | undefined) => {
+  const getClinicianActivityName = async (clinicianId: string | null | undefined, tenantId?: string) => {
     if (!clinicianId) return "a clinician";
-    const clinician = await storage.getClinicianById(clinicianId);
+    const clinician = tenantId
+      ? await db.select().from(clinicians).where(and(
+          eq(clinicians.id, clinicianId),
+          eq(clinicians.tenantId, tenantId),
+        )).limit(1).then(rows => rows[0])
+      : await storage.getClinicianById(clinicianId);
     if (!clinician?.userId) return "a clinician";
     return (await storage.getUserById(clinician.userId))?.name || "a clinician";
   };
@@ -2101,7 +2106,13 @@ export async function registerRoutes(
       if (!clientToReassign) return res.status(404).json({ error: "Client not found" });
       if (clientToReassign.tenantId !== req.tenant?.id) return res.status(403).json({ error: "Access denied" });
 
-      const updated = await storage.reassignClient(req.params.clientId, clinicianId || null, slotId || null, status);
+      const updated = await storage.reassignClient(
+        req.params.clientId,
+        clinicianId || null,
+        slotId || null,
+        status,
+        req.tenant!.id,
+      );
       if (!updated) {
         return res.status(404).json({ error: "Client not found" });
       }
@@ -2111,7 +2122,12 @@ export async function registerRoutes(
           eq(clientClinicianOptions.tenantId, req.tenant!.id),
         ));
       }
-      const slot = slotId ? await storage.getTimeSlotById(slotId) : undefined;
+      const slot = slotId
+        ? await db.select().from(timeSlots).where(and(
+            eq(timeSlots.id, slotId),
+            eq(timeSlots.tenantId, req.tenant!.id),
+          )).limit(1).then(rows => rows[0])
+        : undefined;
       await recordActivity(
         req,
         clinicianId ? "activity_client_reallocated" : "activity_client_deallocated",
@@ -2120,8 +2136,8 @@ export async function registerRoutes(
         {
           clientDisplayId: updated.displayId,
           clinicianName: clinicianId
-            ? await getClinicianActivityName(clinicianId)
-            : await getClinicianActivityName(clientToReassign.assignedClinicianId),
+            ? await getClinicianActivityName(clinicianId, req.tenant!.id)
+            : await getClinicianActivityName(clientToReassign.assignedClinicianId, req.tenant!.id),
           slotDescription: slot ? formatActivitySlot(slot) : "",
         },
       );
@@ -2129,6 +2145,9 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("Failed to reassign client:", error);
       // Return validation errors as 400
+      if (error instanceof ManualAssignmentError && error.reason === "access_denied") {
+        return res.status(403).json({ error: "Access denied" });
+      }
       if (error.message?.includes("not found") || error.message?.includes("does not belong") || error.message?.includes("already booked")) {
         return res.status(400).json({ error: error.message });
       }

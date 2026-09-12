@@ -127,7 +127,7 @@ export interface IStorage {
   restoreClient(id: string): Promise<Client | undefined>;
   deleteClientPermanently(id: string): Promise<boolean>;
   assignClinicianToClient(clientId: string, clinicianId: string, slotId: string, tenantId: string, allocationMethod?: "form" | "manual", allocationReason?: string): Promise<Client>;
-  reassignClient(clientId: string, newClinicianId: string | null, newSlotId: string | null, newStatus: string): Promise<Client | undefined>;
+  reassignClient(clientId: string, newClinicianId: string | null, newSlotId: string | null, newStatus: string, tenantId: string): Promise<Client | undefined>;
   repairStrandedClientAllocations(ipAddress?: string | null): Promise<StrandedAllocationRepairResult>;
   
   // ============ FORMS ============
@@ -900,25 +900,39 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async reassignClient(clientId: string, newClinicianId: string | null, newSlotId: string | null, newStatus: string): Promise<Client | undefined> {
-    const [existingClient] = await db.select().from(clients).where(eq(clients.id, clientId));
-    if (!existingClient) return undefined;
+  async reassignClient(clientId: string, newClinicianId: string | null, newSlotId: string | null, newStatus: string, tenantId: string): Promise<Client | undefined> {
+    return db.transaction(async (tx) => {
+      const [existingClient] = await tx.select().from(clients).where(and(
+        eq(clients.id, clientId),
+        eq(clients.tenantId, tenantId),
+      )).for("update");
+      if (!existingClient) return undefined;
 
-    const oldClinicianId = existingClient.assignedClinicianId;
-    let oldSlotIdToRelease = existingClient.assignedSlotId;
-    // Statuses where the slot should remain booked
-    const isAllocatedStatus = newStatus === "Assigned" || newStatus === "AwaitingConfirmation" || newStatus === "Scheduled";
-    // Only consider it a reassign if a NEW slot is being assigned (different from current)
-    const isReassigning = newSlotId !== null && newSlotId !== existingClient.assignedSlotId;
-    const zoomDeliveryIdentityChanged = shouldResetZoomDelivery(existingClient, {
-      assignedClinicianId: newClinicianId,
-      assignedSlotId: newSlotId,
-    });
+      const oldClinicianId = existingClient.assignedClinicianId;
+      const oldSlotIdToRelease = existingClient.assignedSlotId;
+      const isAllocatedStatus = newStatus === "Assigned" || newStatus === "AwaitingConfirmation" || newStatus === "Scheduled";
+      const isReassigning = newSlotId !== null && newSlotId !== existingClient.assignedSlotId;
+      const zoomDeliveryIdentityChanged = shouldResetZoomDelivery(existingClient, {
+        assignedClinicianId: newClinicianId,
+        assignedSlotId: newSlotId,
+      });
+      const hasAllocation = !!(oldClinicianId && (oldSlotIdToRelease || existingClient.assignedSlot));
 
-    // Check if client has any allocation (either by slotId or legacy slot string)
-    const hasAllocation = oldClinicianId && (oldSlotIdToRelease || existingClient.assignedSlot);
+      if (isAllocatedStatus && !isReassigning && hasAllocation && newClinicianId !== oldClinicianId) {
+        throw new Error("Current slot does not belong to selected clinician");
+      }
+      if (isAllocatedStatus && !hasAllocation && (!newClinicianId || !newSlotId)) {
+        throw new Error("A clinician and appointment slot are required for allocation");
+      }
 
-    await db.transaction(async (tx) => {
+      if (oldClinicianId) {
+        const [oldClinician] = await tx.select().from(clinicians).where(and(
+          eq(clinicians.id, oldClinicianId),
+          eq(clinicians.tenantId, tenantId),
+        ));
+        if (!oldClinician) throw new ManualAssignmentError("access_denied", "Access denied");
+      }
+
       // Helper function to find old slot ID with fallback for legacy records
       const findOldSlotId = async (): Promise<string | null> => {
         if (oldSlotIdToRelease) return oldSlotIdToRelease;
@@ -932,6 +946,7 @@ export class DatabaseStorage implements IStorage {
         let [foundSlot] = await tx.select().from(timeSlots)
           .where(and(
             eq(timeSlots.clinicianId, oldClinicianId),
+            eq(timeSlots.tenantId, tenantId),
             eq(timeSlots.day, dayOrDate),
             eq(timeSlots.startTime, startTime),
             eq(timeSlots.isBooked, true)
@@ -941,6 +956,7 @@ export class DatabaseStorage implements IStorage {
           [foundSlot] = await tx.select().from(timeSlots)
             .where(and(
               eq(timeSlots.clinicianId, oldClinicianId),
+              eq(timeSlots.tenantId, tenantId),
               eq(timeSlots.date, dayOrDate),
               eq(timeSlots.startTime, startTime),
               eq(timeSlots.isBooked, true)
@@ -955,9 +971,13 @@ export class DatabaseStorage implements IStorage {
         if (newStatus === "Scheduled") {
           const slotToRelease = await findOldSlotId();
           if (slotToRelease) {
-            await tx.delete(timeSlots).where(eq(timeSlots.id, slotToRelease));
+            await tx.delete(timeSlots).where(and(
+              eq(timeSlots.id, slotToRelease),
+              eq(timeSlots.tenantId, tenantId),
+              eq(timeSlots.clinicianId, oldClinicianId!),
+            ));
           }
-          await tx.update(clients).set({
+          const [updated] = await tx.update(clients).set({
             status: "Scheduled" as any,
             assignedSlotId: null,
             assignedSlot: null,
@@ -965,8 +985,9 @@ export class DatabaseStorage implements IStorage {
             zoomLinkSentAt: null,
             confirmedAt: new Date(),
             updatedAt: new Date()
-          }).where(eq(clients.id, clientId));
-          return;
+          }).where(and(eq(clients.id, clientId), eq(clients.tenantId, tenantId))).returning();
+          if (!updated) throw new Error("Client reassignment update failed");
+          return updated;
         }
         const statusUpdates: any = {
           status: newStatus as any,
@@ -977,30 +998,51 @@ export class DatabaseStorage implements IStorage {
         } else if (newStatus === "AwaitingConfirmation") {
           statusUpdates.awaitingConfirmationAt = new Date();
         }
-        await tx.update(clients).set(statusUpdates).where(eq(clients.id, clientId));
-        return;
+        const [updated] = await tx.update(clients).set(statusUpdates)
+          .where(and(eq(clients.id, clientId), eq(clients.tenantId, tenantId))).returning();
+        if (!updated) throw new Error("Client reassignment update failed");
+        return updated;
       }
 
       // Case 2: Reassign to a new slot
       if (isAllocatedStatus && isReassigning && newClinicianId) {
         // Validate new slot exists, belongs to clinician, and is available
-        const [newSlot] = await tx.select().from(timeSlots).where(eq(timeSlots.id, newSlotId));
+        const [newClinician] = await tx.select().from(clinicians).where(and(
+          eq(clinicians.id, newClinicianId),
+          eq(clinicians.tenantId, tenantId),
+        ));
+        if (!newClinician) throw new ManualAssignmentError("access_denied", "Access denied");
+
+        const [newSlot] = await tx.select().from(timeSlots).where(and(
+          eq(timeSlots.id, newSlotId),
+          eq(timeSlots.tenantId, tenantId),
+        ));
         if (!newSlot) throw new Error("New slot not found");
         if (newSlot.clinicianId !== newClinicianId) throw new Error("Slot does not belong to selected clinician");
-        if (newSlot.isBooked) throw new Error("Slot is already booked");
+        const claimedSlots = await tx.update(timeSlots).set({ isBooked: true }).where(and(
+          eq(timeSlots.id, newSlotId),
+          eq(timeSlots.tenantId, tenantId),
+          eq(timeSlots.clinicianId, newClinicianId),
+          eq(timeSlots.isBooked, false),
+        )).returning({ id: timeSlots.id });
+        if (claimedSlots.length !== 1) throw new Error("Slot is already booked");
 
         // Release old slot if was allocated
         if (hasAllocation) {
           const slotToRelease = await findOldSlotId();
           if (slotToRelease) {
-            await tx.update(timeSlots).set({ isBooked: false }).where(eq(timeSlots.id, slotToRelease));
+            await tx.update(timeSlots).set({ isBooked: false }).where(and(
+              eq(timeSlots.id, slotToRelease),
+              eq(timeSlots.tenantId, tenantId),
+              eq(timeSlots.clinicianId, oldClinicianId!),
+            ));
           }
 
           // Decrement old clinician load only if changing clinicians
           if (oldClinicianId !== newClinicianId) {
             await tx.update(clinicians).set({
               currentLoad: sql`GREATEST(0, ${clinicians.currentLoad} - 1)`
-            }).where(eq(clinicians.id, oldClinicianId));
+            }).where(and(eq(clinicians.id, oldClinicianId!), eq(clinicians.tenantId, tenantId)));
           }
         }
 
@@ -1023,18 +1065,19 @@ export class DatabaseStorage implements IStorage {
         } else if (newStatus === "Scheduled") {
           clientUpdates.confirmedAt = new Date();
         }
-        await tx.update(clients).set(clientUpdates).where(eq(clients.id, clientId));
-
-        // Mark new slot as booked
-        await tx.update(timeSlots).set({ isBooked: true }).where(eq(timeSlots.id, newSlotId));
+        const [updated] = await tx.update(clients).set(clientUpdates)
+          .where(and(eq(clients.id, clientId), eq(clients.tenantId, tenantId))).returning();
+        if (!updated) throw new Error("Client reassignment update failed");
 
         // Increment new clinician load only if changing clinicians or wasn't allocated before
         if (!hasAllocation || oldClinicianId !== newClinicianId) {
-          await tx.update(clinicians).set({
+          const incremented = await tx.update(clinicians).set({
             currentLoad: sql`${clinicians.currentLoad} + 1`
-          }).where(eq(clinicians.id, newClinicianId));
+          }).where(and(eq(clinicians.id, newClinicianId), eq(clinicians.tenantId, tenantId)))
+            .returning({ id: clinicians.id });
+          if (incremented.length !== 1) throw new Error("Clinician workload update failed");
         }
-        return;
+        return updated;
       }
 
       // Case 3: Change to non-allocated status (release slot and clear assignment)
@@ -1042,36 +1085,40 @@ export class DatabaseStorage implements IStorage {
         if (hasAllocation && oldClinicianId) {
           const slotToRelease = await findOldSlotId();
           if (slotToRelease) {
-            await tx.update(timeSlots).set({ isBooked: false }).where(eq(timeSlots.id, slotToRelease));
+            await tx.update(timeSlots).set({ isBooked: false }).where(and(
+              eq(timeSlots.id, slotToRelease),
+              eq(timeSlots.tenantId, tenantId),
+              eq(timeSlots.clinicianId, oldClinicianId),
+            ));
           }
 
           // Decrement old clinician load
           await tx.update(clinicians).set({
             currentLoad: sql`GREATEST(0, ${clinicians.currentLoad} - 1)`
-          }).where(eq(clinicians.id, oldClinicianId));
+          }).where(and(eq(clinicians.id, oldClinicianId), eq(clinicians.tenantId, tenantId)));
         }
 
-        await tx.update(clients).set({
+        const [updated] = await tx.update(clients).set({
           status: newStatus as any,
           assignedClinicianId: null,
           assignedSlotId: null,
           assignedSlot: null,
           zoomLinkSentAt: null,
           updatedAt: new Date()
-        }).where(eq(clients.id, clientId));
-        return;
+        }).where(and(eq(clients.id, clientId), eq(clients.tenantId, tenantId))).returning();
+        if (!updated) throw new Error("Client reassignment update failed");
+        return updated;
       }
 
       // Case 4: Trying to set allocated status without existing allocation or new slot
       // Just update the status (edge case - shouldn't normally happen)
-      await tx.update(clients).set({
+      const [updated] = await tx.update(clients).set({
         status: newStatus as any,
         updatedAt: new Date()
-      }).where(eq(clients.id, clientId));
+      }).where(and(eq(clients.id, clientId), eq(clients.tenantId, tenantId))).returning();
+      if (!updated) throw new Error("Client reassignment update failed");
+      return updated;
     });
-
-    const [updated] = await db.select().from(clients).where(eq(clients.id, clientId));
-    return updated;
   }
 
   // ============ FORMS ============

@@ -12,6 +12,20 @@ export function onlineBookingNeedsZoomLink(locationType: string | null | undefin
   return locationType === "online";
 }
 
+export function isPendingZoomDelivery(client: {
+  status?: string | null;
+  isArchived?: boolean | null;
+  slotLocationType?: string | null;
+  zoomLinkSentAt?: Date | string | null;
+}): boolean {
+  return (
+    client.status === "BookingConfirmed" &&
+    client.isArchived !== true &&
+    onlineBookingNeedsZoomLink(client.slotLocationType) &&
+    !client.zoomLinkSentAt
+  );
+}
+
 export function shouldResetZoomDelivery(
   current: { email?: string | null; assignedClinicianId?: string | null; assignedSlotId?: string | null },
   updates: { email?: string | null; assignedClinicianId?: string | null; assignedSlotId?: string | null },

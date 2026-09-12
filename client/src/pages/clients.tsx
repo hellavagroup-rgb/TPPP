@@ -81,7 +81,7 @@ import { apiRequest } from "@/lib/queryClient";
 import type { Client as ClientType, Clinician, FormTemplate as FormTemplateType, TimeSlot } from "@shared/schema";
 import { useInsurers, useAddInsurer } from "@/hooks/use-insurers";
 import { useAuth } from "@/lib/auth";
-import { isValidZoomLink } from "@shared/bookingZoom";
+import { isPendingZoomDelivery, isValidZoomLink } from "@shared/bookingZoom";
 
 type ClinicianWithAvailability = Clinician & { name: string; availability: TimeSlot[] };
 
@@ -168,6 +168,7 @@ export default function Clients() {
   // View toggle states - defined early for query dependency
   const [showConfirmedState, setShowConfirmedState] = useState(false);
   const [showArchivedState, setShowArchivedState] = useState(false);
+  const [showPendingZoomLinksOnly, setShowPendingZoomLinksOnly] = useState(false);
 
   // Fetch data from API - include archived when that toggle is enabled
   const { data: clients = [] } = useQuery<ClientType[]>({
@@ -1019,6 +1020,8 @@ export default function Clients() {
   };
 
   // Unified filtering based on toggle states and search term
+  const pendingZoomLinkClients = clients.filter(client => isPendingZoomDelivery(client as any));
+
   const filteredClients = clients.filter(client => {
     const matchesSearch = searchTerm === "" || client.displayId.toLowerCase().includes(searchTerm.toLowerCase());
     
@@ -1027,8 +1030,9 @@ export default function Clients() {
       return matchesSearch && client.isArchived;
     }
     if (showConfirmedState) {
-      // Show only Scheduled (Confirmed) clients that are not archived
-      return matchesSearch && client.status === "Scheduled" && !client.isArchived;
+      const isConfirmed = client.status === "Scheduled" || client.status === "BookingConfirmed";
+      const matchesPendingZoomFilter = !showPendingZoomLinksOnly || isPendingZoomDelivery(client as any);
+      return matchesSearch && isConfirmed && !client.isArchived && matchesPendingZoomFilter;
     }
     // Kanban view: show non-archived clients (all statuses for Kanban columns)
     return matchesSearch && !client.isArchived;
@@ -1042,6 +1046,7 @@ export default function Clients() {
       case "Assigned": return "Allocated";
       case "AwaitingConfirmation": return "Awaiting Confirmation";
       case "Scheduled": return "Confirmed";
+      case "BookingConfirmed": return "Confirmed";
       default: return status;
     }
   };
@@ -1688,10 +1693,27 @@ export default function Clients() {
             <Switch 
               id="show-confirmed"
               checked={showConfirmedState}
-              onCheckedChange={(checked) => { setShowConfirmedState(checked); if (checked) setShowArchivedState(false); }}
+              onCheckedChange={(checked) => {
+                setShowConfirmedState(checked);
+                if (checked) setShowArchivedState(false);
+                if (!checked) setShowPendingZoomLinksOnly(false);
+              }}
             />
             <Label htmlFor="show-confirmed" className="text-sm cursor-pointer">Show Confirmed</Label>
           </div>
+          {showConfirmedState && (
+            <div className="flex items-center gap-2">
+              <Switch
+                id="show-pending-zoom-links"
+                checked={showPendingZoomLinksOnly}
+                onCheckedChange={setShowPendingZoomLinksOnly}
+                data-testid="switch-pending-zoom-links"
+              />
+              <Label htmlFor="show-pending-zoom-links" className="text-sm cursor-pointer">
+                Zoom links pending ({pendingZoomLinkClients.length})
+              </Label>
+            </div>
+          )}
           <div className="flex items-center gap-2">
             <Switch 
               id="show-archived"
@@ -2323,7 +2345,11 @@ export default function Clients() {
       ) : (
         /* List view for Confirmed and Archived clients */
         <div className="space-y-3">
-          <h3 className="font-semibold text-lg">{showConfirmedState ? "Confirmed Clients" : "Archived/Didn't Engage"}</h3>
+          <h3 className="font-semibold text-lg">
+            {showConfirmedState
+              ? (showPendingZoomLinksOnly ? "Confirmed Clients Waiting for Zoom Links" : "Confirmed Clients")
+              : "Archived/Didn't Engage"}
+          </h3>
           {filteredClients.map(client => (
             <Card key={client.id} id={`client-${client.id}`} className="shadow-sm">
               <CardContent className="p-4">
@@ -2355,9 +2381,16 @@ export default function Clients() {
                     ) : (client as any).slotLocationType === "online" ? (
                       <span className="inline-block text-[11px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-300 leading-tight">Online</span>
                     ) : null}
-                    {showConfirmedState && (client as any).slotLocationType === "online" && !(client as any).zoomLinkSentAt && (
-                      <Badge variant="destructive" className="gap-1">
-                        <AlertTriangle className="h-3 w-3" /> Zoom link pending
+                    {showConfirmedState && isPendingZoomDelivery(client as any) && (
+                      <Badge
+                        variant="destructive"
+                        className="gap-1"
+                        data-testid={`badge-zoom-link-status-${client.id}`}
+                      >
+                        <AlertTriangle className="h-3 w-3" />
+                        {isValidZoomLink(clinicians.find(c => c.id === client.assignedClinicianId)?.zoomLink)
+                          ? "Zoom link ready to send"
+                          : "Clinician Zoom link missing"}
                       </Badge>
                     )}
                     <DropdownMenu>
@@ -2384,7 +2417,7 @@ export default function Clients() {
                             <FileText className="h-4 w-4 mr-2" /> View Registration Form
                           </DropdownMenuItem>
                         )}
-                        {showConfirmedState && (client as any).slotLocationType === "online" && !(client as any).zoomLinkSentAt && (
+                        {showConfirmedState && isPendingZoomDelivery(client as any) && (
                           <DropdownMenuItem
                             disabled={sendZoomLinkMutation.isPending || !isValidZoomLink(clinicians.find(c => c.id === client.assignedClinicianId)?.zoomLink)}
                             onClick={() => sendZoomLinkMutation.mutate(client.id)}
@@ -2454,7 +2487,11 @@ export default function Clients() {
             </Card>
           ))}
           {filteredClients.length === 0 && (
-            <p className="text-center py-8 text-muted-foreground">No {showConfirmedState ? "confirmed" : "archived/didn't engage"} clients found.</p>
+            <p className="text-center py-8 text-muted-foreground">
+              {showConfirmedState && showPendingZoomLinksOnly
+                ? "No confirmed clients are waiting for a Zoom link."
+                : `No ${showConfirmedState ? "confirmed" : "archived/didn't engage"} clients found.`}
+            </p>
           )}
         </div>
       )}

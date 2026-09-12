@@ -358,7 +358,17 @@ function NotificationsTab() {
   );
 }
 
-function EmailTemplatesTab({ zoomLinkEmailEnabled }: { zoomLinkEmailEnabled: boolean }) {
+function EmailTemplatesTab({
+  paymentsEnabled,
+  matchingEmailsEnabled,
+  bookingConfirmedEmailEnabled,
+  zoomLinkEmailEnabled,
+}: {
+  paymentsEnabled: boolean;
+  matchingEmailsEnabled: boolean;
+  bookingConfirmedEmailEnabled: boolean;
+  zoomLinkEmailEnabled: boolean;
+}) {
   const queryClient = useQueryClient();
   const [editingTemplate, setEditingTemplate] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ name: "", subject: "", bodyText: "" });
@@ -402,6 +412,14 @@ function EmailTemplatesTab({ zoomLinkEmailEnabled }: { zoomLinkEmailEnabled: boo
     updateMutation.mutate({ key: editingTemplate, data: editForm });
   };
 
+  const templateIsEnabled = (templateKey: string) => {
+    if (templateKey === "payment_link") return paymentsEnabled;
+    if (templateKey === "allocation_options") return matchingEmailsEnabled;
+    if (templateKey === "booking_confirmed") return bookingConfirmedEmailEnabled;
+    if (templateKey === "zoom_link_follow_up") return zoomLinkEmailEnabled;
+    return true;
+  };
+
   if (isLoading) {
     return (
       <div className="flex justify-center py-8">
@@ -421,7 +439,7 @@ function EmailTemplatesTab({ zoomLinkEmailEnabled }: { zoomLinkEmailEnabled: boo
         </CardHeader>
         <CardContent className="space-y-4">
           {DEFAULT_TEMPLATES
-            .filter((template) => template.templateKey !== "zoom_link_follow_up" || zoomLinkEmailEnabled)
+            .filter((template) => templateIsEnabled(template.templateKey))
             .map((defaultTemplate) => {
             const template = getTemplateData(defaultTemplate.templateKey);
             const isEditing = editingTemplate === defaultTemplate.templateKey;
@@ -1704,7 +1722,15 @@ export default function Settings() {
         </TabsContent>
 
         <TabsContent value="email-templates">
-          <EmailTemplatesTab zoomLinkEmailEnabled={tenant?.zoomLinkEmailEnabled === true} />
+          <EmailTemplatesTab
+            paymentsEnabled={tenant?.paymentsEnabled !== false}
+            matchingEmailsEnabled={
+              tenant?.multiClinicianAllocationEnabled === true
+              || tenant?.autoAllocationEmailEnabled === true
+            }
+            bookingConfirmedEmailEnabled={tenant?.bookingConfirmedEmailEnabled === true}
+            zoomLinkEmailEnabled={tenant?.zoomLinkEmailEnabled === true}
+          />
         </TabsContent>
 
         {registrationFormEnabled && (

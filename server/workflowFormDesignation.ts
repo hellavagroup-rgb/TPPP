@@ -34,10 +34,18 @@ export function validateWorkflowFormDesignations(input: {
 
 export function designatedIntakeCompletionBlocker(
   template: WorkflowTemplate | undefined,
+  hasSubmission: boolean,
+  deliveryRequired: boolean,
   deliveryStatus: string | undefined,
 ): { error: string; blocker?: { formTemplateId: string; title: string; state: string } } | null {
   if (!template) return { error: "Designated intake form is unavailable; choose a valid tenant form in Super Admin" };
-  if (deliveryStatus === "completed") return null;
+  if (!hasSubmission) {
+    return {
+      error: `Designated intake form "${template.title}" has not been submitted`,
+      blocker: { formTemplateId: template.id, title: template.title, state: "not_submitted" },
+    };
+  }
+  if (!deliveryRequired || deliveryStatus === "completed") return null;
   const state = deliveryStatus || "not_delivered";
   return {
     error: `Designated intake form "${template.title}" is ${deliveryStatus || "not delivered"}`,

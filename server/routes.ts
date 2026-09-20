@@ -1363,9 +1363,16 @@ export async function registerRoutes(
         if (!intakeId) return res.status(409).json({ error: "Designated intake form requires setup" });
         const template = await storage.getFormTemplateById(intakeId);
         const availableTemplate = template?.tenantId === req.tenant?.id ? template : undefined;
+        const hasSubmission = (await storage.getFormSubmissionsByClientId(currentClient.id))
+          .some((item) => item.formTemplateId === intakeId && item.isDraft !== true);
         const delivery = (await storage.getFormDeliveries(currentClient.id, req.tenant.id))
           .find((item) => item.formTemplateId === intakeId);
-        const blocker = designatedIntakeCompletionBlocker(availableTemplate, delivery?.status);
+        const blocker = designatedIntakeCompletionBlocker(
+          availableTemplate,
+          hasSubmission,
+          currentClient.contactPreference !== "phone",
+          delivery?.status,
+        );
         if (blocker) return res.status(availableTemplate ? 400 : 409).json(blocker);
       }
 
@@ -2300,13 +2307,6 @@ export async function registerRoutes(
       if (!tenant?.intakeFormTemplateId || formId !== tenant.intakeFormTemplateId) {
         return res.status(403).json({ error: "This form is not the designated intake form for this practice" });
       }
-      // Phone-assisted intake opens the designated form without sending email.
-      // Create the same durable record here so completion semantics remain
-      // identical while still rejecting every non-designated template.
-      if (!existingDelivery && client.tenantId) {
-        existingDelivery = (await storage.prepareFormDeliveries(clientId, [formId], client.tenantId))
-          .find((delivery) => delivery.formTemplateId === formId);
-      }
       if (existingDelivery?.status === "completed") {
         return res.status(400).json({ error: "Form already submitted" });
       }
@@ -2365,10 +2365,12 @@ export async function registerRoutes(
           ));
       }
       const deliveries = client.tenantId ? await storage.getFormDeliveries(clientId, client.tenantId) : [];
-      const designatedDelivery = tenant?.intakeFormTemplateId
-        ? deliveries.find((delivery) => delivery.formTemplateId === tenant.intakeFormTemplateId)
-        : undefined;
-      const allFormsComplete = designatedDelivery?.status === "completed";
+      const designatedDeliveries = tenant?.intakeFormTemplateId
+        ? deliveries.filter((delivery) => delivery.formTemplateId === tenant.intakeFormTemplateId)
+        : [];
+      const allFormsComplete = client.contactPreference === "phone"
+        ? submittedPacketIsComplete(designatedDeliveries.map((delivery) => delivery.status))
+        : designatedDeliveries.some((delivery) => delivery.status === "completed");
       const clientUpdate: { status?: "Forms Completed"; formsCompletedAt?: Date; insurer?: string } = {};
       if (allFormsComplete) {
         clientUpdate.status = "Forms Completed";

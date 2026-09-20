@@ -16,6 +16,7 @@ const h = vi.hoisted(() => {
     paymentLinks: [] as any[],
     registrationTemplate: null as any,
     submissions: [] as any[],
+    deliveries: [] as any[],
     bookingSnapshots: [] as any[],
     slotClaimFails: false,
     stripeLinkActive: true,
@@ -172,8 +173,27 @@ const h = vi.hoisted(() => {
     getClientClinicianOptions: vi.fn(async () => state.options.map(option => ({ ...option }))),
     getFormSubmissionsByClientId: vi.fn(async (clientId: string) =>
       state.submissions.filter(submission => submission.clientId === clientId).map(submission => ({ ...submission }))),
+    getDraftSubmission: vi.fn(async () => undefined),
+    createFormSubmission: vi.fn(async (submission: any, tenantId: string) => {
+      const created = {
+        id: `submission-${state.submissions.length + 1}`,
+        ...submission,
+        tenantId,
+        isDraft: false,
+      };
+      state.submissions.push(created);
+      return { ...created };
+    }),
+    getFormDeliveries: vi.fn(async (clientId: string, tenantId: string) =>
+      state.deliveries.filter(delivery => delivery.clientId === clientId && delivery.tenantId === tenantId)
+        .map(delivery => ({ ...delivery }))),
     getFormTemplateById: vi.fn(async (id: string) =>
       state.registrationTemplate?.id === id ? { ...state.registrationTemplate } : undefined),
+    updateClient: vi.fn(async (id: string, patch: any) => {
+      if (state.client.id !== id) return undefined;
+      Object.assign(state.client, patch);
+      return { ...state.client };
+    }),
     assignClinicianToClient: vi.fn(async (clientId: string, clinicianId: string, slotId: string, tenantId: string) => {
       if (state.client.id !== clientId || state.client.tenantId !== tenantId) {
         throw new Error("client not found");
@@ -356,6 +376,7 @@ function resetState(overrides: { client?: any; tenant?: any } = {}) {
   h.state.paymentLinks = [];
   h.state.registrationTemplate = null;
   h.state.submissions = [];
+  h.state.deliveries = [];
   h.state.bookingSnapshots = [];
   h.state.slotClaimFails = false;
   h.state.stripeLinkActive = true;
@@ -386,6 +407,81 @@ afterEach(async () => {
 });
 
 describe("registration journey HTTP routes", () => {
+  function configureIntakeCompletion(contactPreference: "email" | "phone") {
+    h.state.tenant.intakeFormTemplateId = "intake-form-a";
+    h.state.registrationTemplate = {
+      id: "intake-form-a", tenantId: "tenant-a", title: "Intake details", fields: [],
+    };
+    Object.assign(h.state.client, { status: contactPreference === "email" ? "Forms Sent" : "New", contactPreference });
+    h.state.submissions = [{
+      id: "intake-submission-a",
+      clientId: "client-a",
+      tenantId: "tenant-a",
+      formTemplateId: "intake-form-a",
+      isDraft: false,
+    }];
+  }
+
+  it("advances a phone-intake client when the admin submits the designated form without creating delivery", async () => {
+    configureIntakeCompletion("phone");
+    h.state.submissions = [];
+
+    const response = await request("/api/form-submissions", {
+      method: "POST",
+      body: JSON.stringify({
+        formId: "intake-form-a",
+        clientId: "client-a",
+        data: { presentingIssue: "Anxiety" },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(h.state.submissions).toHaveLength(1);
+    expect(h.storage.prepareFormDeliveries).not.toHaveBeenCalled();
+    expect(h.state.client.status).toBe("Forms Completed");
+    expect(h.state.client.formsCompletedAt).toBeInstanceOf(Date);
+  });
+
+  it("keeps requiring completed delivery for an email-intake client", async () => {
+    configureIntakeCompletion("email");
+    h.state.deliveries = [{
+      id: "delivery-a",
+      clientId: "client-a",
+      tenantId: "tenant-a",
+      formTemplateId: "intake-form-a",
+      status: "sent",
+    }];
+
+    const blocked = await request("/api/clients/client-a", {
+      method: "PATCH",
+      body: JSON.stringify({ status: "Forms Completed" }),
+    });
+    expect(blocked.status).toBe(400);
+    expect(blocked.body.blocker.state).toBe("sent");
+
+    h.state.deliveries[0].status = "completed";
+    const completed = await request("/api/clients/client-a", {
+      method: "PATCH",
+      body: JSON.stringify({ status: "Forms Completed" }),
+    });
+    expect(completed.status).toBe(200);
+    expect(h.state.client.status).toBe("Forms Completed");
+  });
+
+  it("does not allow either intake path to complete without a durable submission", async () => {
+    configureIntakeCompletion("phone");
+    h.state.submissions = [];
+
+    const response = await request("/api/clients/client-a", {
+      method: "PATCH",
+      body: JSON.stringify({ status: "Forms Completed" }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body.blocker.state).toBe("not_submitted");
+    expect(h.state.client.status).toBe("New");
+  });
+
   function checkoutSession(overrides: Record<string, unknown> = {}) {
     return {
       id: "cs_test_return",

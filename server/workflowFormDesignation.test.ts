@@ -55,14 +55,20 @@ describe("workflow form designations", () => {
 
 describe("designated intake completion blocker", () => {
   it("names the exact designated form and delivery state", () => {
-    expect(designatedIntakeCompletionBlocker(intake, "failed")).toEqual({
+    expect(designatedIntakeCompletionBlocker(intake, true, true, "failed")).toEqual({
       error: 'Designated intake form "Verified intake" is failed',
       blocker: { formTemplateId: "intake", title: "Verified intake", state: "failed" },
     });
-    expect(designatedIntakeCompletionBlocker(intake, undefined)?.blocker?.state).toBe("not_delivered");
+    expect(designatedIntakeCompletionBlocker(intake, true, true, undefined)?.blocker?.state).toBe("not_delivered");
   });
 
-  it("allows completion only after the designated delivery completes", () => {
-    expect(designatedIntakeCompletionBlocker(intake, "completed")).toBeNull();
+  it("always requires a durable submission", () => {
+    expect(designatedIntakeCompletionBlocker(intake, false, false, undefined)?.blocker?.state).toBe("not_submitted");
+    expect(designatedIntakeCompletionBlocker(intake, false, true, "completed")?.blocker?.state).toBe("not_submitted");
+  });
+
+  it("requires delivery completion for email but waives it for phone intake", () => {
+    expect(designatedIntakeCompletionBlocker(intake, true, true, "completed")).toBeNull();
+    expect(designatedIntakeCompletionBlocker(intake, true, false, undefined)).toBeNull();
   });
 });

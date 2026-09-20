@@ -27,6 +27,18 @@ import { formatDateUK } from "@/lib/dateUtils";
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 import type { Client as ClientType } from "@shared/schema";
+import { getAdminStatusOptions } from "@shared/clientWorkflow";
+
+function mutationErrorMessage(error: Error, fallback: string): string {
+  const jsonStart = error.message.indexOf("{");
+  if (jsonStart !== -1) {
+    try {
+      const body = JSON.parse(error.message.slice(jsonStart));
+      if (typeof body.error === "string") return body.error;
+    } catch {}
+  }
+  return fallback;
+}
 
 export default function Waitlist() {
   const { toast } = useToast();
@@ -42,6 +54,10 @@ export default function Waitlist() {
     staleTime: 60_000,
   });
   const contactPreferenceEnabled = tenant?.contactPreferenceEnabled === true;
+  const workflowFeatures = {
+    multiClinicianAllocationEnabled: tenant?.multiClinicianAllocationEnabled === true,
+    registrationFormEnabled: tenant?.registrationFormEnabled === true,
+  };
 
   const { data: clients = [] } = useQuery<ClientType[]>({
     queryKey: ["/api/clients"],
@@ -92,8 +108,12 @@ export default function Waitlist() {
       setIsEditStatusOpen(false);
       setEditStatusClient(null);
     },
-    onError: () => {
-      toast({ title: "Error", description: "Failed to update status.", variant: "destructive" });
+    onError: (error: Error) => {
+      toast({
+        title: "Status not updated",
+        description: mutationErrorMessage(error, "Failed to update status. Please refresh and try again."),
+        variant: "destructive",
+      });
     },
   });
 
@@ -220,13 +240,11 @@ export default function Waitlist() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="New">Pending Intake</SelectItem>
-                <SelectItem value="Forms Sent">Screen Booked/Sent</SelectItem>
-                <SelectItem value="Forms Completed">Forms Completed</SelectItem>
-                <SelectItem value="Waitlist">Waitlist</SelectItem>
-                <SelectItem value="Assigned">Allocated</SelectItem>
-                <SelectItem value="Awaiting Confirmation">Awaiting Confirmation</SelectItem>
-                <SelectItem value="Scheduled">Confirmed</SelectItem>
+                {editStatusClient && getAdminStatusOptions(editStatusClient.status, workflowFeatures, {
+                  hasAllocation: Boolean(editStatusClient.assignedClinicianId && (editStatusClient.assignedSlotId || editStatusClient.assignedSlot)),
+                }).map(option => (
+                  <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>

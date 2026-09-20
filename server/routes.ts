@@ -54,6 +54,11 @@ import {
 } from "@shared/registrationConsent";
 import { isValidZoomLink, onlineBookingNeedsZoomLink, shouldResetZoomDelivery } from "@shared/bookingZoom";
 import { zoomDeliveryIdempotencyKey } from "./bookingZoomWorkflow";
+import {
+  hasActiveClientAllocation,
+  normalizeStoredClientStatus,
+  validateAdminStatusTransition,
+} from "@shared/clientWorkflow";
 
 function formatActivitySlot(slot: { type?: string | null; day?: string | null; date?: string | null; startTime?: string | null; endTime?: string | null; locationType?: string | null }): string {
   const day = slot.type === "SpecificDate" ? slot.date : slot.day;
@@ -1303,7 +1308,30 @@ export async function registerRoutes(
       if (currentClient.tenantId !== req.tenant?.id) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const oldStatus = currentClient?.status;
+      const oldStatus = normalizeStoredClientStatus(currentClient.status) ?? currentClient.status;
+      if ("status" in req.body) {
+        const transition = validateAdminStatusTransition(oldStatus, req.body.status, {
+          multiClinicianAllocationEnabled: req.tenant?.multiClinicianAllocationEnabled === true,
+          registrationFormEnabled: req.tenant?.registrationFormEnabled === true,
+        });
+        if (!transition.ok) {
+          return res.status(transition.code === "unknown_status" ? 400 : 409).json({
+            error: transition.message,
+            code: transition.code,
+          });
+        }
+        if (
+          transition.status !== oldStatus
+          && hasActiveClientAllocation(transition.status)
+          && !(currentClient.assignedClinicianId && (currentClient.assignedSlotId || currentClient.assignedSlot))
+        ) {
+          return res.status(409).json({
+            error: "Allocate a clinician and appointment slot before choosing this status.",
+            code: "allocation_required",
+          });
+        }
+        req.body.status = transition.status;
+      }
       if (req.body.status === "Forms Completed") {
         const intakeId = req.tenant?.intakeFormTemplateId;
         if (!intakeId) return res.status(409).json({ error: "Designated intake form requires setup" });
@@ -2126,18 +2154,28 @@ export async function registerRoutes(
       const clientToReassign = await storage.getClientById(req.params.clientId);
       if (!clientToReassign) return res.status(404).json({ error: "Client not found" });
       if (clientToReassign.tenantId !== req.tenant?.id) return res.status(403).json({ error: "Access denied" });
+      const transition = validateAdminStatusTransition(clientToReassign.status, status, {
+        multiClinicianAllocationEnabled: req.tenant?.multiClinicianAllocationEnabled === true,
+        registrationFormEnabled: req.tenant?.registrationFormEnabled === true,
+      });
+      if (!transition.ok) {
+        return res.status(transition.code === "unknown_status" ? 400 : 409).json({
+          error: transition.message,
+          code: transition.code,
+        });
+      }
 
       const updated = await storage.reassignClient(
         req.params.clientId,
         clinicianId || null,
         slotId || null,
-        status,
+        transition.status,
         req.tenant!.id,
       );
       if (!updated) {
         return res.status(404).json({ error: "Client not found" });
       }
-      if (clientToReassign.status === "OptionsSent" && status !== "OptionsSent") {
+      if (clientToReassign.status === "OptionsSent" && transition.status !== "OptionsSent") {
         await db.update(clientClinicianOptions).set({ status: "declined" }).where(and(
           eq(clientClinicianOptions.clientId, clientToReassign.id),
           eq(clientClinicianOptions.tenantId, req.tenant!.id),

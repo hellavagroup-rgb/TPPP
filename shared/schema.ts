@@ -3,6 +3,7 @@ import { pgTable, text, varchar, timestamp, integer, boolean, json, uniqueIndex 
 import { relations } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { z } from "zod";
+import { CLIENT_STATUSES } from "./clientWorkflow";
 
 // ============ TENANTS ============
 export const tenants = pgTable("tenants", {
@@ -169,7 +170,7 @@ export const clients = pgTable("clients", {
   // Clinical Data
   referralSource: text("referral_source"),
   insurer: text("insurer"),
-  status: text("status", { enum: ["New", "Forms Sent", "Forms Completed", "Assigned", "AwaitingConfirmation", "Scheduled", "Waitlist", "OptionsSent", "OptionSelected", "RegistrationPending", "BookingConfirmed"] }).notNull().default("New"),
+  status: text("status", { enum: CLIENT_STATUSES }).notNull().default("New"),
   presentingIssues: text("presenting_issues").array().default(sql`ARRAY[]::text[]`),
   notes: text("notes"), // Clinical notes - restricted access
   // Assignment

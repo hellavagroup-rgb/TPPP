@@ -1,22 +1,10 @@
-export const ACTIVE_ALLOCATION_STATUSES = [
-  "Assigned",
-  "AwaitingConfirmation",
-  "Scheduled",
-  "OptionSelected",
-  "RegistrationPending",
-  "BookingConfirmed",
-] as const;
+export {
+  ACTIVE_ALLOCATION_STATUSES,
+  hasActiveClientAllocation,
+  hasFinalizedBooking,
+} from "@shared/clientWorkflow";
 
-export const ACTIVE_ALLOCATION_STATUS_SET = new Set<string>(ACTIVE_ALLOCATION_STATUSES);
-export const FINALIZED_BOOKING_STATUS_SET = new Set<string>(["Scheduled", "BookingConfirmed"]);
-
-export function hasActiveClientAllocation(status: string | null | undefined): boolean {
-  return Boolean(status && ACTIVE_ALLOCATION_STATUS_SET.has(status));
-}
-
-export function hasFinalizedBooking(status: string | null | undefined): boolean {
-  return Boolean(status && FINALIZED_BOOKING_STATUS_SET.has(status));
-}
+import { hasActiveClientAllocation } from "@shared/clientWorkflow";
 
 export type SlotIntegrityAction = "none" | "book" | "open" | "conflict";
 

@@ -26,6 +26,7 @@ import type { Client, Clinician, TimeSlot } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ACTIVITY_TABS, DEFAULT_ACTIVITY_CATEGORY, type ActivityCategory } from "@/lib/activityFeed";
+import { CLIENT_STATUS_LABELS } from "@shared/clientWorkflow";
 
 type ClinicianWithAvailability = Clinician & { name: string; availability?: TimeSlot[] };
 
@@ -270,7 +271,7 @@ export default function Dashboard() {
 
   const stats = [
     {
-      title: "Pending Intake",
+      title: CLIENT_STATUS_LABELS.New,
       value: clients.filter(c => c.status === "New").length,
       change: "New clients awaiting forms",
       icon: AlertCircle,
@@ -278,7 +279,7 @@ export default function Dashboard() {
       bg: "bg-amber-100"
     },
     {
-      title: "Screen Booked/Sent",
+      title: CLIENT_STATUS_LABELS["Forms Sent"],
       value: clients.filter(c => c.status === "Forms Sent").length,
       change: "Forms sent to client",
       icon: FileText,
@@ -286,7 +287,7 @@ export default function Dashboard() {
       bg: "bg-blue-100"
     },
     {
-      title: "Forms Completed",
+      title: CLIENT_STATUS_LABELS["Forms Completed"],
       value: clients.filter(c => c.status === "Forms Completed").length,
       change: "Ready for allocation",
       icon: CheckCircle2,
@@ -294,7 +295,7 @@ export default function Dashboard() {
       bg: "bg-teal-100"
     },
     {
-      title: "Allocated",
+      title: CLIENT_STATUS_LABELS.Assigned,
       value: clients.filter(c => c.status === "Assigned").length,
       change: "Assigned to clinician",
       icon: Users,
@@ -302,7 +303,7 @@ export default function Dashboard() {
       bg: "bg-indigo-100"
     },
     {
-      title: "Awaiting Confirmation",
+      title: CLIENT_STATUS_LABELS.AwaitingConfirmation,
       value: clients.filter(c => c.status === "AwaitingConfirmation").length,
       change: "Email sent to client",
       icon: Mail,
@@ -310,7 +311,7 @@ export default function Dashboard() {
       bg: "bg-purple-100"
     },
     {
-      title: "Waitlist",
+      title: CLIENT_STATUS_LABELS.Waitlist,
       value: clients.filter(c => c.status === "Waitlist").length,
       change: "Awaiting clinician match",
       icon: AlertCircle,

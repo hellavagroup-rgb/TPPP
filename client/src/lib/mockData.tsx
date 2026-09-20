@@ -1,9 +1,10 @@
 import { createContext, useContext, useState, ReactNode } from "react";
 import { format, subDays, addDays, isSameDay, parseISO, startOfWeek, endOfWeek, eachDayOfInterval } from "date-fns";
 import { useAppData } from "./useAppData";
+import type { ClientStatus } from "@shared/clientWorkflow";
 
 // Types
-export type ClientStatus = "New" | "Forms Sent" | "Forms Completed" | "Assigned" | "Scheduled" | "Waitlist" | "OptionsSent" | "OptionSelected" | "RegistrationPending" | "BookingConfirmed";
+export type { ClientStatus } from "@shared/clientWorkflow";
 
 export interface Client {
   id: string; // Internal ID

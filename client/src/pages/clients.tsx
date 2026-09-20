@@ -82,6 +82,22 @@ import type { Client as ClientType, Clinician, FormTemplate as FormTemplateType,
 import { useInsurers, useAddInsurer } from "@/hooks/use-insurers";
 import { useAuth } from "@/lib/auth";
 import { isPendingZoomDelivery, isValidZoomLink } from "@shared/bookingZoom";
+import {
+  getAdminStatusOptions,
+  getClientStatusLabel,
+  type ClientStatus as CanonicalClientStatus,
+} from "@shared/clientWorkflow";
+
+function mutationErrorMessage(error: Error, fallback: string): string {
+  const jsonStart = error.message.indexOf("{");
+  if (jsonStart !== -1) {
+    try {
+      const body = JSON.parse(error.message.slice(jsonStart));
+      if (typeof body.error === "string") return body.error;
+    } catch {}
+  }
+  return fallback;
+}
 
 type ClinicianWithAvailability = Clinician & { name: string; availability: TimeSlot[] };
 
@@ -157,6 +173,10 @@ export default function Clients() {
   const multiClinicianAllocationEnabled = tenant?.multiClinicianAllocationEnabled === true;
   const zoomLinkEmailEnabled = tenant?.zoomLinkEmailEnabled === true;
   const writeuppChecklistEnabled = tenant?.writeuppChecklistEnabled === true;
+  const workflowFeatures = {
+    multiClinicianAllocationEnabled,
+    registrationFormEnabled: tenant?.registrationFormEnabled === true,
+  };
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedClient, setSelectedClient] = useState<ClientType | null>(null);
 
@@ -617,8 +637,12 @@ export default function Clients() {
       setIsEditStatusOpen(false);
       setEditStatusClient(null);
     },
-    onError: () => {
-      toast({ title: "Error", description: "Failed to update allocation.", variant: "destructive" });
+    onError: (error: Error) => {
+      toast({
+        title: "Allocation not updated",
+        description: mutationErrorMessage(error, "Failed to update allocation. Please refresh and try again."),
+        variant: "destructive",
+      });
     },
   });
 
@@ -1045,19 +1069,9 @@ export default function Clients() {
   });
 
   // Display labels for statuses (UI labels differ from database values)
-  const getStatusDisplayLabel = (status: string) => {
-    switch(status) {
-      case "New": return "Pending Intake";
-      case "Forms Sent": return "Screen Booked/Sent";
-      case "Assigned": return "Allocated";
-      case "AwaitingConfirmation": return "Awaiting Confirmation";
-      case "Scheduled": return "Confirmed";
-      case "BookingConfirmed": return "Confirmed";
-      default: return status;
-    }
-  };
+  const getStatusDisplayLabel = getClientStatusLabel;
 
-  const getStatusColor = (status: ClientStatus | "AwaitingConfirmation") => {
+  const getStatusColor = (status: CanonicalClientStatus) => {
     switch(status) {
       case "New": return "bg-blue-100 text-blue-700 hover:bg-blue-200";
       case "Forms Sent": return "bg-amber-100 text-amber-700 hover:bg-amber-200";
@@ -1161,8 +1175,12 @@ export default function Clients() {
       toast({ title: "Client Updated", description: "Changes saved successfully." });
       setIsEditClientOpen(false);
       setEditingClient(null);
-    } catch {
-      toast({ title: "Error", description: "Failed to update client.", variant: "destructive" });
+    } catch (error) {
+      toast({
+        title: "Client not updated",
+        description: mutationErrorMessage(error as Error, "Failed to update client. Please refresh and try again."),
+        variant: "destructive",
+      });
     }
   };
 
@@ -2974,14 +2992,11 @@ export default function Clients() {
                 >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="New">Pending Intake</SelectItem>
-                    <SelectItem value="Forms Sent">Screen Booked/Sent</SelectItem>
-                    <SelectItem value="Forms Completed">Forms Completed</SelectItem>
-                    <SelectItem value="Assigned">Allocated</SelectItem>
-                    <SelectItem value="OptionsSent">Options Sent</SelectItem>
-                    <SelectItem value="AwaitingConfirmation">Awaiting Confirmation</SelectItem>
-                    <SelectItem value="Scheduled">Confirmed</SelectItem>
-                    <SelectItem value="Waitlist">Waitlist</SelectItem>
+                    {editingClient && getAdminStatusOptions(editingClient.status, workflowFeatures, {
+                      hasAllocation: Boolean(editingClient.assignedClinicianId && (editingClient.assignedSlotId || editingClient.assignedSlot)),
+                    }).map(option => (
+                      <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -3154,13 +3169,9 @@ export default function Clients() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="New">Pending Intake</SelectItem>
-                    <SelectItem value="Forms Sent">Screen Booked/Sent</SelectItem>
-                    <SelectItem value="Forms Completed">Forms Completed</SelectItem>
-                    <SelectItem value="Assigned">Allocated</SelectItem>
-                    <SelectItem value="AwaitingConfirmation">Awaiting Confirmation</SelectItem>
-                    <SelectItem value="Scheduled">Confirmed</SelectItem>
-                    <SelectItem value="Waitlist">Waitlist</SelectItem>
+                    {getAdminStatusOptions(editStatusClient.status, workflowFeatures).map(option => (
+                      <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">

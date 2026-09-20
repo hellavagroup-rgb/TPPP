@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Users, UserCheck, UserX, TrendingUp, CalendarDays, FileText, CreditCard } from "lucide-react";
 import type { Client, Clinician, TimeSlot } from "@shared/schema";
+import { getClientStatusLabel, hasActiveClientAllocation } from "@shared/clientWorkflow";
 
 type ClinicianWithAvailability = Clinician & { name?: string; availability?: TimeSlot[] };
 
@@ -85,12 +86,7 @@ export default function Analytics() {
     const newClients = allClients.filter(c => inPeriod(c.createdAt));
     const totalNew = newClients.length;
 
-    const allocated = newClients.filter(c =>
-      c.status === "Assigned" ||
-      c.status === "AwaitingConfirmation" ||
-      c.status === "Scheduled" ||
-      c.allocatedAt
-    );
+    const allocated = newClients.filter(c => hasActiveClientAllocation(c.status) || c.allocatedAt);
     const totalAllocated = allocated.length;
 
     const archived = newClients.filter(c => c.isArchived);
@@ -104,10 +100,7 @@ export default function Analytics() {
       if (c.isArchived) {
         statusBreakdown["Archived/Didn't Engage"] = (statusBreakdown["Archived/Didn't Engage"] || 0) + 1;
       } else {
-        const label = c.status === "Assigned" ? "Allocated"
-          : c.status === "AwaitingConfirmation" ? "Awaiting Confirmation"
-          : c.status === "Scheduled" ? "Confirmed"
-          : c.status;
+        const label = getClientStatusLabel(c.status);
         statusBreakdown[label] = (statusBreakdown[label] || 0) + 1;
       }
     });

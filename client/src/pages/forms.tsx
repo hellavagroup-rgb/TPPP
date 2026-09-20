@@ -1,4 +1,4 @@
-import { useData } from "@/lib/mockData";
+import { useData, type FormTemplate } from "@/lib/mockData";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Plus, Pencil, Trash2, Eye, FileText, MoreHorizontal } from "lucide-react";
@@ -24,20 +24,29 @@ import { useState } from "react";
 import { FormPreviewDialog } from "@/components/forms/FormPreview";
 
 export default function Forms() {
-  const { forms, deleteForm } = useData();
+  const { forms: untypedForms, deleteForm } = useData();
+  const forms = untypedForms as (FormTemplate & { designatedPurpose?: "intake" | "registration" | null })[];
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (deleteId) {
-      deleteForm(deleteId);
-      setDeleteId(null);
-      toast({
-        title: "Form Deleted",
-        description: "The form template has been permanently removed.",
-      });
+      try {
+        await deleteForm(deleteId);
+        setDeleteId(null);
+        toast({
+          title: "Form Deleted",
+          description: "The form template has been permanently removed.",
+        });
+      } catch (error: any) {
+        toast({
+          title: "Form not deleted",
+          description: error?.message || "Designated and historically delivered forms cannot be deleted.",
+          variant: "destructive",
+        });
+      }
     }
   };
 
@@ -78,13 +87,24 @@ export default function Forms() {
                     <DropdownMenuItem onClick={() => setPreviewId(form.id)}>
                       <Eye className="h-4 w-4 mr-2" /> Preview
                     </DropdownMenuItem>
-                    <DropdownMenuItem className="text-destructive" onClick={() => setDeleteId(form.id)}>
+                    <DropdownMenuItem
+                      className="text-destructive"
+                      disabled={!!(form as any).designatedPurpose}
+                      onClick={() => setDeleteId(form.id)}
+                    >
                       <Trash2 className="h-4 w-4 mr-2" /> Delete
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
               <CardTitle className="text-xl">{form.title}</CardTitle>
+              {(form as any).designatedPurpose && (
+                <div className="mt-2">
+                  <span className="rounded-full bg-primary/10 px-2 py-1 text-xs font-medium text-primary">
+                    Designated {(form as any).designatedPurpose} form
+                  </span>
+                </div>
+              )}
               <CardDescription className="line-clamp-2 mt-2 h-10">
                 {form.description}
               </CardDescription>

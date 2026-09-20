@@ -102,14 +102,13 @@ export default function IntakeInbox() {
   const [viewingMessage, setViewingMessage] = useState<IntakeMessage | null>(null);
   const [convertingMessage, setConvertingMessage] = useState<IntakeMessage | null>(null);
   const [overrideNextStep, setOverrideNextStep] = useState<"email" | "phone" | null>(null);
-  const [selectedIntakeFormId, setSelectedIntakeFormId] = useState<string>("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [showIgnored, setShowIgnored] = useState(false);
 
   const { data: tenant } = useQuery<{
     contactPreferenceEnabled?: boolean;
     formsEnabled?: boolean;
-    registrationFormTemplateId?: string | null;
+    intakeFormId?: string | null;
   }>({
     queryKey: ["/api/tenant"],
     queryFn: async () => {
@@ -128,10 +127,7 @@ export default function IntakeInbox() {
       return res.json();
     },
   });
-  const intakeForms = forms.filter((form) => form.id !== tenant?.registrationFormTemplateId);
-  const defaultIntakeForm = intakeForms.find((form) =>
-    /intake/i.test(form.title) && !/draft|do not use/i.test(form.title),
-  ) || intakeForms[0];
+  const designatedIntakeForm = forms.find((form) => form.id === tenant?.intakeFormId);
 
   const { data: messages = [], isLoading } = useQuery<IntakeMessage[]>({
     queryKey: ["/api/intake-messages"],
@@ -164,16 +160,14 @@ export default function IntakeInbox() {
   }
 
   const convertMutation = useMutation({
-    mutationFn: async ({ id, contactPreference, formIds }: {
+    mutationFn: async ({ id, contactPreference }: {
       id: string;
       contactPreference?: "email" | "phone" | null;
-      formIds?: string[];
     }) => {
-      const body: { contactPreference?: "email" | "phone"; formIds?: string[] } = {};
+      const body: { contactPreference?: "email" | "phone" } = {};
       if (contactPreference === "email" || contactPreference === "phone") {
         body.contactPreference = contactPreference;
       }
-      if (contactPreference === "email" && formIds?.length) body.formIds = formIds;
       const res = await fetch(`/api/intake-messages/${id}/convert-to-client`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -427,7 +421,6 @@ export default function IntakeInbox() {
                                   const nextStepValue = extractedField(msg.extractedData, "next step", "helpful next", "most helpful", "what would");
                                   const detectedNextStep = classifyIntakeNextStepAnswer(nextStepValue);
                                   setOverrideNextStep(detectedNextStep);
-                                  setSelectedIntakeFormId(detectedNextStep === "email" ? (defaultIntakeForm?.id || "") : "");
                                   setConvertingMessage(msg);
                                 }}
                               >
@@ -485,19 +478,13 @@ export default function IntakeInbox() {
           overrideNextStep={overrideNextStep}
           onChangeNextStep={(value) => {
             setOverrideNextStep(value);
-            if (value === "email" && !selectedIntakeFormId) {
-              setSelectedIntakeFormId(defaultIntakeForm?.id || "");
-            }
           }}
-          intakeForms={intakeForms}
-          selectedIntakeFormId={selectedIntakeFormId}
-          onChangeIntakeForm={setSelectedIntakeFormId}
+          designatedIntakeForm={designatedIntakeForm}
           isPending={convertMutation.isPending}
           onConfirm={() =>
             convertMutation.mutate({
               id: convertingMessage.id,
               contactPreference: overrideNextStep,
-              formIds: overrideNextStep === "email" && selectedIntakeFormId ? [selectedIntakeFormId] : [],
             })
           }
           onClose={() => setConvertingMessage(null)}
@@ -513,9 +500,7 @@ interface ConvertConfirmDialogProps {
   contactPreferenceEnabled: boolean;
   overrideNextStep: "email" | "phone" | null;
   onChangeNextStep: (v: "email" | "phone") => void;
-  intakeForms: IntakeFormOption[];
-  selectedIntakeFormId: string;
-  onChangeIntakeForm: (id: string) => void;
+  designatedIntakeForm?: IntakeFormOption;
   isPending: boolean;
   onConfirm: () => void;
   onClose: () => void;
@@ -527,9 +512,7 @@ function ConvertConfirmDialog({
   contactPreferenceEnabled,
   overrideNextStep,
   onChangeNextStep,
-  intakeForms,
-  selectedIntakeFormId,
-  onChangeIntakeForm,
+  designatedIntakeForm,
   isPending,
   onConfirm,
   onClose,
@@ -641,20 +624,21 @@ function ConvertConfirmDialog({
             </RadioGroup>
             {overrideNextStep === "email" && (
               <div className="mt-3 space-y-2">
-                <Label htmlFor="intake-form">Intake form to send</Label>
-                <Select value={selectedIntakeFormId} onValueChange={onChangeIntakeForm}>
-                  <SelectTrigger id="intake-form" data-testid="select-intake-form">
-                    <SelectValue placeholder="Select an intake form" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {intakeForms.map((form) => (
-                      <SelectItem key={form.id} value={form.id}>{form.title}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  Confirming will create the client, send this form, and move them to Forms Sent.
-                </p>
+                <Label>Designated intake form</Label>
+                {designatedIntakeForm ? (
+                  <>
+                    <div className="rounded-md border bg-muted/30 p-3 text-sm font-medium" data-testid="designated-intake-form">
+                      {designatedIntakeForm.title}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Confirming will create the client, send this designated form, and move them to Forms Sent.
+                    </p>
+                  </>
+                ) : (
+                  <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                    Setup required: a super-admin must choose the designated intake form before this client can be converted for email intake.
+                  </div>
+                )}
               </div>
             )}
             {overrideNextStep === "phone" && (
@@ -680,7 +664,7 @@ function ConvertConfirmDialog({
               isPending
               || !dupChecked
               || (contactPreferenceEnabled && !overrideNextStep)
-              || (overrideNextStep === "email" && !selectedIntakeFormId)
+              || (overrideNextStep === "email" && !designatedIntakeForm)
             }
             data-testid="button-confirm-convert"
           >

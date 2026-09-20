@@ -328,6 +328,24 @@ describe("registration journey HTTP routes", () => {
     };
   }
 
+  it("cannot clear the registration designation through either tenant settings route while enabled", async () => {
+    configureRegistrationTemplate();
+    const canonical = await request("/api/tenant/registration-form-template", {
+      method: "PATCH",
+      body: JSON.stringify({ formTemplateId: null }),
+    });
+    expect(canonical.status).toBe(400);
+    expect(canonical.body.error).toMatch(/enabled.*required/i);
+
+    const compatibility = await request("/api/tenant/settings", {
+      method: "PATCH",
+      body: JSON.stringify({ registrationFormId: null }),
+    });
+    expect(compatibility.status).toBe(400);
+    expect(compatibility.body.error).toMatch(/enabled.*required/i);
+    expect(h.state.tenant.registrationFormTemplateId).toBe("registration-form-a");
+  });
+
   it("does not claim options were sent when the allocation email is rejected", async () => {
     h.state.options = [];
     h.state.client.status = "FormsCompleted";

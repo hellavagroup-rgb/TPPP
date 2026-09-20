@@ -140,6 +140,8 @@ interface TenantSummary {
   multiClinicianAllocationEnabled: boolean;
   autoAllocationEmailEnabled: boolean;
   registrationFormEnabled: boolean;
+  intakeFormTemplateId: string | null;
+  registrationFormTemplateId: string | null;
   bookingConfirmedEmailEnabled: boolean;
   zoomLinkEmailEnabled: boolean;
   writeuppChecklistEnabled: boolean;
@@ -850,7 +852,7 @@ function TenantDetail({ tenantId, adminKey, onBack }: { tenantId: string; adminK
         </TabsContent>
 
         <TabsContent value="forms">
-          <FormsTab adminKey={adminKey} />
+          <FormsTab tenant={tenant} adminKey={adminKey} onSaved={onSaved} />
         </TabsContent>
       </Tabs>
     </div>
@@ -1200,9 +1202,82 @@ function BackfillFormSubmissionTenantsCard({ adminKey }: { adminKey: string }) {
 
 // ─── Forms Tab ───────────────────────────────────────────────────────────────
 
-function FormsTab({ adminKey }: { adminKey: string }) {
+function WorkflowFormsCard({ tenant, adminKey, onSaved }: { tenant: TenantDetail; adminKey: string; onSaved: () => void }) {
+  const [intakeId, setIntakeId] = useState(tenant.intakeFormTemplateId || "");
+  const [registrationId, setRegistrationId] = useState(tenant.registrationFormTemplateId || "");
+  const [saving, setSaving] = useState(false);
+  const { data: allForms = [] } = useQuery<{ id: string; title: string; tenantId: string | null }[]>({
+    queryKey: ["super-admin-forms"],
+    queryFn: async () => {
+      const res = await superAdminFetch("/api/super-admin/forms", {}, adminKey);
+      if (!res.ok) throw new Error("Failed to load forms");
+      return res.json();
+    },
+  });
+  const forms = allForms.filter(form => form.tenantId === tenant.id);
+  const invalid = !!intakeId && intakeId === registrationId;
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const res = await superAdminFetch(`/api/super-admin/tenants/${tenant.id}/workflow-forms`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          intakeFormTemplateId: intakeId || null,
+          registrationFormTemplateId: registrationId || null,
+        }),
+      }, adminKey);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to save workflow forms");
+      toast.success("Workflow forms saved");
+      onSaved();
+    } catch (error: any) {
+      toast.error(error.message || "Failed to save workflow forms");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Designated Workflow Forms</CardTitle>
+        <CardDescription>Automated journeys use only these tenant-owned templates. Form titles never determine purpose.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4 max-w-lg">
+        {!intakeId && (
+          <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+            Setup required: choose the designated intake form before staff can send intake forms.
+          </div>
+        )}
+        <div className="space-y-1.5">
+          <Label htmlFor="designated-intake">Intake form (required)</Label>
+          <select id="designated-intake" data-testid="select-designated-intake" className="w-full border rounded-md h-9 px-3 text-sm bg-background" value={intakeId} onChange={e => setIntakeId(e.target.value)}>
+            <option value="">Setup required — choose a form</option>
+            {forms.map(form => <option key={form.id} value={form.id} disabled={form.id === registrationId}>{form.title}</option>)}
+          </select>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="designated-registration">Registration form {tenant.registrationFormEnabled ? "(required while enabled)" : "(optional)"}</Label>
+          <select id="designated-registration" data-testid="select-designated-registration" className="w-full border rounded-md h-9 px-3 text-sm bg-background" value={registrationId} onChange={e => setRegistrationId(e.target.value)}>
+            <option value="">No registration form selected</option>
+            {forms.map(form => <option key={form.id} value={form.id} disabled={form.id === intakeId}>{form.title}</option>)}
+          </select>
+        </div>
+        {invalid && <p className="text-sm text-destructive">Intake and registration forms must be different templates.</p>}
+        <Button onClick={save} disabled={saving || invalid || !intakeId} data-testid="button-save-workflow-forms">
+          {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+          <Save className="h-4 w-4 mr-2" /> Save Workflow Forms
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+function FormsTab({ tenant, adminKey, onSaved }: { tenant: TenantDetail; adminKey: string; onSaved: () => void }) {
   return (
     <div className="space-y-6">
+      <WorkflowFormsCard tenant={tenant} adminKey={adminKey} onSaved={onSaved} />
       <CopyFormToTenantCard adminKey={adminKey} />
     </div>
   );

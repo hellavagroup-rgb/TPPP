@@ -560,9 +560,9 @@ function RegistrationTemplateTab({ tenant }: { tenant: any }) {
       {isLoading ? <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /> : <>
         <div className="grid gap-2">
           <Label htmlFor="registration-template">Form template</Label>
-          <Select value={formId || "__none__"} onValueChange={value => setFormId(value === "__none__" ? "" : value)}>
+          <Select value={formId} onValueChange={setFormId}>
             <SelectTrigger id="registration-template"><SelectValue placeholder="Choose a form" /></SelectTrigger>
-            <SelectContent><SelectItem value="__none__">No form selected</SelectItem>{forms.map(form => <SelectItem key={form.id} value={form.id}>{form.title}</SelectItem>)}</SelectContent>
+            <SelectContent>{forms.filter(form => form.id !== tenant?.intakeFormId).map(form => <SelectItem key={form.id} value={form.id}>{form.title}</SelectItem>)}</SelectContent>
           </Select>
         </div>
         {!selected && <Alert variant="destructive"><AlertCircle className="h-4 w-4" /><AlertDescription>Registration is not ready: select a form template before sending registration links.</AlertDescription></Alert>}

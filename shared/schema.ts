@@ -39,6 +39,9 @@ export const tenants = pgTable("tenants", {
   multiClinicianAllocationEnabled: boolean("multi_clinician_allocation_enabled").default(false),
   autoAllocationEmailEnabled: boolean("auto_allocation_email_enabled").default(false),
   registrationFormEnabled: boolean("registration_form_enabled").default(false),
+  // The one tenant-owned template used for every automated intake delivery.
+  // Null is an explicit setup-required state for legacy and newly-created tenants.
+  intakeFormTemplateId: varchar("intake_form_template_id"),
   // Selected from this tenant's own form templates and used by the public
   // registration journey. A null selection deliberately makes sending unavailable.
   registrationFormTemplateId: varchar("registration_form_template_id"),

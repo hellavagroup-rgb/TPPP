@@ -1145,9 +1145,9 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteFormTemplate(id: string): Promise<void> {
-    // Form delivery rows are destructive children of a template, like form
-    // submissions; remove them before the FK parent.
-    await db.delete(formDeliveries).where(eq(formDeliveries.formTemplateId, id));
+    // Historical deliveries/submissions are audit records and must never be
+    // removed merely because an administrator deletes a template. The database
+    // rejects deletion while either history or a tenant designation references it.
     await db.delete(formTemplates).where(eq(formTemplates.id, id));
   }
 

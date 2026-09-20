@@ -25,6 +25,7 @@ import { requireTenant } from './middleware/tenant';
 import { requireSuperAdmin } from './middleware/superAdmin';
 import { db } from "./db";
 import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, formDeliveries, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs, intakeMessages, gmailConnections, paymentCharges, clientClinicianOptions } from "@shared/schema";
+import { designatedIntakeCompletionBlocker } from "./workflowFormDesignation";
 import { isStripeConfigured, getStripeInstance, createPaymentLink, chargeOffSession, constructWebhookEvent, childNameFromClientNotes } from "./stripe";
 import { encryptSecret, decryptSecret, isEncryptionConfigured } from "./encryption";
 import { getAuthUrl, exchangeCodeForTokens, syncConnection, buildRedirectUri } from "./gmailSync";
@@ -1292,10 +1293,14 @@ export async function registerRoutes(
       }
       const oldStatus = currentClient?.status;
       if (req.body.status === "Forms Completed") {
-        const deliveries = req.tenant?.id ? await storage.getFormDeliveries(currentClient.id, req.tenant.id) : [];
-        if (deliveries.some((delivery) => delivery.status !== "completed")) {
-          return res.status(400).json({ error: "All delivered forms must be completed before marking this client complete" });
-        }
+        const intakeId = req.tenant?.intakeFormTemplateId;
+        if (!intakeId) return res.status(409).json({ error: "Designated intake form requires setup" });
+        const template = await storage.getFormTemplateById(intakeId);
+        const availableTemplate = template?.tenantId === req.tenant?.id ? template : undefined;
+        const delivery = (await storage.getFormDeliveries(currentClient.id, req.tenant.id))
+          .find((item) => item.formTemplateId === intakeId);
+        const blocker = designatedIntakeCompletionBlocker(availableTemplate, delivery?.status);
+        if (blocker) return res.status(availableTemplate ? 400 : 409).json(blocker);
       }
 
       // Validate displayId change if provided
@@ -2240,9 +2245,20 @@ export async function registerRoutes(
       if (form.tenantId !== client.tenantId) {
         return res.status(403).json({ error: "Form does not belong to this practice" });
       }
-      const existingDelivery = client.tenantId
+      let existingDelivery = client.tenantId
         ? (await storage.getFormDeliveries(clientId, client.tenantId)).find((delivery) => delivery.formTemplateId === formId)
         : undefined;
+      const tenant = client.tenantId ? await storage.getTenantById(client.tenantId) : undefined;
+      if (!tenant?.intakeFormTemplateId || formId !== tenant.intakeFormTemplateId) {
+        return res.status(403).json({ error: "This form is not the designated intake form for this practice" });
+      }
+      // Phone-assisted intake opens the designated form without sending email.
+      // Create the same durable record here so completion semantics remain
+      // identical while still rejecting every non-designated template.
+      if (!existingDelivery && client.tenantId) {
+        existingDelivery = (await storage.prepareFormDeliveries(clientId, [formId], client.tenantId))
+          .find((delivery) => delivery.formTemplateId === formId);
+      }
       if (existingDelivery?.status === "completed") {
         return res.status(400).json({ error: "Form already submitted" });
       }
@@ -2301,7 +2317,10 @@ export async function registerRoutes(
           ));
       }
       const deliveries = client.tenantId ? await storage.getFormDeliveries(clientId, client.tenantId) : [];
-      const allFormsComplete = submittedPacketIsComplete(deliveries.map((delivery) => delivery.status));
+      const designatedDelivery = tenant?.intakeFormTemplateId
+        ? deliveries.find((delivery) => delivery.formTemplateId === tenant.intakeFormTemplateId)
+        : undefined;
+      const allFormsComplete = designatedDelivery?.status === "completed";
       const clientUpdate: { status?: "Forms Completed"; formsCompletedAt?: Date; insurer?: string } = {};
       if (allFormsComplete) {
         clientUpdate.status = "Forms Completed";
@@ -3230,7 +3249,13 @@ export async function registerRoutes(
   app.get("/api/forms", requireAuth, async (req, res) => {
     try {
       const forms = await storage.getAllFormTemplates(req.tenant?.id);
-      res.json(forms);
+      res.json(forms.map((form) => ({
+        ...form,
+        designatedPurpose:
+          form.id === req.tenant?.intakeFormTemplateId ? "intake"
+          : form.id === req.tenant?.registrationFormTemplateId ? "registration"
+          : null,
+      })));
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch forms" });
     }
@@ -3307,6 +3332,19 @@ export async function registerRoutes(
       const form = await storage.getFormTemplateById(req.params.id);
       if (!form) return res.status(404).json({ error: "Form not found" });
       if (form.tenantId !== req.tenant?.id) return res.status(403).json({ error: "Access denied" });
+      if (req.tenant?.intakeFormTemplateId === form.id) {
+        return res.status(409).json({ error: "This is the designated intake form. Choose another intake form before deleting it." });
+      }
+      if (req.tenant?.registrationFormTemplateId === form.id) {
+        return res.status(409).json({ error: "This is the designated registration form. Choose another registration form before deleting it." });
+      }
+      const [historicalDelivery] = await db.select({ id: formDeliveries.id }).from(formDeliveries)
+        .where(eq(formDeliveries.formTemplateId, form.id)).limit(1);
+      const [historicalSubmission] = await db.select({ id: formSubmissions.id }).from(formSubmissions)
+        .where(eq(formSubmissions.formTemplateId, form.id)).limit(1);
+      if (historicalDelivery || historicalSubmission) {
+        return res.status(409).json({ error: "This form has historical deliveries or submissions and cannot be deleted." });
+      }
       await storage.deleteFormTemplate(req.params.id);
       await recordActivity(req, "activity_form_template_deleted", "form", form.id, {
         formTitle: form.title,
@@ -3465,16 +3503,21 @@ export async function registerRoutes(
   const sendFormDeliveryBatch = async (req: Request, res: Response) => {
     try {
       const clientId = req.body?.clientId;
-      const formIds = Array.isArray(req.body?.formIds)
-        ? Array.from(new Set(req.body.formIds.filter((id: unknown): id is string => typeof id === "string" && id.length > 0)))
-        : typeof req.body?.formId === "string" ? [req.body.formId] : [];
       if (!req.tenant?.id) return res.status(403).json({ error: "Access denied" });
+      const designatedIntakeId = req.tenant.intakeFormTemplateId;
+      if (!designatedIntakeId) {
+        return res.status(409).json({ error: "Designated intake form requires setup in Super Admin" });
+      }
+      const designatedIntake = await storage.getFormTemplateById(designatedIntakeId);
+      if (!designatedIntake || designatedIntake.tenantId !== req.tenant.id) {
+        return res.status(409).json({ error: "Designated intake form is unavailable; choose a valid tenant form in Super Admin" });
+      }
       const protocol = req.headers['x-forwarded-proto'] || 'https';
       const host = req.headers.host || 'localhost:5000';
       const baseUrl = `${protocol}://${host}`;
       const result = await executeFormDeliveryBatch({
         tenant: { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor },
-        clientId, formIds, baseUrl,
+        clientId, formIds: [designatedIntakeId], baseUrl,
       }, {
         getClient: (id) => storage.getClientById(id),
         getForm: (id) => storage.getFormTemplateById(id),
@@ -4106,6 +4149,8 @@ export async function registerRoutes(
       // documents that this is a form-template foreign key.
       res.json({
         ...req.tenant,
+        intakeFormId: req.tenant.intakeFormTemplateId,
+        intakeTemplateId: req.tenant.intakeFormTemplateId,
         registrationFormId: req.tenant.registrationFormTemplateId,
         registrationTemplateId: req.tenant.registrationFormTemplateId,
       });
@@ -4168,7 +4213,13 @@ export async function registerRoutes(
   app.patch("/api/tenant/registration-form-template", requireAdmin, async (req, res) => {
     const parsed = z.object({ formTemplateId: z.string().min(1).nullable() }).safeParse(req.body);
     if (!parsed.success || !req.tenant) return res.status(400).json({ error: "A formTemplateId or null is required" });
+    if (req.tenant.registrationFormEnabled && !parsed.data.formTemplateId) {
+      return res.status(400).json({ error: "Registration Form is enabled, so a designated registration form is required" });
+    }
     if (parsed.data.formTemplateId) {
+      if (parsed.data.formTemplateId === req.tenant.intakeFormTemplateId) {
+        return res.status(400).json({ error: "Intake and registration forms must be different templates" });
+      }
       const [template] = await db.select({ id: formTemplates.id }).from(formTemplates).where(and(
         eq(formTemplates.id, parsed.data.formTemplateId),
         eq(formTemplates.tenantId, req.tenant.id),
@@ -4189,7 +4240,13 @@ export async function registerRoutes(
   app.patch("/api/tenant/settings", requireAdmin, async (req, res) => {
     const parsed = z.object({ registrationFormId: z.string().min(1).nullable() }).safeParse(req.body);
     if (!parsed.success || !req.tenant) return res.status(400).json({ error: "A registrationFormId or null is required" });
+    if (req.tenant.registrationFormEnabled && !parsed.data.registrationFormId) {
+      return res.status(400).json({ error: "Registration Form is enabled, so a designated registration form is required" });
+    }
     if (parsed.data.registrationFormId) {
+      if (parsed.data.registrationFormId === req.tenant.intakeFormTemplateId) {
+        return res.status(400).json({ error: "Intake and registration forms must be different templates" });
+      }
       const [template] = await db.select({ id: formTemplates.id }).from(formTemplates).where(and(
         eq(formTemplates.id, parsed.data.registrationFormId),
         eq(formTemplates.tenantId, req.tenant.id),
@@ -4573,11 +4630,7 @@ export async function registerRoutes(
           : parsedNextStep === "phone" || parsedNextStep === "email"
           ? parsedNextStep
           : undefined;
-      const requestedFormIds = Array.isArray(req.body?.formIds)
-        ? Array.from(new Set(req.body.formIds.filter(
-            (id: unknown): id is string => typeof id === "string" && id.length > 0,
-          )))
-        : [];
+      const designatedIntakeId = req.tenant.intakeFormTemplateId;
       if (req.tenant.contactPreferenceEnabled && !contactPreference) {
         return res.status(400).json({ error: "Choose whether to send the intake form or call the client" });
       }
@@ -4585,17 +4638,12 @@ export async function registerRoutes(
         if (!req.tenant.formsEnabled) {
           return res.status(400).json({ error: "Forms must be enabled before an intake form can be sent" });
         }
-        if (requestedFormIds.length === 0) {
-          return res.status(400).json({ error: "Select an intake form to send" });
+        if (!designatedIntakeId) {
+          return res.status(409).json({ error: "Designated intake form requires setup in Super Admin" });
         }
-        const requestedForms = await Promise.all(
-          requestedFormIds.map((id) => storage.getFormTemplateById(id)),
-        );
-        if (requestedForms.some((form) => !form)) {
-          return res.status(404).json({ error: "Selected intake form not found" });
-        }
-        if (requestedForms.some((form) => form!.tenantId !== req.tenant!.id)) {
-          return res.status(403).json({ error: "Access denied" });
+        const designatedIntake = await storage.getFormTemplateById(designatedIntakeId);
+        if (!designatedIntake || designatedIntake.tenantId !== req.tenant.id) {
+          return res.status(409).json({ error: "Designated intake form is unavailable; choose a valid tenant form in Super Admin" });
         }
       }
 
@@ -4643,7 +4691,7 @@ export async function registerRoutes(
             primaryColor: req.tenant.primaryColor,
           },
           clientId: newClient.id,
-          formIds: requestedFormIds,
+          formIds: [designatedIntakeId!],
           baseUrl: `${protocol}://${host}`,
         }, {
           getClient: (id) => storage.getClientById(id),
@@ -5473,6 +5521,8 @@ export async function registerRoutes(
 
       res.json({
         ...tenant,
+        intakeFormId: tenant.intakeFormTemplateId,
+        registrationFormId: tenant.registrationFormTemplateId,
         stripeSecretKey: tenant.stripeSecretKey ? "***" : null,
         stripeWebhookSecret: tenant.stripeWebhookSecret ? "***" : null,
         stripeConnected: !!tenant.stripeSecretKey,
@@ -5648,6 +5698,45 @@ export async function registerRoutes(
     }
   });
 
+  app.patch("/api/super-admin/tenants/:id/workflow-forms", requireSuperAdmin, async (req, res) => {
+    try {
+      const body = z.object({
+        intakeFormTemplateId: z.string().uuid().nullable(),
+        registrationFormTemplateId: z.string().uuid().nullable(),
+      }).parse(req.body);
+      if (body.intakeFormTemplateId && body.intakeFormTemplateId === body.registrationFormTemplateId) {
+        return res.status(400).json({ error: "Intake and registration forms must be different templates" });
+      }
+      const [tenant] = await db.select().from(tenants).where(eq(tenants.id, req.params.id));
+      if (!tenant) return res.status(404).json({ error: "Tenant not found" });
+      const ids = [body.intakeFormTemplateId, body.registrationFormTemplateId].filter((id): id is string => !!id);
+      const owned = ids.length
+        ? await db.select({ id: formTemplates.id }).from(formTemplates).where(and(
+            eq(formTemplates.tenantId, tenant.id),
+            inArray(formTemplates.id, ids),
+          ))
+        : [];
+      if (owned.length !== ids.length) {
+        return res.status(400).json({ error: "Every designated form must be an available template owned by this tenant" });
+      }
+      if (tenant.registrationFormEnabled && !body.registrationFormTemplateId) {
+        return res.status(400).json({ error: "Registration Form is enabled, so a designated registration form is required" });
+      }
+      const [updated] = await db.update(tenants).set({
+        intakeFormTemplateId: body.intakeFormTemplateId,
+        registrationFormTemplateId: body.registrationFormTemplateId,
+      }).where(eq(tenants.id, tenant.id)).returning();
+      res.json({
+        intakeFormTemplateId: updated.intakeFormTemplateId,
+        registrationFormTemplateId: updated.registrationFormTemplateId,
+        setupRequired: !updated.intakeFormTemplateId || (updated.registrationFormEnabled && !updated.registrationFormTemplateId),
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors });
+      res.status(500).json({ error: "Failed to update workflow forms" });
+    }
+  });
+
   // Copy a form template from one tenant to another. Always creates a brand
   // new, independently-owned row in the target tenant (never shares or
   // repoints the original) — the target tenant can then freely edit its copy
@@ -5758,6 +5847,20 @@ export async function registerRoutes(
         }).optional(),
       });
       const body = schema.parse(req.body);
+      if (body.registrationFormEnabled === true) {
+        const [tenant] = await db.select().from(tenants).where(eq(tenants.id, req.params.id));
+        if (!tenant) return res.status(404).json({ error: "Tenant not found" });
+        if (!tenant.registrationFormTemplateId) {
+          return res.status(400).json({ error: "Choose a designated registration form before enabling Registration Form" });
+        }
+        const [template] = await db.select({ id: formTemplates.id }).from(formTemplates).where(and(
+          eq(formTemplates.id, tenant.registrationFormTemplateId),
+          eq(formTemplates.tenantId, tenant.id),
+        )).limit(1);
+        if (!template || tenant.registrationFormTemplateId === tenant.intakeFormTemplateId) {
+          return res.status(400).json({ error: "The designated registration form is unavailable or conflicts with the intake form" });
+        }
+      }
       const [updated] = await db.update(tenants).set(body).where(eq(tenants.id, req.params.id)).returning();
       if (!updated) return res.status(404).json({ error: "Tenant not found" });
       res.json({ ...updated, stripeSecretKey: updated.stripeSecretKey ? "***" : null, stripeWebhookSecret: updated.stripeWebhookSecret ? "***" : null });

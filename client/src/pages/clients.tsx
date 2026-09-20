@@ -148,6 +148,7 @@ export default function Clients() {
     staleTime: 60_000,
   });
   const formsEnabled = tenant?.formsEnabled !== false;
+  const intakeTemplateId = tenant?.intakeFormId;
   const registrationTemplateId = tenant?.registrationFormId;
   const registrationReady = !!registrationTemplateId;
   const nonEngagementEnabled = tenant?.nonEngagementEnabled !== false;
@@ -197,6 +198,8 @@ export default function Clients() {
   const { data: forms = [] } = useQuery<FormTemplateType[]>({
     queryKey: ["/api/forms"],
   });
+  const intakeTemplate = forms.find(form => form.id === intakeTemplateId);
+  const intakeReady = !!intakeTemplate;
 
   const clientCreationIdempotencyKey = useRef<string | null>(null);
   const [recoveredClientId, setRecoveredClientId] = useState<string | null>(null);
@@ -408,7 +411,7 @@ export default function Clients() {
   const [clientToSendForms, setClientToSendForms] = useState<ClientType | null>(null);
   const [selectedFormIds, setSelectedForms] = useState<string[]>([]);
   const [formDeliveryStates, setFormDeliveryStates] = useState<Record<string, string>>({});
-  const [previewForm, setPreviewForm] = useState<FormTemplateType | null>(null);
+  const [previewForm, setPreviewForm] = useState<FormTemplate | null>(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [showAllClinicians, setShowAllClinicians] = useState(false);
 
@@ -1183,14 +1186,14 @@ export default function Clients() {
 
   const handleOpenSendForms = async (client: ClientType) => {
       setClientToSendForms(client);
-      setSelectedForms([]);
+      setSelectedForms(intakeTemplateId ? [intakeTemplateId] : []);
       setFormDeliveryStates({});
       setIsSendFormsOpen(true);
       try {
         const response = await fetch(`/api/clients/${client.id}/form-deliveries`, { credentials: "include" });
         if (!response.ok) throw new Error("Unable to recover form delivery state");
         const deliveries: { formTemplateId: string; status: string }[] = await response.json();
-        setSelectedForms(deliveries.map((delivery) => delivery.formTemplateId));
+        setSelectedForms(intakeTemplateId ? [intakeTemplateId] : []);
         setFormDeliveryStates(Object.fromEntries(deliveries.map((delivery) => [delivery.formTemplateId, delivery.status])));
       } catch {
         toast({ title: "Delivery history unavailable", description: "You can still select forms and send them.", variant: "destructive" });
@@ -1218,11 +1221,11 @@ export default function Clients() {
   };
 
   const handleSendForms = async () => {
-      if (clientToSendForms && selectedFormIds.length > 0) {
+      if (clientToSendForms && intakeTemplateId) {
           try {
             const response = await apiRequest("POST", "/api/form-deliveries/send", {
               clientId: clientToSendForms.id,
-              formIds: selectedFormIds,
+              formIds: [intakeTemplateId],
             });
             const result = await response.json();
             queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
@@ -1235,7 +1238,7 @@ export default function Clients() {
             setClientToSendForms(null);
             toast({
                 title: "Forms Sent",
-                description: `${selectedFormIds.length} form(s) sent to ${clientToSendForms.email}.`,
+                description: `The designated intake form was sent to ${clientToSendForms.email}.`,
             });
           } catch (error) {
             toast({
@@ -1247,7 +1250,7 @@ export default function Clients() {
       } else {
            toast({
               title: "Selection Required",
-              description: "Please select at least one form to send.",
+              description: "A designated intake form must be configured in Super Admin.",
               variant: "destructive"
           });
       }
@@ -1256,7 +1259,7 @@ export default function Clients() {
   const handlePreviewForm = (formId: string) => {
       const form = forms.find(f => f.id === formId);
       if (form) {
-          setPreviewForm(form);
+          setPreviewForm(form as unknown as FormTemplate);
           setIsPreviewOpen(true);
       }
   };
@@ -1271,14 +1274,14 @@ export default function Clients() {
         return;
     }
     const shouldSendForms = formsEnabled && contactPreferenceEnabled && newClientData.contactPreference === "email";
-    if (shouldSendForms && selectedNewClientFormIds.length === 0) {
-      toast({ title: "Selection Required", description: "Select at least one intake form to send.", variant: "destructive" });
+    if (shouldSendForms && !intakeReady) {
+      toast({ title: "Intake form unavailable", description: "Ask a super-admin to configure the designated intake form.", variant: "destructive" });
       return;
     }
 
     if (recoveredClientId) {
       setIsRetryingCreatedForms(true);
-      apiRequest("POST", "/api/form-deliveries/send", { clientId: recoveredClientId, formIds: selectedNewClientFormIds })
+      apiRequest("POST", "/api/form-deliveries/send", { clientId: recoveredClientId })
         .then((response) => response.json())
         .then((delivery) => {
           if (!delivery.success) throw new Error("Some forms could not be sent");
@@ -1313,7 +1316,7 @@ export default function Clients() {
         clientData.contactPreference = newClientData.contactPreference;
     }
 
-    createClientMutation.mutate({ clientData, formIds: selectedNewClientFormIds });
+    createClientMutation.mutate({ clientData, formIds: shouldSendForms && intakeTemplateId ? [intakeTemplateId] : [] });
   };
 
   // Helper to determine if a clinician matches the client's needs
@@ -1619,23 +1622,12 @@ export default function Clients() {
                         />
                     </div>
 
-                    {formsEnabled && forms.length > 0 && contactPreferenceEnabled && newClientData.contactPreference === "email" && (
+                    {formsEnabled && contactPreferenceEnabled && newClientData.contactPreference === "email" && (
                       <div className="grid gap-2">
-                        <Label>Intake forms to send</Label>
-                        <p className="text-xs text-muted-foreground">Selected forms will be sent after the referral is created.</p>
-                        <div className="space-y-2">
-                          {forms.map((form) => (
-                            <label key={form.id} className="flex items-center gap-2 text-sm cursor-pointer">
-                              <Checkbox
-                                checked={selectedNewClientFormIds.includes(form.id)}
-                                onCheckedChange={(checked) => setSelectedNewClientFormIds((current) =>
-                                  checked ? [...current, form.id] : current.filter((id) => id !== form.id)
-                                )}
-                              />
-                              {form.title}
-                            </label>
-                          ))}
-                        </div>
+                        <Label>Designated intake form</Label>
+                        {intakeTemplate
+                          ? <div className="rounded border bg-muted/30 p-3 text-sm font-medium">{intakeTemplate.title}</div>
+                          : <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">Setup required in Super Admin before intake can be emailed.</div>}
                       </div>
                     )}
 
@@ -2504,49 +2496,38 @@ export default function Clients() {
             <DialogHeader>
                 <DialogTitle>Send Forms to {clientToSendForms?.displayId}</DialogTitle>
                 <DialogDescription>
-                    Select the intake forms to send to the client. They will receive a secure link via email.
+                    The tenant's designated intake form will be sent via a secure email link.
                 </DialogDescription>
             </DialogHeader>
             <div className="py-4 space-y-4">
-                {forms.map(form => (
-                    <div key={form.id} className="flex items-start space-x-3 p-3 rounded border hover:bg-muted/50 transition-colors">
-                        <Checkbox 
-                            id={`form-${form.id}`} 
-                            checked={selectedFormIds.includes(form.id)}
-                            onCheckedChange={(checked) => {
-                                if (checked) {
-                                    setSelectedForms([...selectedFormIds, form.id]);
-                                } else {
-                                    setSelectedForms(selectedFormIds.filter((id: string) => id !== form.id));
-                                }
-                            }}
-                        />
+                {intakeTemplate ? (
+                    <div className="flex items-start space-x-3 p-3 rounded border">
                         <div className="grid gap-1.5 leading-none flex-1">
                             <Label 
-                                htmlFor={`form-${form.id}`}
+                                htmlFor={`form-${intakeTemplate.id}`}
                                 className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
                             >
-                                {form.title}
+                                 {intakeTemplate.title}
                             </Label>
                             <p className="text-xs text-muted-foreground">
-                                {form.description}
+                                 {intakeTemplate.description}
                             </p>
-                            {formDeliveryStates[form.id] && (
-                              <p className={`text-xs font-medium ${formDeliveryStates[form.id] === "failed" ? "text-destructive" : "text-muted-foreground"}`}>
-                                {formDeliveryStates[form.id] === "failed" ? "Delivery failed — retry selected" : formDeliveryStates[form.id] === "completed" ? "Completed" : formDeliveryStates[form.id] === "sent" ? "Sent" : "Ready to send"}
+                            {formDeliveryStates[intakeTemplate.id] && (
+                              <p className={`text-xs font-medium ${formDeliveryStates[intakeTemplate.id] === "failed" ? "text-destructive" : "text-muted-foreground"}`}>
+                                 {formDeliveryStates[intakeTemplate.id] === "failed" ? "Delivery failed — retry available" : formDeliveryStates[intakeTemplate.id] === "completed" ? "Completed" : formDeliveryStates[intakeTemplate.id] === "sent" ? "Sent" : "Ready to send"}
                               </p>
                             )}
                         </div>
-                        <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => handlePreviewForm(form.id)}>
+                        <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => handlePreviewForm(intakeTemplate.id)}>
                             <Eye className="h-3 w-3 mr-1" /> Preview
                         </Button>
                     </div>
-                ))}
+                ) : <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">No designated intake form is available. Configure one in Super Admin.</div>}
             </div>
             <DialogFooter>
                 <Button variant="outline" onClick={() => setIsSendFormsOpen(false)}>Cancel</Button>
-                <Button onClick={handleSendForms} disabled={selectedFormIds.length === 0}>
-                    <Mail className="h-4 w-4 mr-2" /> {selectedFormIds.some((id) => formDeliveryStates[id] === "failed") ? "Retry selected" : "Send"} {selectedFormIds.length > 0 ? `(${selectedFormIds.length})` : ""}
+                <Button onClick={handleSendForms} disabled={!intakeReady}>
+                    <Mail className="h-4 w-4 mr-2" /> {intakeTemplateId && formDeliveryStates[intakeTemplateId] === "failed" ? "Retry intake form" : "Send intake form"}
                 </Button>
             </DialogFooter>
         </DialogContent>

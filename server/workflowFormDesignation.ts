@@ -1,0 +1,46 @@
+export type WorkflowTemplate = {
+  id: string;
+  tenantId: string | null;
+  title: string;
+};
+
+export function validateWorkflowFormDesignations(input: {
+  tenantId: string;
+  intakeFormTemplateId: string | null;
+  registrationFormTemplateId: string | null;
+  registrationFormEnabled: boolean;
+  templates: WorkflowTemplate[];
+}): string | null {
+  const byId = new Map(input.templates.map(template => [template.id, template]));
+  if (!input.intakeFormTemplateId) return "Choose a designated intake form";
+  const intake = byId.get(input.intakeFormTemplateId);
+  if (!intake || intake.tenantId !== input.tenantId) {
+    return "The designated intake form must be an available template owned by this tenant";
+  }
+  if (input.registrationFormEnabled && !input.registrationFormTemplateId) {
+    return "Choose a designated registration form before enabling Registration Form";
+  }
+  if (input.registrationFormTemplateId) {
+    const registration = byId.get(input.registrationFormTemplateId);
+    if (!registration || registration.tenantId !== input.tenantId) {
+      return "The designated registration form must be an available template owned by this tenant";
+    }
+    if (registration.id === intake.id) {
+      return "Intake and registration forms must be different templates";
+    }
+  }
+  return null;
+}
+
+export function designatedIntakeCompletionBlocker(
+  template: WorkflowTemplate | undefined,
+  deliveryStatus: string | undefined,
+): { error: string; blocker?: { formTemplateId: string; title: string; state: string } } | null {
+  if (!template) return { error: "Designated intake form is unavailable; choose a valid tenant form in Super Admin" };
+  if (deliveryStatus === "completed") return null;
+  const state = deliveryStatus || "not_delivered";
+  return {
+    error: `Designated intake form "${template.title}" is ${deliveryStatus || "not delivered"}`,
+    blocker: { formTemplateId: template.id, title: template.title, state },
+  };
+}

@@ -25,11 +25,15 @@ export interface User {
 
 interface AuthContextType {
   user: User | null;
-  login: (email: string, password: string) => Promise<boolean>;
+  login: (email: string, password: string) => Promise<LoginResult>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
   isLoading: boolean;
 }
+
+export type LoginResult =
+  | { success: true }
+  | { success: false; kind: "credentials" | "service"; message: string };
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -71,7 +75,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     checkAuth();
   }, []);
 
-  const login = async (email: string, password: string): Promise<boolean> => {
+  const login = async (email: string, password: string): Promise<LoginResult> => {
     setIsLoading(true);
     try {
       const loggedInUser = await api.login(email, password);
@@ -92,10 +96,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setLocation("/");
       }
       
-      return true;
+      return { success: true };
     } catch (error) {
       console.error("Login failed:", error);
-      return false;
+      const failure = api.classifyLoginFailure(error);
+      return { success: false, ...failure };
     } finally {
       setIsLoading(false);
     }

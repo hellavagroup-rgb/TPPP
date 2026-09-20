@@ -13,14 +13,23 @@ const scryptAsync = promisify(scrypt);
 
 const PgSession = connectPgSimple(session);
 export const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+export const SESSION_PRUNE_INTERVAL_SECONDS = 24 * 60 * 60;
 
-export function createPersistentSessionStore(dbPool: typeof pool = pool): session.Store {
-  return new PgSession({
+export function buildPersistentSessionStoreOptions(dbPool: typeof pool = pool) {
+  return {
     pool: dbPool,
     tableName: "user_sessions",
-    createTableIfMissing: true,
-    pruneSessionInterval: SESSION_MAX_AGE_MS,
-  });
+    // The table is part of shared/schema.ts and is created by the managed
+    // development/publish schema flow. Runtime creation would make the bundled
+    // package try to read a table.sql file that is not present in dist.
+    createTableIfMissing: false,
+    // connect-pg-simple expects seconds and converts this value to milliseconds.
+    pruneSessionInterval: SESSION_PRUNE_INTERVAL_SECONDS,
+  };
+}
+
+export function createPersistentSessionStore(dbPool: typeof pool = pool): session.Store {
+  return new PgSession(buildPersistentSessionStoreOptions(dbPool));
 }
 
 export function buildSessionOptions(store: session.Store): session.SessionOptions {

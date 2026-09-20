@@ -1,11 +1,29 @@
 // API client for backend communication
 import type { SafeUser } from "@shared/schema";
 
-class APIError extends Error {
+export class APIError extends Error {
   constructor(public status: number, message: string) {
     super(message);
     this.name = "APIError";
   }
+}
+
+export type LoginFailure = {
+  kind: "credentials" | "service";
+  message: string;
+};
+
+export function classifyLoginFailure(error: unknown): LoginFailure {
+  if (error instanceof APIError && error.status === 401) {
+    return { kind: "credentials", message: "Invalid email or password" };
+  }
+  if (error instanceof APIError && error.message) {
+    return { kind: "service", message: error.message };
+  }
+  return {
+    kind: "service",
+    message: "Login service is temporarily unavailable. Please try again.",
+  };
 }
 
 async function fetchAPI(url: string, options?: RequestInit) {

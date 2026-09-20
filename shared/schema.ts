@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, timestamp, integer, boolean, json, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, integer, boolean, json, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -83,6 +83,17 @@ export const selectUserSchema = createSelectSchema(users).omit({ password: true 
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 export type SafeUser = z.infer<typeof selectUserSchema>;
+
+// Persistent express-session storage. This table is managed through the normal
+// Drizzle schema flow so the bundled server never needs connect-pg-simple's
+// runtime table.sql asset or startup DDL.
+export const userSessions = pgTable("user_sessions", {
+  sid: varchar("sid").primaryKey(),
+  sess: json("sess").$type<Record<string, unknown>>().notNull(),
+  expire: timestamp("expire", { precision: 6 }).notNull(),
+}, (table) => [
+  index("IDX_user_sessions_expire").on(table.expire),
+]);
 
 // ============ CLINICIANS ============
 export const clinicians = pgTable("clinicians", {

@@ -30,6 +30,23 @@ describe("persistent session configuration", () => {
     // signed session cookie can be read by a replacement process.
   });
 
+  it("uses the managed session table without runtime DDL and configures pruning in seconds", async () => {
+    const {
+      buildPersistentSessionStoreOptions,
+      SESSION_PRUNE_INTERVAL_SECONDS,
+    } = await import("./auth");
+    const fakePool = { query: vi.fn() } as any;
+    const options = buildPersistentSessionStoreOptions(fakePool);
+
+    expect(options).toMatchObject({
+      pool: fakePool,
+      tableName: "user_sessions",
+      createTableIfMissing: false,
+      pruneSessionInterval: 24 * 60 * 60,
+    });
+    expect(SESSION_PRUNE_INTERVAL_SECONDS).toBe(24 * 60 * 60);
+  });
+
   it("revokes matching PostgreSQL sessions with a parameterized delete", async () => {
     const { destroySessionsForUser } = await import("./auth");
     const query = vi.fn().mockResolvedValue({ rowCount: 2 });
@@ -68,5 +85,58 @@ describe("role authentication middleware", () => {
       vi.fn(),
     );
     expect(res.status).toHaveBeenCalledWith(403);
+  });
+});
+
+describe("login response handling", () => {
+  function responseRecorder() {
+    const json = vi.fn();
+    const status = vi.fn(() => ({ json }));
+    return { status, json };
+  }
+
+  it("returns 401 for rejected credentials without trying to persist a session", async () => {
+    const { handleLoginResult } = await import("./routes");
+    const logIn = vi.fn();
+    const res = responseRecorder();
+
+    handleLoginResult(
+      { logIn } as any,
+      res as any,
+      null,
+      false,
+      { message: "Invalid email or password" },
+    );
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: "Invalid email or password" });
+    expect(logIn).not.toHaveBeenCalled();
+  });
+
+  it("returns 503 when valid credentials cannot be persisted to the session store", async () => {
+    const { handleLoginResult } = await import("./routes");
+    const logIn = vi.fn((_user, done) => done(new Error("session store unavailable")));
+    const res = responseRecorder();
+    const user = { id: "user-123", role: "admin" } as any;
+
+    handleLoginResult({ logIn } as any, res as any, null, user);
+
+    expect(logIn).toHaveBeenCalledWith(user, expect.any(Function));
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(res.json).toHaveBeenCalledWith({
+      error: "Login service is temporarily unavailable. Please try again.",
+    });
+  });
+
+  it("returns the authenticated user after the session is persisted", async () => {
+    const { handleLoginResult } = await import("./routes");
+    const logIn = vi.fn((_user, done) => done());
+    const res = responseRecorder();
+    const user = { id: "user-123", role: "admin" } as any;
+
+    handleLoginResult({ logIn } as any, res as any, null, user);
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith({ user });
   });
 });

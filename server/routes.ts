@@ -68,6 +68,32 @@ import {
   type PaymentSetupFailureCode,
 } from "./paymentSetupRecovery";
 
+export function handleLoginResult(
+  req: Request,
+  res: Response,
+  err: unknown,
+  user: Express.User | false | null,
+  info?: { message?: string },
+): void {
+  if (err) {
+    console.error("Authentication service failed during login:", err);
+    res.status(503).json({ error: "Login service is temporarily unavailable. Please try again." });
+    return;
+  }
+  if (!user) {
+    res.status(401).json({ error: info?.message || "Invalid credentials" });
+    return;
+  }
+  req.logIn(user, (loginError) => {
+    if (loginError) {
+      console.error("Failed to persist authenticated session:", loginError);
+      res.status(503).json({ error: "Login service is temporarily unavailable. Please try again." });
+      return;
+    }
+    res.json({ user });
+  });
+}
+
 function formatActivitySlot(slot: { type?: string | null; day?: string | null; date?: string | null; startTime?: string | null; endTime?: string | null; locationType?: string | null }): string {
   const day = slot.type === "SpecificDate" ? slot.date : slot.day;
   const time = [slot.startTime, slot.endTime].filter(Boolean).join("–");
@@ -259,18 +285,7 @@ export async function registerRoutes(
   // ============ AUTH ROUTES ============
   app.post("/api/auth/login", (req, res, next) => {
     passport.authenticate("local", (err: any, user: any, info: any) => {
-      if (err) {
-        return res.status(500).json({ error: "Internal server error" });
-      }
-      if (!user) {
-        return res.status(401).json({ error: info?.message || "Invalid credentials" });
-      }
-      req.logIn(user, (err) => {
-        if (err) {
-          return res.status(500).json({ error: "Login failed" });
-        }
-        return res.json({ user });
-      });
+      handleLoginResult(req, res, err, user, info);
     })(req, res, next);
   });
 

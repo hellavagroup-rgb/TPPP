@@ -34,11 +34,15 @@ export default function Login() {
         return;
     }
 
-    const success = await login(email, password);
-    if (success) {
+    const result = await login(email, password);
+    if (result.success) {
         toast({ title: "Welcome back!", description: "Successfully logged in." });
     } else {
-        toast({ title: "Login Failed", description: "Invalid email or password", variant: "destructive" });
+        toast({
+          title: result.kind === "credentials" ? "Login Failed" : "Login Unavailable",
+          description: result.message,
+          variant: "destructive",
+        });
     }
   };
 

@@ -27,6 +27,12 @@ import {
 } from "./activity";
 import { shouldResetZoomDelivery } from "@shared/bookingZoom";
 import { UNALLOCATED_CLIENT_STATUSES } from "./strandedAllocationRepair";
+import {
+  ACTIVE_ALLOCATION_STATUSES,
+  getSlotIntegrityAction,
+  hasActiveClientAllocation,
+  hasFinalizedBooking,
+} from "./clientAllocationWorkflow";
 
 export type StrandedAllocationRepairRow = {
   clientId: string;
@@ -72,6 +78,28 @@ export class ManualAssignmentError extends Error {
   }
 }
 
+export class SlotRetirementConflictError extends Error {
+  constructor(public readonly clientIds: string[]) {
+    super("This slot is still owned by an active client workflow and cannot be retired");
+    this.name = "SlotRetirementConflictError";
+  }
+}
+
+export type SlotIntegrityRow = {
+  slotId: string;
+  tenantId: string | null;
+  isBooked: boolean;
+  activeOwnerIds: string[];
+  issue: string;
+  action: "repaired" | "skipped" | "reported";
+};
+
+export type SlotIntegrityReport = {
+  identified: number;
+  repaired: SlotIntegrityRow[];
+  skipped: SlotIntegrityRow[];
+};
+
 class ClientMissingDuringAllocationUpdateError extends Error {}
 
 // Storage interface for all CRUD operations
@@ -111,7 +139,7 @@ export interface IStorage {
   createTimeSlot(slot: InsertTimeSlot): Promise<TimeSlot>;
   deleteTimeSlot(id: string): Promise<void>;
   addTimeSlots(clinicianId: string, newSlots: Omit<TimeSlot, 'id' | 'createdAt'>[], tenantId?: string | null): Promise<TimeSlot[]>;
-  deleteTimeSlotById(id: string): Promise<boolean>;
+  deleteTimeSlotById(id: string, tenantId?: string, reason?: string): Promise<boolean>;
   getAllTimeSlots(): Promise<TimeSlot[]>;
   updateTimeSlotLocationType(id: string, tenantId: string, locationType: string): Promise<TimeSlot | undefined>;
   
@@ -123,12 +151,14 @@ export interface IStorage {
   createClientIdempotently(client: InsertClient, tenantId: string, idempotencyKey?: string): Promise<{ client: Client; created: boolean }>;
   updateClient(id: string, updates: Partial<InsertClient>): Promise<Client | undefined>;
   updateClientAndReleaseSlot(id: string, updates: Partial<InsertClient>, slotId: string | null, clinicianId: string | null, tenantId: string): Promise<Client | undefined>;
+  updateClientAndRetireSlot(id: string, updates: Partial<InsertClient>, slotId: string | null, tenantId: string): Promise<Client | undefined>;
   archiveClient(id: string, reason?: string, category?: string): Promise<Client | undefined>;
   restoreClient(id: string): Promise<Client | undefined>;
   deleteClientPermanently(id: string): Promise<boolean>;
   assignClinicianToClient(clientId: string, clinicianId: string, slotId: string, tenantId: string, allocationMethod?: "form" | "manual", allocationReason?: string): Promise<Client>;
   reassignClient(clientId: string, newClinicianId: string | null, newSlotId: string | null, newStatus: string, tenantId: string): Promise<Client | undefined>;
   repairStrandedClientAllocations(ipAddress?: string | null): Promise<StrandedAllocationRepairResult>;
+  repairSlotIntegrity(tenantId?: string, ipAddress?: string | null): Promise<SlotIntegrityReport>;
   
   // ============ FORMS ============
   getAllFormTemplates(tenantId?: string | null): Promise<FormTemplate[]>;
@@ -351,7 +381,10 @@ export class DatabaseStorage implements IStorage {
 
   // ============ TIME SLOTS ============
   async getTimeSlotsByClinicianId(clinicianId: string): Promise<TimeSlot[]> {
-    return await db.select().from(timeSlots).where(eq(timeSlots.clinicianId, clinicianId));
+    return await db.select().from(timeSlots).where(and(
+      eq(timeSlots.clinicianId, clinicianId),
+      isNull(timeSlots.retiredAt),
+    ));
   }
 
   async createTimeSlot(slot: InsertTimeSlot): Promise<TimeSlot> {
@@ -360,7 +393,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteTimeSlot(id: string): Promise<void> {
-    await db.delete(timeSlots).where(eq(timeSlots.id, id));
+    await this.deleteTimeSlotById(id, undefined, "Appointment confirmed");
   }
 
   async addTimeSlots(clinicianId: string, newSlots: Omit<TimeSlot, 'id' | 'createdAt'>[], tenantId?: string | null): Promise<TimeSlot[]> {
@@ -396,20 +429,31 @@ export class DatabaseStorage implements IStorage {
     return slot;
   }
 
-  async deleteTimeSlotById(id: string): Promise<boolean> {
-    const [slot] = await db.select().from(timeSlots).where(eq(timeSlots.id, id));
-    if (!slot) return false;
-    
-    // Always clear client references regardless of isBooked flag — the flag can
-    // get out of sync with the actual FK reference, causing a 23503 constraint
-    // violation if we only clean up when isBooked is true.
-    const clientsWithSlot = await db.select().from(clients).where(eq(clients.assignedSlotId, id));
-    for (const client of clientsWithSlot) {
-      await db.update(clients).set({ assignedSlotId: null, assignedSlot: null, assignedClinicianId: null }).where(eq(clients.id, client.id));
-    }
-    
-    await db.delete(timeSlots).where(eq(timeSlots.id, id));
-    return true;
+  async deleteTimeSlotById(id: string, tenantId?: string, reason = "Administrative retirement"): Promise<boolean> {
+    return db.transaction(async (tx) => {
+      const [slot] = await tx.select().from(timeSlots).where(and(
+        eq(timeSlots.id, id),
+        ...(tenantId ? [or(eq(timeSlots.tenantId, tenantId), isNull(timeSlots.tenantId))!] : []),
+      )).for("update");
+      if (!slot) return false;
+      const owners = await tx.select({ id: clients.id }).from(clients).where(and(
+        eq(clients.assignedSlotId, id),
+        inArray(clients.status, [...ACTIVE_ALLOCATION_STATUSES]),
+        ...(tenantId ? [eq(clients.tenantId, tenantId)] : []),
+      ));
+      if (owners.length) throw new SlotRetirementConflictError(owners.map(({ id: clientId }) => clientId));
+      await tx.update(timeSlots).set({
+        retiredAt: new Date(),
+        retirementReason: reason,
+        isBooked: false,
+      }).where(eq(timeSlots.id, id));
+      await tx.update(clientClinicianOptions).set({ status: "unavailable" }).where(and(
+        eq(clientClinicianOptions.slotId, id),
+        eq(clientClinicianOptions.status, "pending"),
+        ...(tenantId ? [eq(clientClinicianOptions.tenantId, tenantId)] : []),
+      ));
+      return true;
+    });
   }
 
   async getAllTimeSlots(): Promise<TimeSlot[]> {
@@ -680,6 +724,98 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
+  async repairSlotIntegrity(tenantId?: string, ipAddress?: string | null): Promise<SlotIntegrityReport> {
+    return db.transaction(async (tx) => {
+      const slots = await tx.select().from(timeSlots).where(
+        tenantId ? eq(timeSlots.tenantId, tenantId) : undefined,
+      ).for("update");
+      const report: SlotIntegrityReport = { identified: 0, repaired: [], skipped: [] };
+      for (const slot of slots) {
+        const owners = await tx.select({
+          id: clients.id,
+          displayId: clients.displayId,
+          status: clients.status,
+        }).from(clients).where(and(
+          eq(clients.assignedSlotId, slot.id),
+          inArray(clients.status, [...ACTIVE_ALLOCATION_STATUSES]),
+          ...(tenantId ? [eq(clients.tenantId, tenantId)] : []),
+        )).orderBy(clients.displayId);
+        if (owners.length === 1 && hasFinalizedBooking(owners[0].status) && !slot.retiredAt) {
+          report.identified++;
+          await tx.update(timeSlots).set({
+            isBooked: false,
+            retiredAt: new Date(),
+            retirementReason: "Appointment confirmed",
+          }).where(eq(timeSlots.id, slot.id));
+          await tx.update(clientClinicianOptions).set({ status: "unavailable" }).where(and(
+            eq(clientClinicianOptions.slotId, slot.id),
+            eq(clientClinicianOptions.status, "pending"),
+            ...(slot.tenantId ? [eq(clientClinicianOptions.tenantId, slot.tenantId)] : []),
+          ));
+          report.repaired.push({
+            slotId: slot.id,
+            tenantId: slot.tenantId,
+            isBooked: slot.isBooked,
+            activeOwnerIds: [owners[0].id],
+            issue: "confirmed_owner_on_active_slot",
+            action: "repaired",
+          });
+          continue;
+        }
+        const action = getSlotIntegrityAction(slot.isBooked, owners.length, Boolean(slot.retiredAt));
+        if (action === "none") continue;
+        const issue = action === "conflict"
+          ? "competing_active_owners"
+          : action === "book"
+            ? "active_owner_without_booking"
+            : "booked_without_active_owner";
+        report.identified++;
+        const row: SlotIntegrityRow = {
+          slotId: slot.id,
+          tenantId: slot.tenantId,
+          isBooked: slot.isBooked,
+          activeOwnerIds: owners.map(owner => owner.id),
+          issue,
+          action: action === "conflict" ? "skipped" : "repaired",
+        };
+        if (action === "conflict") {
+          report.skipped.push(row);
+          continue;
+        }
+        await tx.update(timeSlots).set({ isBooked: action === "book" }).where(eq(timeSlots.id, slot.id));
+        report.repaired.push(row);
+      }
+      const pendingOptions = await tx.select({
+        id: clientClinicianOptions.id,
+        slotId: clientClinicianOptions.slotId,
+        tenantId: clientClinicianOptions.tenantId,
+      }).from(clientClinicianOptions)
+        .leftJoin(timeSlots, eq(clientClinicianOptions.slotId, timeSlots.id))
+        .where(and(
+          eq(clientClinicianOptions.status, "pending"),
+          isNull(timeSlots.id),
+          ...(tenantId ? [eq(clientClinicianOptions.tenantId, tenantId)] : []),
+        ));
+      for (const option of pendingOptions) {
+        await tx.update(clientClinicianOptions).set({ status: "unavailable" }).where(eq(clientClinicianOptions.id, option.id));
+      }
+      const retiredOptions = await tx.update(clientClinicianOptions).set({ status: "unavailable" }).where(and(
+        eq(clientClinicianOptions.status, "pending"),
+        ...(tenantId ? [eq(clientClinicianOptions.tenantId, tenantId)] : []),
+        sql`${clientClinicianOptions.slotId} IN (SELECT id FROM time_slots WHERE retired_at IS NOT NULL)`,
+      )).returning({ id: clientClinicianOptions.id });
+      report.identified += pendingOptions.length + retiredOptions.length;
+      if (ipAddress) {
+        await tx.insert(auditLogs).values({
+          userId: null, action: "repair_slot_integrity", resourceType: "timeslot",
+          resourceId: null, tenantId: tenantId || null, ipAddress,
+          details: { identified: report.identified, repaired: report.repaired.length, skipped: report.skipped.length },
+        });
+      }
+      return report;
+    });
+  }
+
   async createClient(insertClient: InsertClient, tenantId?: string | null): Promise<Client> {
     const [client] = await db.insert(clients).values({ ...insertClient, ...(tenantId ? { tenantId } : {}) }).returning();
     return client;
@@ -757,9 +893,10 @@ export class DatabaseStorage implements IStorage {
             ));
         }
 
-        await tx.delete(clientClinicianOptions).where(and(
+        await tx.update(clientClinicianOptions).set({ status: "declined" }).where(and(
           eq(clientClinicianOptions.clientId, id),
           eq(clientClinicianOptions.tenantId, tenantId),
+          eq(clientClinicianOptions.status, "pending"),
         ));
 
         const [client] = await tx.update(clients).set({
@@ -768,6 +905,16 @@ export class DatabaseStorage implements IStorage {
         }).where(eq(clients.id, id)).returning();
         if (!client) {
           throw new ClientMissingDuringAllocationUpdateError();
+        }
+        if (updates.status === "Scheduled" && slotId) {
+          await tx.update(timeSlots).set({
+            retiredAt: new Date(),
+            retirementReason: "Appointment confirmed",
+            isBooked: false,
+          }).where(and(
+            eq(timeSlots.id, slotId),
+            eq(timeSlots.tenantId, tenantId),
+          ));
         }
         return client;
       });
@@ -783,6 +930,43 @@ export class DatabaseStorage implements IStorage {
         { cause: error },
       );
     }
+  }
+
+  async updateClientAndRetireSlot(
+    id: string,
+    updates: Partial<InsertClient>,
+    slotId: string | null,
+    tenantId: string,
+  ): Promise<Client | undefined> {
+    return db.transaction(async (tx) => {
+      const [client] = await tx.update(clients).set({
+        ...updates,
+        updatedAt: new Date(),
+      }).where(and(
+        eq(clients.id, id),
+        eq(clients.tenantId, tenantId),
+      )).returning();
+      if (!client) return undefined;
+      if (!slotId) return client;
+
+      const retired = await tx.update(timeSlots).set({
+        isBooked: false,
+        retiredAt: new Date(),
+        retirementReason: "Appointment confirmed",
+      }).where(and(
+        eq(timeSlots.id, slotId),
+        or(eq(timeSlots.tenantId, tenantId), isNull(timeSlots.tenantId)),
+      )).returning({ id: timeSlots.id });
+      if (retired.length !== 1) {
+        throw new ClientAllocationUpdateError("The client's assigned slot could not be retired");
+      }
+      await tx.update(clientClinicianOptions).set({ status: "unavailable" }).where(and(
+        eq(clientClinicianOptions.slotId, slotId),
+        eq(clientClinicianOptions.tenantId, tenantId),
+        eq(clientClinicianOptions.status, "pending"),
+      ));
+      return client;
+    });
   }
 
   async assignClinicianToClient(
@@ -830,7 +1014,7 @@ export class DatabaseStorage implements IStorage {
         if (!slot) {
           throw new ManualAssignmentError("slot_not_found", "Appointment slot not found");
         }
-        if (slot.tenantId !== tenantId) {
+        if (slot.tenantId !== tenantId || slot.retiredAt) {
           throw new ManualAssignmentError("access_denied", "Access denied");
         }
         if (slot.clinicianId !== clinicianId) {
@@ -847,6 +1031,7 @@ export class DatabaseStorage implements IStorage {
             eq(timeSlots.tenantId, tenantId),
             eq(timeSlots.clinicianId, clinicianId),
             eq(timeSlots.isBooked, false),
+            isNull(timeSlots.retiredAt),
           ))
           .returning({ id: timeSlots.id });
         if (claimedSlots.length !== 1) {
@@ -910,7 +1095,7 @@ export class DatabaseStorage implements IStorage {
 
       const oldClinicianId = existingClient.assignedClinicianId;
       const oldSlotIdToRelease = existingClient.assignedSlotId;
-      const isAllocatedStatus = newStatus === "Assigned" || newStatus === "AwaitingConfirmation" || newStatus === "Scheduled";
+      const isAllocatedStatus = hasActiveClientAllocation(newStatus);
       const isReassigning = newSlotId !== null && newSlotId !== existingClient.assignedSlotId;
       const zoomDeliveryIdentityChanged = shouldResetZoomDelivery(existingClient, {
         assignedClinicianId: newClinicianId,
@@ -967,14 +1152,24 @@ export class DatabaseStorage implements IStorage {
 
       // Case 1: Status-only change to allocated status (keep current slot)
       if (isAllocatedStatus && !isReassigning && hasAllocation) {
-        // When confirming (→ Scheduled), delete the slot and clear ALL assignment fields
+        // Confirmation retires active availability while preserving the slot row
+        // for historical option display and audit.
         if (newStatus === "Scheduled") {
           const slotToRelease = await findOldSlotId();
           if (slotToRelease) {
-            await tx.delete(timeSlots).where(and(
+            await tx.update(timeSlots).set({
+              isBooked: false,
+              retiredAt: new Date(),
+              retirementReason: "Appointment confirmed",
+            }).where(and(
               eq(timeSlots.id, slotToRelease),
               eq(timeSlots.tenantId, tenantId),
               eq(timeSlots.clinicianId, oldClinicianId!),
+            ));
+            await tx.update(clientClinicianOptions).set({ status: "unavailable" }).where(and(
+              eq(clientClinicianOptions.slotId, slotToRelease),
+              eq(clientClinicianOptions.status, "pending"),
+              eq(clientClinicianOptions.tenantId, tenantId),
             ));
           }
           const [updated] = await tx.update(clients).set({
@@ -1024,6 +1219,7 @@ export class DatabaseStorage implements IStorage {
           eq(timeSlots.tenantId, tenantId),
           eq(timeSlots.clinicianId, newClinicianId),
           eq(timeSlots.isBooked, false),
+          isNull(timeSlots.retiredAt),
         )).returning({ id: timeSlots.id });
         if (claimedSlots.length !== 1) throw new Error("Slot is already booked");
 
@@ -1035,6 +1231,12 @@ export class DatabaseStorage implements IStorage {
               eq(timeSlots.id, slotToRelease),
               eq(timeSlots.tenantId, tenantId),
               eq(timeSlots.clinicianId, oldClinicianId!),
+              sql`NOT EXISTS (
+                SELECT 1 FROM clients other_client
+                WHERE other_client.assigned_slot_id = ${slotToRelease}
+                  AND other_client.id <> ${clientId}
+                  AND other_client.status IN (${sql.join(ACTIVE_ALLOCATION_STATUSES.map(status => sql`${status}`), sql`, `)})
+              )`,
             ));
           }
 
@@ -1089,6 +1291,12 @@ export class DatabaseStorage implements IStorage {
               eq(timeSlots.id, slotToRelease),
               eq(timeSlots.tenantId, tenantId),
               eq(timeSlots.clinicianId, oldClinicianId),
+              sql`NOT EXISTS (
+                SELECT 1 FROM clients other_client
+                WHERE other_client.assigned_slot_id = ${slotToRelease}
+                  AND other_client.id <> ${clientId}
+                  AND other_client.status IN (${sql.join(ACTIVE_ALLOCATION_STATUSES.map(status => sql`${status}`), sql`, `)})
+              )`,
             ));
           }
 

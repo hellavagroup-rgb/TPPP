@@ -361,7 +361,8 @@ describe("registration journey HTTP routes", () => {
     expect(response.status).toBe(502);
     expect(response.body.error).toMatch(/not moved to Options Sent/i);
     expect(h.state.client.status).toBe("FormsCompleted");
-    expect(h.state.options).toHaveLength(0);
+    expect(h.state.options).toHaveLength(1);
+    expect(h.state.options[0].status).toBe("unavailable");
     expect(h.state.emails).toHaveLength(1);
     expect(h.state.activities.filter(a => a.action === "activity_client_options_sent")).toHaveLength(0);
   });
@@ -400,8 +401,10 @@ describe("registration journey HTTP routes", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(h.state.options).toHaveLength(1);
-    expect(h.state.options[0].selectionToken).not.toMatch(/^stale-token-/);
+    expect(h.state.options).toHaveLength(4);
+    expect(h.state.options.filter(option => option.status === "unavailable")).toHaveLength(3);
+    const currentOption = h.state.options.find(option => option.status === "pending");
+    expect(currentOption?.selectionToken).not.toMatch(/^stale-token-/);
     expect(h.state.emails).toHaveLength(1);
     expect(h.state.emails[0].html).toContain("Option 1:");
     expect(h.state.emails[0].html).not.toContain("Option 2:");
@@ -449,6 +452,8 @@ describe("registration journey HTTP routes", () => {
     expect(first.body).toMatchObject({ selected: true, bookingConfirmed: true });
     expect(retry.body).toMatchObject({ bookingConfirmed: true, idempotent: true });
     expect(h.state.client.status).toBe("BookingConfirmed");
+    expect(h.state.slot).toMatchObject({ isBooked: false, retirementReason: "Appointment confirmed" });
+    expect(h.state.slot.retiredAt).toBeInstanceOf(Date);
     expect(h.state.emails).toHaveLength(1);
     expect(h.state.activities.filter(a => a.action === "activity_booking_confirmed")).toHaveLength(1);
   });
@@ -805,6 +810,8 @@ describe("registration journey HTTP routes", () => {
     expect(first.body).toMatchObject({ success: true });
     expect(retry.body).toMatchObject({ success: true, alreadyCompleted: true });
     expect(h.state.client.status).toBe("BookingConfirmed");
+    expect(h.state.slot).toMatchObject({ isBooked: false, retirementReason: "Appointment confirmed" });
+    expect(h.state.slot.retiredAt).toBeInstanceOf(Date);
     expect(h.state.emails).toHaveLength(1);
     expect(h.state.activities.filter(a => a.action === "activity_registration_submitted")).toHaveLength(0);
     expect(h.state.activities.filter(a => a.action === "activity_booking_confirmed")).toHaveLength(1);

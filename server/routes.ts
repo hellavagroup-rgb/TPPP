@@ -5,7 +5,7 @@ import path from "path";
 import fs from "fs";
 import multer from "multer";
 import ExcelJS from "exceljs";
-import { ClientAllocationUpdateError, ManualAssignmentError, storage } from "./storage";
+import { ClientAllocationUpdateError, ManualAssignmentError, SlotRetirementConflictError, storage } from "./storage";
 import { setupAuth, requireAuth, requireAdmin, requireClinician, hashPassword, auditLog, destroySessionsForUser } from "./auth";
 import passport from "passport";
 import { 
@@ -1045,7 +1045,12 @@ export async function registerRoutes(
         return res.status(403).json({ error: "Access denied" });
       }
 
-      await storage.deleteTimeSlotById(req.params.slotId);
+      const retired = await storage.deleteTimeSlotById(req.params.slotId, req.tenant!.id);
+      if (!retired) {
+        return res.status(409).json({
+          error: "This slot could not be retired because its availability changed. Refresh and try again.",
+        });
+      }
       await recordActivity(req, "activity_slot_removed", "timeslot", req.params.clinicianId, {
         clinicianName: await getClinicianActivityName(req.params.clinicianId),
         slotDescription: formatActivitySlot(slot),
@@ -1053,6 +1058,13 @@ export async function registerRoutes(
       const allSlots = await storage.getTimeSlotsByClinicianId(req.params.clinicianId);
       res.json(allSlots);
     } catch (error: any) {
+      if (error instanceof SlotRetirementConflictError) {
+        return res.status(409).json({
+          error: "This slot cannot be retired while an active client workflow owns it. Reassign or complete that client first.",
+          code: "SLOT_ACTIVE_OWNER_CONFLICT",
+          clientIds: error.clientIds,
+        });
+      }
       console.error("Error deleting time slot:", error);
       res.status(500).json({ error: "Failed to delete time slot" });
     }
@@ -1356,7 +1368,9 @@ export async function registerRoutes(
         }
       }
       
-      const slotToDelete = (req.body.status === "Scheduled" && req.body.status !== oldStatus && currentClient?.assignedSlotId)
+      const isConfirmation = ["Scheduled", "BookingConfirmed"].includes(req.body.status)
+        && req.body.status !== oldStatus;
+      const slotToDelete = (isConfirmation && currentClient?.assignedSlotId)
         ? currentClient.assignedSlotId
         : null;
       
@@ -1377,7 +1391,7 @@ export async function registerRoutes(
         updateData.assignedClinicianId = null;
       }
       
-      const updated = isDeallocation
+      const updated = (isDeallocation || req.body.status === "Scheduled")
         ? await storage.updateClientAndReleaseSlot(
             req.params.id,
             updateData,
@@ -1385,15 +1399,15 @@ export async function registerRoutes(
             currentClient.assignedClinicianId,
             req.tenant!.id,
           )
-        : await storage.updateClient(req.params.id, updateData);
+        : isConfirmation
+          ? await storage.updateClientAndRetireSlot(
+              req.params.id,
+              updateData,
+              currentClient.assignedSlotId,
+              req.tenant!.id,
+            )
+          : await storage.updateClient(req.params.id, updateData);
       
-      if (slotToDelete && updated) {
-        try {
-          await storage.deleteTimeSlot(slotToDelete);
-        } catch (err) {
-          console.error("Failed to delete slot on confirmation:", err);
-        }
-      }
       if (!updated) {
         return res.status(404).json({ error: "Client not found" });
       }
@@ -1655,6 +1669,7 @@ export async function registerRoutes(
         // Verify slot exists, is unbooked, belongs to this tenant, and belongs to the stated clinician
         const [slot] = await db.select().from(timeSlots).where(eq(timeSlots.id, sel.slotId)).limit(1);
         if (!slot) return res.status(400).json({ error: `Slot ${sel.slotId} not found` });
+        if (slot.retiredAt) return res.status(409).json({ error: `Slot ${sel.slotId} has been retired and is no longer available` });
         if (slot.isBooked) return res.status(400).json({ error: `Slot ${sel.slotId} is already booked` });
         if (slot.clinicianId !== sel.clinicianId) {
           return res.status(400).json({ error: `Slot ${sel.slotId} does not belong to clinician ${sel.clinicianId}` });
@@ -1685,9 +1700,10 @@ export async function registerRoutes(
       }));
 
       await db.transaction(async (tx) => {
-        await tx.delete(clientClinicianOptions).where(and(
+        await tx.update(clientClinicianOptions).set({ status: "unavailable" }).where(and(
           eq(clientClinicianOptions.clientId, req.params.clientId),
           eq(clientClinicianOptions.tenantId, req.tenant!.id),
+          eq(clientClinicianOptions.status, "pending"),
         ));
         await tx.insert(clientClinicianOptions).values(options as any);
       });
@@ -1731,7 +1747,7 @@ export async function registerRoutes(
           console.log(`Allocation options email sent to client ${req.params.clientId}`);
         } catch (emailErr) {
           console.error('Failed to send allocation options email:', emailErr);
-          await db.delete(clientClinicianOptions).where(
+          await db.update(clientClinicianOptions).set({ status: "unavailable" }).where(
             inArray(clientClinicianOptions.selectionToken, options.map(option => option.selectionToken))
           );
           return res.status(502).json({ error: "The allocation email could not be sent. The client was not moved to Options Sent." });
@@ -2122,9 +2138,10 @@ export async function registerRoutes(
         return res.status(404).json({ error: "Client not found" });
       }
       if (clientToReassign.status === "OptionsSent" && status !== "OptionsSent") {
-        await db.delete(clientClinicianOptions).where(and(
+        await db.update(clientClinicianOptions).set({ status: "declined" }).where(and(
           eq(clientClinicianOptions.clientId, clientToReassign.id),
           eq(clientClinicianOptions.tenantId, req.tenant!.id),
+          eq(clientClinicianOptions.status, "pending"),
         ));
       }
       const slot = slotId
@@ -2491,6 +2508,9 @@ export async function registerRoutes(
       if (!clinicianOptionId) return res.status(400).json({ error: "Missing clinicianOptionId" });
       const selectedOption = allOptions.find(o => o.id === clinicianOptionId);
       if (!selectedOption) return res.status(400).json({ error: "Option not found" });
+      if (selectedOption.status === "unavailable") {
+        return res.status(409).json({ error: "This appointment option is no longer available. Please contact the practice for another option." });
+      }
 
       const tenant = await storage.getTenantById(optionRow.tenantId);
       if (!tenant) return res.status(404).json({ error: "Practice not found" });
@@ -2526,6 +2546,7 @@ export async function registerRoutes(
             .where(and(
               eq(timeSlots.id, selectedOption.slotId),
               eq(timeSlots.tenantId, optionRow.tenantId),
+              isNull(timeSlots.retiredAt),
               drizzleSql`(
                 ${timeSlots.isBooked} = false
                 OR (
@@ -2577,6 +2598,17 @@ export async function registerRoutes(
             .where(eq(clientClinicianOptions.id, clinicianOptionId));
           await tx.update(clientClinicianOptions).set({ status: "declined" })
             .where(and(eq(clientClinicianOptions.clientId, optionRow.clientId), eq(clientClinicianOptions.status, "pending")));
+          if (!registrationEnabled) {
+            const retired = await tx.update(timeSlots).set({
+              isBooked: false,
+              retiredAt: new Date(),
+              retirementReason: "Appointment confirmed",
+            }).where(and(
+              eq(timeSlots.id, selectedOption.slotId),
+              or(eq(timeSlots.tenantId, optionRow.tenantId), isNull(timeSlots.tenantId)),
+            )).returning({ id: timeSlots.id });
+            if (retired.length !== 1) throw new Error("SELECTED_SLOT_UNAVAILABLE");
+          }
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : "";
@@ -3074,16 +3106,36 @@ export async function registerRoutes(
 
       // Insurer or payments not enabled — finalize exactly once. A retry of a
       // pending direct branch reaches this same CAS with the persisted attempt key.
-      const confirmed = await db.update(clients).set({
-        status: "BookingConfirmed",
-        registrationTokenRevokedAt: new Date(),
-        bookingConfirmationSentAt: bookingEmailDelivered ? new Date() : client.bookingConfirmationSentAt,
-        updatedAt: new Date(),
-      }).where(and(
-        eq(clients.id, client.id),
-        eq(clients.status, "RegistrationPending"),
-        eq(clients.registrationPaymentAttemptKey, paymentAttemptKey),
-      )).returning({ id: clients.id });
+      const confirmed = await db.transaction(async (tx) => {
+        const moved = await tx.update(clients).set({
+          status: "BookingConfirmed",
+          registrationTokenRevokedAt: new Date(),
+          bookingConfirmationSentAt: bookingEmailDelivered ? new Date() : client.bookingConfirmationSentAt,
+          updatedAt: new Date(),
+        }).where(and(
+          eq(clients.id, client.id),
+          eq(clients.status, "RegistrationPending"),
+          eq(clients.registrationPaymentAttemptKey, paymentAttemptKey),
+        )).returning({ id: clients.id });
+        if (!moved.length || !client.assignedSlotId || !client.tenantId) return moved;
+        const retired = await tx.update(timeSlots).set({
+          isBooked: false,
+          retiredAt: new Date(),
+          retirementReason: "Appointment confirmed",
+        }).where(and(
+          eq(timeSlots.id, client.assignedSlotId),
+          or(eq(timeSlots.tenantId, client.tenantId), isNull(timeSlots.tenantId)),
+        )).returning({ id: timeSlots.id });
+        if (retired.length !== 1) {
+          throw new Error("Confirmed appointment slot could not be retired");
+        }
+        await tx.update(clientClinicianOptions).set({ status: "unavailable" }).where(and(
+          eq(clientClinicianOptions.slotId, client.assignedSlotId),
+          eq(clientClinicianOptions.tenantId, client.tenantId),
+          eq(clientClinicianOptions.status, "pending"),
+        ));
+        return moved;
+      });
       if (!confirmed.length) {
         const current = await storage.getClientById(client.id);
         if (current?.status === "BookingConfirmed") {
@@ -5232,17 +5284,37 @@ export async function registerRoutes(
             }
           }
 
-          const confirmed = await db.update(clients).set({
-            status: "BookingConfirmed",
-            registrationTokenRevokedAt: new Date(),
-            bookingConfirmationSentAt: bookingEmailDelivered ? new Date() : client.bookingConfirmationSentAt,
-            updatedAt: new Date(),
-          }).where(and(
-            eq(clients.id, clientId),
-            eq(clients.status, "RegistrationPending"),
-            eq(clients.registrationPaymentAttemptKey, registrationAttemptKey),
-            eq(clients.stripePaymentLinkId, completedPaymentLinkId!),
-          )).returning({ id: clients.id });
+          const confirmed = await db.transaction(async (tx) => {
+            const moved = await tx.update(clients).set({
+              status: "BookingConfirmed",
+              registrationTokenRevokedAt: new Date(),
+              bookingConfirmationSentAt: bookingEmailDelivered ? new Date() : client.bookingConfirmationSentAt,
+              updatedAt: new Date(),
+            }).where(and(
+              eq(clients.id, clientId),
+              eq(clients.status, "RegistrationPending"),
+              eq(clients.registrationPaymentAttemptKey, registrationAttemptKey),
+              eq(clients.stripePaymentLinkId, completedPaymentLinkId!),
+            )).returning({ id: clients.id });
+            if (!moved.length || !client.assignedSlotId || !client.tenantId) return moved;
+            const retired = await tx.update(timeSlots).set({
+              isBooked: false,
+              retiredAt: new Date(),
+              retirementReason: "Appointment confirmed",
+            }).where(and(
+              eq(timeSlots.id, client.assignedSlotId),
+              or(eq(timeSlots.tenantId, client.tenantId), isNull(timeSlots.tenantId)),
+            )).returning({ id: timeSlots.id });
+            if (retired.length !== 1) {
+              throw new Error("Confirmed appointment slot could not be retired");
+            }
+            await tx.update(clientClinicianOptions).set({ status: "unavailable" }).where(and(
+              eq(clientClinicianOptions.slotId, client.assignedSlotId),
+              eq(clientClinicianOptions.tenantId, client.tenantId),
+              eq(clientClinicianOptions.status, "pending"),
+            ));
+            return moved;
+          });
           if (confirmed.length) {
             await recordActivity(req, "activity_booking_confirmed", "client", client.id, {
               actorName: "Client",
@@ -5673,6 +5745,16 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Stranded allocation repair error:", error);
       res.status(500).json({ error: "Failed to repair stranded client allocations" });
+    }
+  });
+
+  app.post("/api/super-admin/slots/repair-integrity", requireSuperAdmin, async (req, res) => {
+    try {
+      const result = await storage.repairSlotIntegrity(req.body?.tenantId || undefined, req.ip);
+      res.json(result);
+    } catch (error) {
+      console.error("Slot integrity repair error:", error);
+      res.status(500).json({ error: "Failed to repair slot integrity" });
     }
   });
 

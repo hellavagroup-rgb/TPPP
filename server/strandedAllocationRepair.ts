@@ -1,3 +1,5 @@
+import { hasActiveClientAllocation } from "./clientAllocationWorkflow";
+
 export const UNALLOCATED_CLIENT_STATUSES = [
   "New",
   "Forms Sent",
@@ -8,4 +10,8 @@ export const UNALLOCATED_CLIENT_STATUSES = [
 
 export function isUnallocatedClientStatus(status: string): boolean {
   return (UNALLOCATED_CLIENT_STATUSES as readonly string[]).includes(status);
+}
+
+export function isActiveAllocationStatus(status: string | null | undefined): boolean {
+  return hasActiveClientAllocation(status);
 }

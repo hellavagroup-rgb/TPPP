@@ -140,6 +140,8 @@ export const timeSlots = pgTable("time_slots", {
   frequency: text("frequency", { enum: ["weekly", "fortnightly"] }).default("weekly"), // Schedule frequency
   isOngoing: boolean("is_ongoing").default(false), // Whether schedule continues indefinitely
   locationType: text("location_type", { enum: ["online", "in_person"] }).notNull().default("online"), // Slot delivery mode
+  retiredAt: timestamp("retired_at"),
+  retirementReason: text("retirement_reason"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   tenantId: varchar("tenant_id").references(() => tenants.id),
 });
@@ -523,7 +525,7 @@ export const clientClinicianOptions = pgTable("client_clinician_options", {
   clientId: varchar("client_id").references(() => clients.id).notNull(),
   clinicianId: varchar("clinician_id").references(() => clinicians.id).notNull(),
   slotId: varchar("slot_id").references(() => timeSlots.id),
-  status: text("status", { enum: ["pending", "selected", "declined"] }).notNull().default("pending"),
+  status: text("status", { enum: ["pending", "selected", "declined", "unavailable"] }).notNull().default("pending"),
   selectionToken: text("selection_token").notNull().unique(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   tenantId: varchar("tenant_id").references(() => tenants.id).notNull(),

@@ -104,6 +104,10 @@ app.use((req, res, next) => {
   log(
     `[maintenance] stranded allocations identified=${strandedAllocationRepair.identified} repaired=${strandedAllocationRepair.repaired.length} skipped=${strandedAllocationRepair.skipped.length}`,
   );
+  const slotIntegrityRepair = await storage.repairSlotIntegrity();
+  log(
+    `[maintenance] slot integrity identified=${slotIntegrityRepair.identified} repaired=${slotIntegrityRepair.repaired.length} skipped=${slotIntegrityRepair.skipped.length}`,
+  );
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

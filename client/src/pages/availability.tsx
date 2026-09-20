@@ -146,16 +146,18 @@ export default function Availability() {
   const deleteSlotMutation = useMutation({
     mutationFn: async ({ clinicianId, slotId }: { clinicianId: string; slotId: string }) => {
       const response = await apiRequest("DELETE", `/api/timeslots/${clinicianId}/${slotId}`);
-      return response.json();
+      const body = await response.json();
+      if (!response.ok) throw new Error(body?.error || "Failed to retire slot");
+      return body;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/clinicians"] });
-      toast({ title: "Slot Deleted", description: "Time slot has been permanently removed." });
+      toast({ title: "Slot Retired", description: "Time slot was retired and historical option records were preserved." });
       setIsDeleteOpen(false);
       setDeletingSlot(null);
     },
-    onError: () => {
-      toast({ title: "Error", description: "Failed to delete slot.", variant: "destructive" });
+    onError: (error: Error) => {
+      toast({ title: "Slot not retired", description: error.message || "Failed to retire slot.", variant: "destructive" });
     },
   });
 

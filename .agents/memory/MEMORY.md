@@ -21,3 +21,4 @@
 - [Designated intake and registration forms](designated-workflow-forms.md) — each tenant has one intake form and, when registration is enabled, one registration form.
 - [Automatic payment link workflow](automatic-payment-links.md) — new-workflow payment links are created automatically; admins do not need an early manual action.
 - [Confirmation state and slot retirement](confirmation-state-slot-retirement.md) — BookingConfirmed is feature-gated; confirmation retires availability but preserves a booking snapshot.
+- [Drizzle query builders are not Promises](drizzle-query-builder-await.md) — await builders inside try/catch; do not chain Promise.catch directly on them.

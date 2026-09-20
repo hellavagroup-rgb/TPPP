@@ -196,6 +196,8 @@ export const clients = pgTable("clients", {
   stripeCheckoutUrl: text("stripe_checkout_url"), // Payment link URL sent to client
   stripePaymentLinkId: text("stripe_payment_link_id"), // Stripe Payment Link ID (plink_...) for deactivation
   registrationPaymentAttemptKey: text("registration_payment_attempt_key"),
+  registrationPaymentFailedAt: timestamp("registration_payment_failed_at"),
+  registrationPaymentFailureReason: text("registration_payment_failure_reason"),
   registrationFormSubmissionId: varchar("registration_form_submission_id"),
   paymentStatus: text("payment_status", { enum: ["none", "setup_pending", "active"] }).default("none"),
   // CY&A fields
@@ -211,6 +213,8 @@ export const clients = pgTable("clients", {
   registrationTokenRevokedAt: timestamp("registration_token_revoked_at"),
   registrationEmailSentAt: timestamp("registration_email_sent_at"),
   registrationEmailSendingAt: timestamp("registration_email_sending_at"),
+  registrationEmailFailedAt: timestamp("registration_email_failed_at"),
+  registrationEmailFailureReason: text("registration_email_failure_reason"),
   registrationEmailAttemptKey: text("registration_email_attempt_key"),
   registrationEmailClaimId: text("registration_email_claim_id"),
   registrationEmailPendingToken: text("registration_email_pending_token"),

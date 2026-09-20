@@ -12,7 +12,7 @@ export default function PaymentSuccess() {
         Thank you — your card has been saved and your initial session payment has been processed.
       </p>
       <p className="text-sm text-muted-foreground mb-8 max-w-sm">
-        Your therapist will be in touch to confirm your appointment details.
+        The practice has been notified automatically. Your therapist will be in touch with any next steps.
       </p>
       <Button variant="outline" onClick={() => setLocation("/")}>
         Return to home

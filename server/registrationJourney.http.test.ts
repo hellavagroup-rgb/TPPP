@@ -18,6 +18,7 @@ const h = vi.hoisted(() => {
     slotClaimFails: false,
     stripeLinkActive: true,
     emailResult: { success: true, outcome: "accepted" } as any,
+    emailThrows: false,
     paymentResult: { url: "https://pay.test/session", paymentLinkId: "plink_1" } as any,
   };
 
@@ -204,6 +205,7 @@ vi.mock("./email", async importOriginal => {
     ...actual,
     sendEmail: vi.fn(async (email: any) => {
       h.state.emails.push(email);
+      if (h.state.emailThrows) throw new Error("transport failed");
       return h.state.emailResult;
     }),
   };
@@ -292,6 +294,7 @@ function resetState(overrides: { client?: any; tenant?: any } = {}) {
   h.state.slotClaimFails = false;
   h.state.stripeLinkActive = true;
   h.state.emailResult = { success: true, outcome: "accepted" };
+  h.state.emailThrows = false;
   h.state.paymentResult = { url: "https://pay.test/session", paymentLinkId: "plink_1" };
   vi.clearAllMocks();
 }
@@ -566,6 +569,28 @@ describe("registration journey HTTP routes", () => {
     expect(response.status).toBe(502);
     expect(h.state.client.registrationToken).toBe("previously-delivered-token");
     expect(h.state.client.registrationEmailPendingToken).toBeNull();
+    expect(h.state.client.registrationEmailSentAt).toEqual(previousSentAt);
+  });
+
+  it("releases the delivery claim and records failure when email transport throws", async () => {
+    const previousSentAt = new Date("2026-09-01T12:00:00Z");
+    resetState({ client: {
+      status: "Assigned",
+      assignedClinicianId: "clinician-a",
+      assignedSlotId: "slot-a",
+      registrationToken: "previously-delivered-token",
+      registrationEmailSentAt: previousSentAt,
+    } });
+    h.state.emailThrows = true;
+
+    const response = await request("/api/clients/client-a/send-registration", {
+      method: "POST", body: JSON.stringify({ attemptKey: "throwing-send-654321" }),
+    });
+
+    expect(response.status).toBe(500);
+    expect(h.state.client.registrationEmailSendingAt).toBeNull();
+    expect(h.state.client.registrationEmailClaimId).toBeNull();
+    expect(h.state.client.registrationEmailFailedAt).toBeInstanceOf(Date);
     expect(h.state.client.registrationEmailSentAt).toEqual(previousSentAt);
   });
 

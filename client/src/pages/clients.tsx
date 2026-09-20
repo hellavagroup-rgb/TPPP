@@ -87,6 +87,7 @@ import {
   getClientStatusLabel,
   type ClientStatus as CanonicalClientStatus,
 } from "@shared/clientWorkflow";
+import { paymentProgress, registrationProgress } from "@shared/clientProgress";
 
 function mutationErrorMessage(error: Error, fallback: string): string {
   const jsonStart = error.message.indexOf("{");
@@ -1047,6 +1048,71 @@ export default function Clients() {
     return null;
   };
 
+  const workflowProgress = (client: ClientType) => {
+    if (tenant?.registrationFormEnabled !== true) return null;
+    const registration = registrationProgress(client);
+    const payment = paymentProgress(client, {
+      paymentsEnabled: tenant?.paymentsEnabled === true,
+    });
+    const registrationCopy = {
+      not_sent: ["Registration not sent", "Staff: send the registration form when the allocation is ready."],
+      sending: ["Registration sending", "System: delivery is in progress. Refresh shortly."],
+      sent: [
+        `Registration sent ${client.registrationEmailSentAt ? formatDateUK(client.registrationEmailSentAt) : ""}`.trim(),
+        "Client: complete the registration form.",
+      ],
+      failed: ["Registration delivery failed", client.registrationEmailFailureReason || "Staff: retry registration delivery."],
+      completed: [
+        `Registration completed ${client.termsAcceptedAt ? formatDateUK(client.termsAcceptedAt) : ""}`.trim(),
+        "The submitted registration remains available below.",
+      ],
+    }[registration];
+    const paymentCopy = {
+      not_required: null,
+      automatic_pending: ["Payment setup pending", "System: the payment step is being prepared automatically."],
+      recovery_needed: [
+        "Payment setup needs recovery",
+        client.registrationPaymentFailureReason || "Staff: use Recover payment setup to continue.",
+      ],
+      awaiting_client: ["Payment link ready", "Client: finish payment setup using the link already provided."],
+      active: ["Payment active", "Card details are saved and payment setup is complete."],
+    }[payment];
+
+    return (
+      <div className="mt-2 rounded border bg-slate-50 p-2 space-y-2" data-testid={`workflow-progress-${client.id}`}>
+        <div>
+          <p className={`text-[10px] font-semibold ${registration === "failed" ? "text-red-700" : "text-slate-800"}`}>
+            {registrationCopy[0]}
+          </p>
+          <p className="text-[10px] text-muted-foreground">{registrationCopy[1]}</p>
+        </div>
+        {paymentCopy && (
+          <div>
+            <p className={`text-[10px] font-semibold ${payment === "recovery_needed" ? "text-red-700" : "text-slate-800"}`}>
+              {paymentCopy[0]}
+            </p>
+            <p className="text-[10px] text-muted-foreground">{paymentCopy[1]}</p>
+          </div>
+        )}
+        <div className="flex flex-wrap gap-1">
+          <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px]" onClick={() => handleOpenViewResponses(client)}>
+            <Eye className="h-3 w-3 mr-1" /> Intake responses
+          </Button>
+          {client.registrationFormSubmissionId && (
+            <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px]" onClick={() => handleOpenRegistrationForm(client)}>
+              <FileText className="h-3 w-3 mr-1" /> Registration responses
+            </Button>
+          )}
+          {payment === "recovery_needed" && stripeEnabled && (
+            <Button size="sm" variant="outline" className="h-6 px-2 text-[10px] text-red-700 border-red-300" onClick={() => handleOpenPaymentLink(client)}>
+              <RotateCcw className="h-3 w-3 mr-1" /> Recover payment setup
+            </Button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   // Unified filtering based on toggle states and search term
   const pendingZoomLinkClients = zoomLinkEmailEnabled
     ? clients.filter(client => isPendingZoomDelivery(client as any))
@@ -1847,6 +1913,9 @@ export default function Clients() {
                               <Phone className="h-4 w-4 mr-2" /> Fill by Phone
                             </DropdownMenuItem>
                           )}
+                          <DropdownMenuItem onClick={() => handleOpenViewResponses(client)}>
+                            <Eye className="h-4 w-4 mr-2" /> View Responses
+                          </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => handleOpenManualAllocate(client)}>
                             <CalendarCheck className="h-4 w-4 mr-2" /> Allocate to Clinician
                           </DropdownMenuItem>
@@ -1919,19 +1988,6 @@ export default function Clients() {
                           <DropdownMenuItem onClick={() => handleOpenManualAllocate(client)}>
                             <CalendarCheck className="h-4 w-4 mr-2" /> Allocate to Clinician
                           </DropdownMenuItem>
-                          {stripeEnabled && (
-                            <>
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem onClick={() => handleOpenPaymentLink(client)}>
-                                <CreditCard className="h-4 w-4 mr-2" /> Generate Payment Link
-                              </DropdownMenuItem>
-                              {client.paymentStatus === "active" && (
-                                <DropdownMenuItem onClick={() => handleOpenHistory(client)}>
-                                  <History className="h-4 w-4 mr-2" /> Payment History
-                                </DropdownMenuItem>
-                              )}
-                            </>
-                          )}
                           <DropdownMenuSeparator />
                           <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>
                             Archive/Didn't Engage
@@ -1957,11 +2013,6 @@ export default function Clients() {
                       <Button size="sm" className="w-full gap-1 text-xs bg-primary hover:bg-primary/90" onClick={() => { setSelectedClient(client); setIsManualAllocation(false); fetchClientAvailability(client.id); setIsAllocateDialogOpen(true); setSelectedOptions([]); }}>
                         <UserCheck className="h-3 w-3" /> Allocate
                       </Button>
-                      {stripeEnabled && (
-                        <Button size="sm" variant="outline" className="w-full gap-1 text-xs text-blue-700 border-blue-300 hover:bg-blue-50" onClick={() => handleOpenPaymentLink(client)}>
-                          <CreditCard className="h-3 w-3" /> Payment Link
-                        </Button>
-                      )}
                     </div>
                   </CardContent>
                 </Card>
@@ -2152,6 +2203,7 @@ export default function Clients() {
                         )}
                       </>
                     )}
+                    {workflowProgress(client)}
                   </CardContent>
                 </Card>
               ))}
@@ -2213,18 +2265,10 @@ export default function Clients() {
                                     <FileText className="h-4 w-4 mr-2" /> View Registration Form
                                   </DropdownMenuItem>
                                 )}
-                                {stripeEnabled && (
-                                  <>
-                                    <DropdownMenuSeparator />
-                                    <DropdownMenuItem onClick={() => handleOpenPaymentLink(client)}>
-                                      <CreditCard className="h-4 w-4 mr-2" /> Generate Payment Link
-                                    </DropdownMenuItem>
-                                    {client.paymentStatus === "active" && (
-                                      <DropdownMenuItem onClick={() => handleOpenHistory(client)}>
-                                        <History className="h-4 w-4 mr-2" /> Payment History
-                                      </DropdownMenuItem>
-                                    )}
-                                  </>
+                                {stripeEnabled && client.paymentStatus === "active" && (
+                                  <DropdownMenuItem onClick={() => handleOpenHistory(client)}>
+                                    <History className="h-4 w-4 mr-2" /> Payment History
+                                  </DropdownMenuItem>
                                 )}
                               </>
                             )}
@@ -2345,6 +2389,7 @@ export default function Clients() {
                           )}
                         </>
                       )}
+                      {workflowProgress(client)}
                     </CardContent>
                   </Card>
                 );
@@ -2483,6 +2528,7 @@ export default function Clients() {
                 {contactPreferenceBadge(client) && (
                   <div className="mt-2">{contactPreferenceBadge(client)}</div>
                 )}
+                {workflowProgress(client)}
                 {showArchivedState && ((client as any).archiveCategory || (client as any).archiveReason) && (
                   <div className="mt-2 p-2 bg-slate-50 rounded border border-slate-200">
                     {(client as any).archiveCategory && (

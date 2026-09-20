@@ -1948,6 +1948,7 @@ export async function registerRoutes(
     let claimedAttemptKey: string | null = null;
     let claimedClaimId: string | null = null;
     let providerAcceptedSend = false;
+    let priorRegistrationEmailSentAt: Date | null = null;
     try {
       if (!req.tenant?.registrationFormEnabled) {
         return res.status(400).json({ error: "Registration forms are disabled for this practice" });
@@ -1972,6 +1973,7 @@ export async function registerRoutes(
       if (!client) return res.status(404).json({ error: "Client not found" });
       if (client.tenantId !== req.tenant.id) return res.status(403).json({ error: "Access denied" });
       if (!client.email) return res.status(400).json({ error: "This client has no email address" });
+      priorRegistrationEmailSentAt = client.registrationEmailSentAt;
       if (!client.assignedClinicianId || !client.assignedSlotId) {
         return res.status(400).json({ error: "Registration can only be sent to an allocated client" });
       }
@@ -2008,6 +2010,8 @@ export async function registerRoutes(
         registrationEmailClaimId: claimId,
         registrationEmailSendingAt: new Date(),
         registrationEmailSentAt: null,
+        registrationEmailFailedAt: null,
+        registrationEmailFailureReason: null,
         updatedAt: new Date(),
       }).where(and(
         eq(clients.id, client.id),
@@ -2075,6 +2079,10 @@ export async function registerRoutes(
       if (!delivery.success) {
         await db.update(clients).set({
           registrationEmailSendingAt: null,
+          registrationEmailFailedAt: new Date(),
+          registrationEmailFailureReason: delivery.outcome === "rejected"
+            ? "The email provider rejected the registration message."
+            : "Delivery could not be confirmed.",
           // Explicit provider rejection is safe to retry as a new attempt.
           // Unknown transport outcome retains the provider key for deduplication.
           registrationEmailAttemptKey: delivery.outcome === "rejected" ? null : effectiveAttemptKey,
@@ -2096,6 +2104,8 @@ export async function registerRoutes(
       const completedSend = await db.update(clients).set({
         registrationEmailSentAt: new Date(),
         registrationEmailSendingAt: null,
+        registrationEmailFailedAt: null,
+        registrationEmailFailureReason: null,
         registrationEmailClaimId: null,
         registrationEmailPendingToken: null,
         registrationToken: token,
@@ -2121,22 +2131,30 @@ export async function registerRoutes(
       return res.json({ success: true, resent: !!client.registrationEmailSentAt });
     } catch (error) {
       if (claimedAttemptKey && claimedClaimId) {
-        await db.update(clients).set({
-          registrationEmailSendingAt: null,
-          // Once the provider accepted the message, preserve its stable key so
-          // an ambiguous retry is deduplicated by Resend.
-          registrationEmailAttemptKey: providerAcceptedSend ? claimedAttemptKey : null,
-          registrationEmailClaimId: null,
-          ...(!providerAcceptedSend ? {
-            registrationEmailSentAt: client.registrationEmailSentAt,
-            registrationEmailPendingToken: null,
-          } : {}),
-          updatedAt: new Date(),
-        }).where(and(
-          eq(clients.id, req.params.clientId),
-          eq(clients.registrationEmailAttemptKey, claimedAttemptKey),
-          eq(clients.registrationEmailClaimId, claimedClaimId),
-        )).catch(cleanupError => console.error("Failed to release registration email claim:", cleanupError));
+        try {
+          await db.update(clients).set({
+            registrationEmailSendingAt: null,
+            registrationEmailFailedAt: new Date(),
+            registrationEmailFailureReason: providerAcceptedSend
+              ? "Delivery was accepted but the workflow could not finish. Retry safely."
+              : "Registration delivery failed before provider acceptance.",
+            // Once the provider accepted the message, preserve its stable key so
+            // an ambiguous retry is deduplicated by Resend.
+            registrationEmailAttemptKey: providerAcceptedSend ? claimedAttemptKey : null,
+            registrationEmailClaimId: null,
+            ...(!providerAcceptedSend ? {
+              registrationEmailSentAt: priorRegistrationEmailSentAt,
+              registrationEmailPendingToken: null,
+            } : {}),
+            updatedAt: new Date(),
+          }).where(and(
+            eq(clients.id, req.params.clientId),
+            eq(clients.registrationEmailAttemptKey, claimedAttemptKey),
+            eq(clients.registrationEmailClaimId, claimedClaimId),
+          ));
+        } catch (cleanupError) {
+          console.error("Failed to release registration email claim:", cleanupError);
+        }
       }
       console.error("Failed to send registration:", error);
       return res.status(500).json({ error: "Failed to send registration" });
@@ -3059,6 +3077,16 @@ export async function registerRoutes(
         if (!session) {
           // Keep the durable attempt key so an ambiguous provider failure can be
           // retried safely with the same Stripe idempotency keys.
+          await db.update(clients).set({
+            registrationPaymentFailedAt: new Date(),
+            registrationPaymentFailureReason: "Automatic payment setup could not be completed.",
+            updatedAt: new Date(),
+          }).where(and(
+            eq(clients.id, client.id),
+            eq(clients.status, "RegistrationPending"),
+            eq(clients.registrationPaymentAttemptKey, paymentAttemptKey),
+            isNull(clients.stripeCheckoutUrl),
+          ));
           return res.status(502).json({ error: "Payment setup is unavailable. Please try again or contact the practice." });
         }
 
@@ -3066,6 +3094,8 @@ export async function registerRoutes(
           stripeCheckoutUrl: session.url,
           stripePaymentLinkId: session.paymentLinkId,
           paymentStatus: "setup_pending",
+          registrationPaymentFailedAt: null,
+          registrationPaymentFailureReason: null,
           updatedAt: new Date(),
         }).where(and(
           eq(clients.id, client.id),

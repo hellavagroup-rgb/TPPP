@@ -92,6 +92,8 @@
     "zod-validation-error": "^3.4.0"
   },
   "devDependencies": {
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
     "@replit/vite-plugin-cartographer": "^0.4.4",
     "@replit/vite-plugin-dev-banner": "^0.1.1",
     "@replit/vite-plugin-runtime-error-modal": "^0.0.4",
@@ -109,6 +111,7 @@
     "autoprefixer": "^10.4.21",
     "drizzle-kit": "^0.31.10",
     "esbuild": "^0.25.12",
+    "jsdom": "^29.1.1",
     "postcss": "^8.5.28",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.23.13",

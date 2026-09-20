@@ -610,6 +610,32 @@ describe("registration journey HTTP routes", () => {
     expect(h.state.emails).toHaveLength(1);
     expect(h.state.emails[0].html).toContain("Option 1:");
     expect(h.state.emails[0].html).not.toContain("Option 2:");
+
+    const stalePortal = await request("/api/public/options/stale-token-1");
+    expect(stalePortal.status).toBe(410);
+    expect(stalePortal.body.error).toMatch(/no longer active/i);
+
+    const currentPortal = await request(`/api/public/options/${currentOption?.selectionToken}`);
+    expect(currentPortal.status).toBe(200);
+    expect(currentPortal.body.options).toHaveLength(1);
+    expect(currentPortal.body.options[0].id).toBe(currentOption?.id);
+  });
+
+  it("does not let a stale token select from a newer option generation", async () => {
+    h.state.client.status = "OptionsSent";
+    h.state.options = [
+      { ...h.state.options[0], id: "stale-option", selectionToken: "stale-token", status: "unavailable" },
+      { ...h.state.options[0], id: "current-option", selectionToken: "current-token", status: "pending" },
+    ];
+
+    const response = await request("/api/public/options/stale-token/select", {
+      method: "POST",
+      body: JSON.stringify({ clinicianOptionId: "current-option" }),
+    });
+
+    expect(response.status).toBe(410);
+    expect(response.body.error).toMatch(/no longer active/i);
+    expect(h.state.options.find(option => option.id === "current-option")?.status).toBe("pending");
   });
 
   it("automatically delivers registration after option selection exactly once", async () => {

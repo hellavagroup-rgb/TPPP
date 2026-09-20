@@ -918,10 +918,10 @@ export class DatabaseStorage implements IStorage {
             ));
         }
 
-        await tx.update(clientClinicianOptions).set({ status: "declined" }).where(and(
+        await tx.update(clientClinicianOptions).set({ status: "unavailable" }).where(and(
           eq(clientClinicianOptions.clientId, id),
           eq(clientClinicianOptions.tenantId, tenantId),
-          eq(clientClinicianOptions.status, "pending"),
+          inArray(clientClinicianOptions.status, ["pending", "selected"]),
         ));
 
         const [client] = await tx.update(clients).set({

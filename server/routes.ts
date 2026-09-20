@@ -1829,7 +1829,7 @@ export async function registerRoutes(
         await tx.update(clientClinicianOptions).set({ status: "unavailable" }).where(and(
           eq(clientClinicianOptions.clientId, req.params.clientId),
           eq(clientClinicianOptions.tenantId, req.tenant!.id),
-          eq(clientClinicianOptions.status, "pending"),
+          inArray(clientClinicianOptions.status, ["pending", "selected"]),
         ));
         await tx.insert(clientClinicianOptions).values(options as any);
       });
@@ -2439,10 +2439,17 @@ export async function registerRoutes(
       const client = await storage.getClientById(optionRow.clientId);
       if (!client) return res.status(404).json({ error: "Client not found" });
       if (client.tenantId !== optionRow.tenantId) return res.status(404).json({ error: "Options not found" });
+      const isCurrentOffer = optionRow.status === "pending" && client.status === "OptionsSent";
+      const isCompletedOffer = optionRow.status === "selected"
+        && ["OptionSelected", "RegistrationPending", "BookingConfirmed", "Scheduled"].includes(client.status);
+      if (!isCurrentOffer && !isCompletedOffer) {
+        return res.status(410).json({ error: "This options link is no longer active" });
+      }
 
       const tenant = await storage.getTenantById(optionRow.tenantId).catch(() => undefined);
       const allOptions = (await storage.getClientClinicianOptions(optionRow.clientId))
-        .filter(opt => opt.tenantId === optionRow.tenantId);
+        .filter(opt => opt.tenantId === optionRow.tenantId
+          && opt.status === (isCurrentOffer ? "pending" : "selected"));
 
       const optionsWithDetails = await Promise.all(
         allOptions.map(async (opt) => {
@@ -2491,6 +2498,9 @@ export async function registerRoutes(
       const client = await storage.getClientById(optionRow.clientId);
       if (!client) return res.status(404).json({ error: "Client not found" });
       if (client.tenantId !== optionRow.tenantId) return res.status(404).json({ error: "Options not found" });
+      if (optionRow.status === "declined" || optionRow.status === "unavailable") {
+        return res.status(410).json({ error: "This options link is no longer active" });
+      }
 
       // A retry of the successful choice is safe and returns the same progression.
       if (client.status !== "OptionsSent") {
@@ -2509,9 +2519,12 @@ export async function registerRoutes(
         }
         return res.status(409).json({ error: "Selection has already been submitted" });
       }
+      if (optionRow.status !== "pending") {
+        return res.status(410).json({ error: "This options link is no longer active" });
+      }
 
       const allOptions = (await storage.getClientClinicianOptions(optionRow.clientId))
-        .filter(opt => opt.tenantId === optionRow.tenantId);
+        .filter(opt => opt.tenantId === optionRow.tenantId && opt.status === "pending");
 
       // Guard against replayed tokens when all options are already resolved
       const alreadyActioned = allOptions.every(o => o.status !== "pending");

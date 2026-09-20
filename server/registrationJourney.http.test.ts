@@ -22,6 +22,8 @@ const h = vi.hoisted(() => {
     emailResult: { success: true, outcome: "accepted" } as any,
     emailThrows: false,
     paymentResult: { url: "https://pay.test/session", paymentLinkId: "plink_1" } as any,
+    checkoutSession: null as any,
+    checkoutError: null as any,
     preventCheckoutSave: false,
   };
   let transactionTail: Promise<void> = Promise.resolve();
@@ -222,6 +224,14 @@ vi.mock("./stripe", () => ({
     paymentLinks: {
       retrieve: vi.fn(async () => ({ active: h.state.stripeLinkActive })),
     },
+    checkout: {
+      sessions: {
+        retrieve: vi.fn(async () => {
+          if (h.state.checkoutError) throw h.state.checkoutError;
+          return h.state.checkoutSession;
+        }),
+      },
+    },
   })),
   createPaymentLink: vi.fn(async (input: any) => {
     h.state.paymentLinks.push(input);
@@ -339,6 +349,8 @@ function resetState(overrides: { client?: any; tenant?: any } = {}) {
   h.state.emailResult = { success: true, outcome: "accepted" };
   h.state.emailThrows = false;
   h.state.paymentResult = { url: "https://pay.test/session", paymentLinkId: "plink_1" };
+  h.state.checkoutSession = null;
+  h.state.checkoutError = null;
   h.state.preventCheckoutSave = false;
   vi.clearAllMocks();
 }
@@ -361,6 +373,105 @@ afterEach(async () => {
 });
 
 describe("registration journey HTTP routes", () => {
+  function checkoutSession(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "cs_test_return",
+      payment_status: "paid",
+      status: "complete",
+      expires_at: Math.floor(Date.now() / 1000) + 3600,
+      payment_link: "plink_current",
+      metadata: {
+        tenantId: "tenant-a",
+        clientId: "client-a",
+        registrationAttemptKey: "attempt-current",
+      },
+      ...overrides,
+    };
+  }
+
+  it("reports a registration payment as processing until the webhook advances durable state", async () => {
+    resetState({ client: {
+      status: "RegistrationPending",
+      registrationPaymentAttemptKey: "attempt-current",
+      stripePaymentLinkId: "plink_current",
+    } });
+    h.state.checkoutSession = checkoutSession();
+
+    const response = await request("/api/public/payment-return?session_id=cs_test_return");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      status: "processing",
+      practice: { name: "Practice A", primaryColor: "#123456" },
+    });
+    expect(h.state.client.status).toBe("RegistrationPending");
+    expect(h.state.activities).toHaveLength(0);
+    expect(h.state.emails).toHaveLength(0);
+  });
+
+  it("reports confirmed only after a registration workflow reaches its final state", async () => {
+    resetState({ client: {
+      status: "BookingConfirmed",
+      registrationPaymentAttemptKey: "attempt-current",
+      stripePaymentLinkId: "plink_current",
+    } });
+    h.state.checkoutSession = checkoutSession();
+
+    const first = await request("/api/public/payment-return?session_id=cs_test_return");
+    const refresh = await request("/api/public/payment-return?session_id=cs_test_return");
+
+    expect(first.body.status).toBe("confirmed");
+    expect(refresh.body.status).toBe("confirmed");
+    expect(h.state.activities).toHaveLength(0);
+    expect(h.state.emails).toHaveLength(0);
+  });
+
+  it("reports an ordinary paid link without claiming booking confirmation", async () => {
+    resetState({ client: {
+      status: "AwaitingConfirmation",
+      registrationPaymentAttemptKey: null,
+      stripePaymentLinkId: "plink_current",
+    } });
+    h.state.checkoutSession = checkoutSession({
+      metadata: { tenantId: "tenant-a", clientId: "client-a" },
+    });
+
+    const response = await request("/api/public/payment-return?session_id=cs_test_return");
+
+    expect(response.body).toMatchObject({ status: "paid", practice: { name: "Practice A" } });
+    expect(response.body.status).not.toBe("confirmed");
+  });
+
+  it("returns generic states for unpaid, stale-link, and cross-tenant sessions", async () => {
+    resetState({ client: {
+      status: "RegistrationPending",
+      registrationPaymentAttemptKey: "attempt-current",
+      stripePaymentLinkId: "plink_current",
+    } });
+    h.state.checkoutSession = checkoutSession({ payment_status: "unpaid", status: "open" });
+    expect((await request("/api/public/payment-return?session_id=cs_test_return")).body.status).toBe("incomplete");
+
+    h.state.checkoutSession = checkoutSession({ payment_link: "plink_stale" });
+    expect((await request("/api/public/payment-return?session_id=cs_test_return")).body).toEqual({ status: "invalid" });
+
+    h.state.checkoutSession = checkoutSession({
+      metadata: {
+        tenantId: "tenant-b",
+        clientId: "client-a",
+        registrationAttemptKey: "attempt-current",
+      },
+    });
+    expect((await request("/api/public/payment-return?session_id=cs_test_return")).body).toEqual({ status: "invalid" });
+  });
+
+  it("returns a generic failure when Stripe verification is unavailable", async () => {
+    h.state.checkoutError = Object.assign(new Error("Stripe unavailable"), { code: "api_connection_error" });
+
+    const response = await request("/api/public/payment-return?session_id=cs_test_return");
+
+    expect(response.body).toEqual({ status: "failed" });
+  });
+
   function configureRegistrationTemplate(fields: any[] = [{ id: "address", label: "Address", required: true }]) {
     h.state.tenant.registrationFormTemplateId = "registration-form-a";
     h.state.registrationTemplate = {

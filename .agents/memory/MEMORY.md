@@ -22,3 +22,4 @@
 - [Automatic payment link workflow](automatic-payment-links.md) — new-workflow payment links are created automatically; admins do not need an early manual action.
 - [Confirmation state and slot retirement](confirmation-state-slot-retirement.md) — BookingConfirmed is feature-gated; confirmation retires availability but preserves a booking snapshot.
 - [Drizzle query builders are not Promises](drizzle-query-builder-await.md) — await builders inside try/catch; do not chain Promise.catch directly on them.
+- [Payment return pages are read-only observers](payment-return-observer.md) — a Stripe redirect never confirms a booking; only verified webhooks may advance durable state.

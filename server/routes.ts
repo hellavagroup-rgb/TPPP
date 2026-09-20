@@ -13,6 +13,7 @@ import {
   insertFormTemplateSchema, insertTaskSchema, insertUserSchema,
   type InsertFormTemplate
 } from "@shared/schema";
+import { classifyPaymentReturn, type PaymentReturnResult } from "./paymentReturn";
 import { z } from "zod";
 import { sendEmail, buildFromAddress, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateFormCompletedNotificationEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail, generateClinicianWelcomeEmail, generateAdminInviteEmail, generateAllocationOptionsEmail, generateBookingConfirmedEmail, generateZoomLinkEmail, generateRegistrationInviteEmail, getFormCompletionPageContent, GENERIC_PRACTICE_NAME } from "./email";
 import { forceReseedDatabase } from "./seed";
@@ -5349,6 +5350,106 @@ export async function registerRoutes(
       return res.status(200).json(result);
     } catch {
       return res.status(500).json({ error: "Automatic payment setup could not be retried." });
+    }
+  });
+
+  // Read-only return check for Stripe-hosted registration checkout. Reaching the
+  // redirect URL never advances workflow state; only the verified webhook does.
+  app.get("/api/public/payment-return", async (req, res) => {
+    const sessionId = typeof req.query.session_id === "string" ? req.query.session_id.trim() : "";
+    const generic = (status: PaymentReturnResult["status"]) => res.json({ status } satisfies PaymentReturnResult);
+    if (!/^cs_(?:test_|live_)?[A-Za-z0-9_]+$/.test(sessionId) || sessionId.length > 255) {
+      return generic("invalid");
+    }
+
+    try {
+      const tenantQuery = db.select({
+        id: tenants.id,
+        name: tenants.name,
+        logoUrl: tenants.logoUrl,
+        primaryColor: tenants.primaryColor,
+        stripeSecretKey: tenants.stripeSecretKey,
+      }).from(tenants);
+      const globalStripe = !!process.env.STRIPE_SECRET_KEY;
+      const candidates = globalStripe
+        ? await tenantQuery
+        : await tenantQuery.where(isNotNull(tenants.stripeSecretKey));
+
+      let verifiedSession: any = null;
+      let providerTenantId: string | null = null;
+      let providerFailed = false;
+      const lookupCandidates = globalStripe
+        ? [{ id: null, stripeSecretKey: null }]
+        : candidates;
+
+      for (const candidate of lookupCandidates) {
+        let key: string | null = null;
+        if (!globalStripe && candidate.stripeSecretKey) {
+          try {
+            key = decryptSecret(candidate.stripeSecretKey);
+          } catch {
+            continue;
+          }
+        }
+        const stripe = getStripeInstance(key);
+        if (!stripe) continue;
+        try {
+          verifiedSession = await stripe.checkout.sessions.retrieve(sessionId);
+          providerTenantId = candidate.id;
+          break;
+        } catch (error: any) {
+          if (error?.code !== "resource_missing") providerFailed = true;
+        }
+      }
+
+      if (!verifiedSession) return generic(providerFailed ? "failed" : "invalid");
+      const metadataTenantId = verifiedSession.metadata?.tenantId || null;
+      if (!metadataTenantId || (!globalStripe && providerTenantId !== metadataTenantId)) {
+        return generic("invalid");
+      }
+
+      const tenant = candidates.find(candidate => candidate.id === metadataTenantId);
+      if (!tenant) return generic("invalid");
+      const metadataClientId = verifiedSession.metadata?.clientId || null;
+      if (!metadataClientId) return generic("invalid");
+      const client = await db.select({
+        id: clients.id,
+        tenantId: clients.tenantId,
+        status: clients.status,
+        registrationPaymentAttemptKey: clients.registrationPaymentAttemptKey,
+        stripePaymentLinkId: clients.stripePaymentLinkId,
+      }).from(clients).where(and(
+        eq(clients.id, metadataClientId),
+        eq(clients.tenantId, metadataTenantId),
+      )).limit(1).then(rows => rows[0] || null);
+
+      const paymentLinkId = typeof verifiedSession.payment_link === "string"
+        ? verifiedSession.payment_link
+        : verifiedSession.payment_link?.id;
+      const status = classifyPaymentReturn({
+        session: {
+          paymentStatus: verifiedSession.payment_status,
+          checkoutStatus: verifiedSession.status,
+          expiresAt: verifiedSession.expires_at,
+          metadataTenantId,
+          metadataClientId,
+          metadataAttemptKey: verifiedSession.metadata?.registrationAttemptKey,
+          paymentLinkId,
+        },
+        client,
+      });
+      if (status === "invalid") return generic("invalid");
+      return res.json({
+        status,
+        practice: {
+          name: tenant.name,
+          logoUrl: tenant.logoUrl,
+          primaryColor: tenant.primaryColor,
+        },
+      } satisfies PaymentReturnResult);
+    } catch (error) {
+      console.error("Payment return verification failed:", error);
+      return generic("failed");
     }
   });
 

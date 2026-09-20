@@ -5,6 +5,7 @@ import {
   createLatestRequestGuard,
   findAvailabilityInSubmissions,
   findSessionFormatPreference,
+  formatSessionFormatPreference,
   getSessionFormatMismatch,
   getSlotUnavailableReason,
   normalizeAvailabilityValue,
@@ -35,6 +36,15 @@ describe("allocation availability", () => {
     expect(findSessionFormatPreference(sessionSubmission("Online", ["Remote", "In-person"]))).toBeNull();
     expect(findSessionFormatPreference([{ formFields: [], responses: {} }])).toBeNull();
     expect(findSessionFormatPreference(null)).toBeNull();
+  });
+
+  it.each([
+    ["online", "Online"],
+    ["in_person", "In-person"],
+    ["both", "Both"],
+    [null, null],
+  ] as const)("formats the recognized session preference %j without inventing missing values", (preference, expected) => {
+    expect(formatSessionFormatPreference(preference)).toBe(expected);
   });
 
   it("detects both mismatch directions while allowing matching, both, and missing preferences", () => {

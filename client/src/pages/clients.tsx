@@ -96,6 +96,7 @@ import {
   canCommitSlotSelection,
   createLatestRequestGuard,
   findSessionFormatPreference,
+  formatSessionFormatPreference,
   getSessionFormatMismatch,
   getSlotUnavailableReason,
   rankSlotsByAvailability,
@@ -2754,6 +2755,15 @@ export default function Clients() {
             </div>
             
             <div className="space-y-4">
+              {formatSessionFormatPreference(sessionFormatPreference) && (
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="font-medium text-muted-foreground">Session preference:</span>
+                  <Badge variant="outline" data-testid="allocation-session-preference">
+                    {formatSessionFormatPreference(sessionFormatPreference)}
+                  </Badge>
+                </div>
+              )}
+
               {clientAvailabilityForAllocation.status === "available" ? (
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
                   <p className="text-xs font-medium text-blue-800 mb-2">Client's Stated Availability:</p>

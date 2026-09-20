@@ -20,6 +20,13 @@ export type NormalizedAvailability =
 export type SessionFormat = "online" | "in_person";
 export type SessionFormatPreference = SessionFormat | "both" | null;
 
+export function formatSessionFormatPreference(preference: SessionFormatPreference): string | null {
+  if (preference === "online") return "Online";
+  if (preference === "in_person") return "In-person";
+  if (preference === "both") return "Both";
+  return null;
+}
+
 type FormField = {
   id?: unknown;
   name?: unknown;

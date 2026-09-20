@@ -1638,6 +1638,24 @@ export async function registerRoutes(
 
       if (!req.tenant?.id) return res.status(403).json({ error: "Access denied" });
 
+      const [requestedSlot] = await db.select().from(timeSlots).where(and(
+        eq(timeSlots.id, slotId),
+        eq(timeSlots.tenantId, req.tenant.id),
+      )).limit(1);
+      const [requestedClinician] = await db.select().from(clinicians).where(and(
+        eq(clinicians.id, clinicianId),
+        eq(clinicians.tenantId, req.tenant.id),
+      )).limit(1);
+      if (
+        requestedSlot
+        && requestedClinician
+        && req.tenant.zoomLinkEmailEnabled === true
+        && onlineBookingNeedsZoomLink(requestedSlot.locationType)
+        && !isValidZoomLink(requestedClinician.zoomLink)
+      ) {
+        return res.status(409).json({ error: "A valid Zoom link is required before this online slot can be assigned." });
+      }
+
       const updated = await storage.assignClinicianToClient(
         req.params.clientId,
         clinicianId,
@@ -1747,6 +1765,15 @@ export async function registerRoutes(
         if (!slot) return res.status(400).json({ error: `Slot ${sel.slotId} not found` });
         if (slot.retiredAt) return res.status(409).json({ error: `Slot ${sel.slotId} has been retired and is no longer available` });
         if (slot.isBooked) return res.status(400).json({ error: `Slot ${sel.slotId} is already booked` });
+        if (slot.type === "Vacation") return res.status(409).json({ error: `Slot ${sel.slotId} is not available for appointments` });
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        if (slot.startDate && new Date(`${slot.startDate}T00:00:00`) > today) {
+          return res.status(409).json({ error: `Slot ${sel.slotId} is not yet available` });
+        }
+        if (slot.endDate && new Date(`${slot.endDate}T00:00:00`) < today) {
+          return res.status(409).json({ error: `Slot ${sel.slotId} is no longer available` });
+        }
         if (slot.clinicianId !== sel.clinicianId) {
           return res.status(400).json({ error: `Slot ${sel.slotId} does not belong to clinician ${sel.clinicianId}` });
         }

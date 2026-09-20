@@ -91,6 +91,14 @@ import {
 } from "@shared/clientWorkflow";
 import { paymentProgress, registrationProgress } from "@shared/clientProgress";
 import { invalidateOperationalData, useOperationalRefresh } from "@/lib/operationalRefresh";
+import {
+  findAvailabilityInSubmissions,
+  getSlotUnavailableReason,
+  rankSlotsByAvailability,
+  slotMatchesAvailability,
+  WEEKDAYS,
+  type NormalizedAvailability,
+} from "@/lib/availability-utils";
 
 function mutationErrorMessage(error: Error, fallback: string): string {
   const jsonStart = error.message.indexOf("{");
@@ -439,6 +447,7 @@ export default function Clients() {
   const [previewForm, setPreviewForm] = useState<FormTemplate | null>(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [showAllClinicians, setShowAllClinicians] = useState(false);
+  const [showUnavailableSlots, setShowUnavailableSlots] = useState(false);
 
   // Fill by Phone State
   const [isPhoneFillOpen, setIsPhoneFillOpen] = useState(false);
@@ -1465,113 +1474,34 @@ export default function Clients() {
       return hasSpace && acceptsInsurer;
   };
 
-  // Helper to check if a clinician slot overlaps with client availability
-  // Client picks hourly blocks (e.g., "09:00" = available 9am-10am)
-  // Slot matches if its start time falls within that hour
-  const doesSlotMatchClientAvailability = (slot: any, clientAvailability: Record<string, string[]> | null) => {
-    if (!clientAvailability || Object.keys(clientAvailability).length === 0) {
-      return null; // No availability data - can't determine match
-    }
-
-    // Get the day of the slot - use slot.day for recurring, or derive from date for specific-date slots
-    let slotDay = slot.day;
-    if (!slotDay && slot.date) {
-      // Derive day from date for specific-date slots
-      const dayIndex = parseISO(slot.date).getDay();
-      const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-      slotDay = dayNames[dayIndex];
-    }
-    
-    if (!slotDay) return null; // Can't determine day
-    
-    const clientDaySlots = clientAvailability[slotDay];
-    
-    if (!clientDaySlots || clientDaySlots.length === 0) {
-      return false; // Client not available on this day
-    }
-
-    // Parse slot start time (e.g., "09:15" -> 9)
-    const [slotHour] = slot.startTime.split(":").map(Number);
-    
-    // Check if any client hour block contains this slot
-    // Client hour "09:00" means available 9:00-9:59
-    return clientDaySlots.some(clientHour => {
-      const [clientHourNum] = clientHour.split(":").map(Number);
-      return slotHour === clientHourNum;
-    });
-  };
-
   // State to store client availability for allocation
-  const [clientAvailabilityForAllocation, setClientAvailabilityForAllocation] = useState<Record<string, string[]> | null>(null);
+  const [clientAvailabilityForAllocation, setClientAvailabilityForAllocation] = useState<NormalizedAvailability>({
+    status: "missing", selections: null, windows: null,
+  });
 
   // Fetch client availability when allocation dialog opens
   const fetchClientAvailability = async (clientId: string) => {
+    setClientAvailabilityForAllocation({ status: "missing", selections: null, windows: null });
     try {
       const response = await apiRequest("GET", `/api/clients/${clientId}/submissions`);
       if (response.ok) {
-        const submissions = await response.json();
-        const dayNames = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-        
-        // Find availability field in any submission
-        // Availability data format: { Monday: ["09:00", "10:00"], Tuesday: ["14:00"] }
-        for (const submission of submissions) {
-          const responses = submission.responses || {};
-          for (const [fieldId, value] of Object.entries(responses)) {
-            // Check if this looks like availability data
-            if (value && typeof value === 'object' && !Array.isArray(value)) {
-              const keys = Object.keys(value as object);
-              // Must have at least one day key AND values must be arrays of time strings
-              const hasDayKeys = keys.some(k => dayNames.includes(k));
-              if (hasDayKeys) {
-                const valObj = value as Record<string, any>;
-                // Validate that values are arrays of time strings (e.g., "09:00")
-                const isValidFormat = keys.every(k => {
-                  if (!dayNames.includes(k)) return true; // ignore non-day keys
-                  const arr = valObj[k];
-                  return Array.isArray(arr) && arr.every((t: any) => 
-                    typeof t === 'string' && /^\d{2}:\d{2}$/.test(t)
-                  );
-                });
-                if (isValidFormat) {
-                  setClientAvailabilityForAllocation(valObj as Record<string, string[]>);
-                  return;
-                }
-              }
-            }
-          }
-        }
+        setClientAvailabilityForAllocation(findAvailabilityInSubmissions(await response.json()));
+        return;
       }
-      setClientAvailabilityForAllocation(null);
+      setClientAvailabilityForAllocation({ status: "missing", selections: null, windows: null });
     } catch {
-      setClientAvailabilityForAllocation(null);
+      setClientAvailabilityForAllocation({ status: "missing", selections: null, windows: null });
     }
   };
 
   // Calculate how many slots match client availability for ranking
-  const countMatchingSlots = (clinician: ClinicianWithAvailability, clientAvail: Record<string, string[]> | null): number => {
-    if (!clientAvail || Object.keys(clientAvail).length === 0) return 0;
+  const countMatchingSlots = (clinician: ClinicianWithAvailability, clientAvail: NormalizedAvailability): number => {
+    if (clientAvail.status !== "available") return 0;
     if (!clinician.availability) return 0;
-    
-    let matchCount = 0;
-    clinician.availability.forEach(slot => {
-      if (slot.type === "Vacation" || slot.isBooked || !isSlotActive(slot)) return;
-      const day = slot.day || "";
-      const clientSlots = clientAvail[day] || [];
-      if (clientSlots.length === 0) return;
-      
-      // Check if any client slot overlaps with clinician slot
-      const slotStart = parseInt(slot.startTime?.split(":")[0] || "0");
-      const slotEnd = parseInt(slot.endTime?.split(":")[0] || "0");
-      
-      for (const cs of clientSlots) {
-        const clientHour = parseInt(cs.split(":")[0]);
-        if (clientHour >= slotStart && clientHour < slotEnd) {
-          matchCount++;
-          break;
-        }
-      }
-    });
-    return matchCount;
+    return clinician.availability.filter(slot =>
+      slot.type !== "Vacation" && !slot.isBooked && isSlotActive(slot)
+      && !isSlotPending(slot) && slotMatchesAvailability(slot, clientAvail) === true
+    ).length;
   };
 
   const getCliniciansForAllocation = (client: ClientType) => {
@@ -2717,7 +2647,7 @@ export default function Clients() {
       )}
 
       {/* Allocate Dialog (from Kanban board) */}
-      <Dialog open={isAllocateDialogOpen} onOpenChange={(open) => { setIsAllocateDialogOpen(open); if (!open) { setIsManualAllocation(false); setAllocationReason(""); setSelectedOptions([]); } }}>
+      <Dialog open={isAllocateDialogOpen} onOpenChange={(open) => { setIsAllocateDialogOpen(open); if (!open) { setIsManualAllocation(false); setAllocationReason(""); setSelectedOptions([]); setShowUnavailableSlots(false); } }}>
         <DialogContent className="sm:max-w-[600px] max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{multiClinicianAllocationEnabled ? "Send Clinician Options" : "Allocate Clinician Slot"}</DialogTitle>
@@ -2773,33 +2703,42 @@ export default function Clients() {
             </div>
             
             <div className="space-y-4">
-              {clientAvailabilityForAllocation && Object.keys(clientAvailabilityForAllocation).length > 0 && (
+              {clientAvailabilityForAllocation.status === "available" ? (
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
                   <p className="text-xs font-medium text-blue-800 mb-2">Client's Stated Availability:</p>
                   <div className="flex flex-wrap gap-1">
-                    {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map(day => {
-                      const slots = clientAvailabilityForAllocation[day];
+                    {WEEKDAYS.map(day => {
+                      const slots = clientAvailabilityForAllocation.selections[day];
                       if (!slots || slots.length === 0) return null;
-                      const hourLabels = slots.map(s => {
-                        const h = parseInt(s.split(":")[0]);
-                        return h < 12 ? `${h}am` : h === 12 ? "12pm" : `${h - 12}pm`;
-                      }).join(", ");
                       return (
                         <span key={day} className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-[10px]">
-                          {day.slice(0, 3)}: {hourLabels}
+                          {day.slice(0, 3)}: {slots.join(", ")}
                         </span>
                       );
                     })}
                   </div>
-                  <p className="text-[10px] text-blue-600 mt-2">Slots with green "Match" badges align with client availability</p>
+                  <p className="text-[10px] text-blue-600 mt-2">A match means the full appointment fits within a selected time.</p>
+                </div>
+              ) : (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800">
+                  <span className="font-medium">Availability unavailable for matching.</span>{" "}
+                  {clientAvailabilityForAllocation.status === "malformed"
+                    ? "The saved answer is historic or malformed. Slots remain selectable but cannot be ranked as matches."
+                    : "No saved availability answer was found. Slots remain selectable but cannot be ranked as matches."}
                 </div>
               )}
 
               <div className="flex items-center justify-between">
                 <p className="text-sm font-medium text-muted-foreground">AVAILABLE SLOTS</p>
-                <div className="flex items-center gap-2">
-                  <Label htmlFor="override-mode-allocate" className="text-xs text-muted-foreground cursor-pointer">Admin Override</Label>
-                  <Switch id="override-mode-allocate" checked={showAllClinicians} onCheckedChange={setShowAllClinicians} />
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="show-unavailable-allocate" className="text-xs text-muted-foreground cursor-pointer">Show unavailable</Label>
+                    <Switch id="show-unavailable-allocate" checked={showUnavailableSlots} onCheckedChange={setShowUnavailableSlots} />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="override-mode-allocate" className="text-xs text-muted-foreground cursor-pointer">Admin Override</Label>
+                    <Switch id="override-mode-allocate" checked={showAllClinicians} onCheckedChange={setShowAllClinicians} />
+                  </div>
                 </div>
               </div>
               
@@ -2871,21 +2810,43 @@ export default function Clients() {
                     </div>
                     
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pl-8">
-                      {getActiveSlots(clinician.availability).map(slot => {
+                      {rankSlotsByAvailability(
+                        getActiveSlots(clinician.availability),
+                        clientAvailabilityForAllocation,
+                        slot => getSlotUnavailableReason({
+                          isBooked: slot.isBooked,
+                          isPending: isSlotPending(slot),
+                          hasClinicianCapacity: (clinician.maxNewClients ?? 0) > 0,
+                          adminOverride: showAllClinicians,
+                          zoomLinkRequired: zoomLinkEmailEnabled && slot.locationType === "online" && !isValidZoomLink(clinician.zoomLink),
+                        }),
+                      ).filter(slot => showUnavailableSlots || !getSlotUnavailableReason({
+                        isBooked: slot.isBooked,
+                        isPending: isSlotPending(slot),
+                        hasClinicianCapacity: (clinician.maxNewClients ?? 0) > 0,
+                        adminOverride: showAllClinicians,
+                        zoomLinkRequired: zoomLinkEmailEnabled && slot.locationType === "online" && !isValidZoomLink(clinician.zoomLink),
+                      })).map(slot => {
                         const isPending = isSlotPending(slot);
                         const pendingDate = getSlotPendingDate(slot);
-                        const availMatch = doesSlotMatchClientAvailability(slot, clientAvailabilityForAllocation);
-                        const slotIsMatch = availMatch === true && !slot.isBooked;
+                        const availMatch = slotMatchesAvailability(slot, clientAvailabilityForAllocation);
+                        const slotIsMatch = availMatch === true;
                         const noMatch = availMatch === false;
                         
                         const isSelectedForOptions = multiClinicianAllocationEnabled && selectedOptions.some(o => o.clinicianId === clinician.id && o.slotId === slot.id);
-                        // Disable booked slots always; also disable zero-capacity clinicians unless override is on
                         const missingZoomLink = zoomLinkEmailEnabled && (slot as any).locationType === "online" && !isValidZoomLink(clinician.zoomLink);
-                        const isSlotUnavailable = slot.isBooked || missingZoomLink || (!showAllClinicians && (clinician.maxNewClients ?? 0) === 0);
+                        const unavailableReason = getSlotUnavailableReason({
+                          isBooked: slot.isBooked,
+                          isPending,
+                          hasClinicianCapacity: (clinician.maxNewClients ?? 0) > 0,
+                          adminOverride: showAllClinicians,
+                          zoomLinkRequired: missingZoomLink,
+                        });
+                        const isSlotUnavailable = unavailableReason !== null;
                         return (
                           <Button 
                             key={slot.id}
-                            title={missingZoomLink ? `${clinician.name} needs a valid Zoom link before this online option can be sent.` : undefined}
+                            title={unavailableReason || undefined}
                             variant={isSelectedForOptions ? "default" : slot.isBooked ? "ghost" : "outline"}
                             disabled={!isSelectedForOptions && isSlotUnavailable}
                             className={`justify-start h-auto py-2 px-3 text-xs relative ${
@@ -2893,12 +2854,10 @@ export default function Clients() {
                                 ? "bg-primary text-primary-foreground border-primary ring-2 ring-primary/30"
                                 : isSlotUnavailable
                                 ? "opacity-50 cursor-not-allowed" 
-                                : isPending
-                                  ? "bg-amber-50 border-amber-300 hover:border-amber-400 hover:bg-amber-100"
-                                  : slotIsMatch 
+                                : slotIsMatch
                                     ? "border-emerald-400 bg-emerald-50 hover:border-emerald-500 hover:bg-emerald-100 ring-1 ring-emerald-200" 
                                     : noMatch 
-                                      ? "opacity-60 border-slate-200" 
+                                      ? "border-slate-300 bg-slate-50"
                                       : "hover:border-primary hover:bg-primary/5"
                             }`}
                             onClick={() => {
@@ -2922,19 +2881,18 @@ export default function Clients() {
                               }
                             }}
                           >
-                            {slotIsMatch && !isPending && <span className="absolute -top-1 -right-1 bg-emerald-500 text-white text-[8px] px-1 rounded">Match</span>}
-                            {isPending && <span className="absolute -top-1 -right-1 bg-amber-500 text-white text-[8px] px-1 rounded">Pending</span>}
-                            <CalendarCheck className={`h-3 w-3 mr-2 ${slotIsMatch && !isPending ? "text-emerald-600" : isPending ? "text-amber-600" : ""}`} />
+                            {slotIsMatch && !isSlotUnavailable && <span className="absolute -top-1 -right-1 bg-emerald-500 text-white text-[8px] px-1 rounded">Match</span>}
+                            <CalendarCheck className={`h-3 w-3 mr-2 ${slotIsMatch && !isSlotUnavailable ? "text-emerald-600" : ""}`} />
                             <div className="text-left">
-                              <div className={`font-medium ${slotIsMatch && !isPending ? "text-emerald-700" : isPending ? "text-amber-700" : ""}`}>
+                              <div className={`font-medium ${slotIsMatch && !isSlotUnavailable ? "text-emerald-700" : ""}`}>
                                 {slot.type === "SpecificDate" && slot.date
                                   ? format(parseISO(slot.date), "d MMM yyyy")
                                   : slot.day || format(parseISO(slot.date!), "EEE")}
                               </div>
-                              <div className={`text-[10px] ${slotIsMatch && !isPending ? "text-emerald-600" : isPending ? "text-amber-600" : "text-muted-foreground"}`}>
+                              <div className={`text-[10px] ${slotIsMatch && !isSlotUnavailable ? "text-emerald-600" : "text-muted-foreground"}`}>
                                 {slot.startTime} - {slot.endTime}
                                 {slot.type === "Recurring" && (
-                                  <span className={`ml-1 font-bold ${isPending ? "text-amber-700" : slotIsMatch ? "text-emerald-700" : "text-muted-foreground"}`}>
+                                  <span className={`ml-1 font-bold ${slotIsMatch && !isSlotUnavailable ? "text-emerald-700" : "text-muted-foreground"}`}>
                                     {(slot as any).frequency === "fortnightly" ? "F" : "W"}
                                   </span>
                                 )}
@@ -2946,13 +2904,30 @@ export default function Clients() {
                                   <span className="inline-block text-[8px] px-1 py-0 rounded-full bg-blue-100 text-blue-700 border border-blue-300 leading-tight">Online</span>
                                 )}
                               </div>
-                              {isPending && pendingDate && (
-                                <div className="text-[9px] text-amber-600">Available from {pendingDate}</div>
+                              {unavailableReason && (
+                                <div className="text-[9px] font-medium text-destructive">
+                                  {unavailableReason}{unavailableReason === "Not yet available" && pendingDate ? ` · from ${pendingDate}` : ""}
+                                </div>
+                              )}
+                              {!unavailableReason && noMatch && (
+                                <div className="text-[9px] text-slate-600">Outside stated availability</div>
                               )}
                             </div>
                           </Button>
                         );
                       })}
+                      {!showUnavailableSlots && getActiveSlots(clinician.availability).length > 0
+                        && getActiveSlots(clinician.availability).every(slot => getSlotUnavailableReason({
+                          isBooked: slot.isBooked,
+                          isPending: isSlotPending(slot),
+                          hasClinicianCapacity: (clinician.maxNewClients ?? 0) > 0,
+                          adminOverride: showAllClinicians,
+                          zoomLinkRequired: zoomLinkEmailEnabled && slot.locationType === "online" && !isValidZoomLink(clinician.zoomLink),
+                        })) && (
+                        <div className="col-span-3 text-xs text-muted-foreground italic p-2 border border-dashed rounded bg-slate-50/50 text-center">
+                          All slots are unavailable. Turn on “Show unavailable” to see why.
+                        </div>
+                      )}
                       {getActiveSlots(clinician.availability).length === 0 && (
                         <div className="col-span-3 text-xs text-muted-foreground italic p-2 border border-dashed rounded bg-slate-50/50 text-center">
                           No availability set.
@@ -3386,7 +3361,7 @@ export default function Clients() {
       </Dialog>
 
       {/* Manual Allocation Dialog (Phone Intake Flow) */}
-      <Dialog open={isManualAllocateOpen} onOpenChange={setIsManualAllocateOpen}>
+      <Dialog open={isManualAllocateOpen} onOpenChange={(open) => { setIsManualAllocateOpen(open); if (!open) setShowUnavailableSlots(false); }}>
         <DialogContent className="sm:max-w-[600px] max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -3432,9 +3407,15 @@ export default function Clients() {
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <p className="text-sm font-medium text-muted-foreground">AVAILABLE SLOTS</p>
-                  <div className="flex items-center gap-2">
-                    <Label htmlFor="override-mode-manual" className="text-xs text-muted-foreground cursor-pointer">Admin Override</Label>
-                    <Switch id="override-mode-manual" checked={showAllClinicians} onCheckedChange={setShowAllClinicians} />
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor="show-unavailable-manual" className="text-xs text-muted-foreground cursor-pointer">Show unavailable</Label>
+                      <Switch id="show-unavailable-manual" checked={showUnavailableSlots} onCheckedChange={setShowUnavailableSlots} />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor="override-mode-manual" className="text-xs text-muted-foreground cursor-pointer">Admin Override</Label>
+                      <Switch id="override-mode-manual" checked={showAllClinicians} onCheckedChange={setShowAllClinicians} />
+                    </div>
                   </div>
                 </div>
 
@@ -3463,43 +3444,72 @@ export default function Clients() {
                         </div>
                       </div>
                       <div className="grid grid-cols-3 gap-2">
-                        {getActiveSlots(clinician.availability).map(slot => (
-                          <Button
-                            key={slot.id}
-                            variant="outline"
-                            size="sm"
-                            disabled={slot.isBooked}
-                            className={`justify-start h-auto py-2 px-3 text-xs ${
-                              slot.isBooked ? "opacity-50 line-through decoration-destructive" : "hover:border-primary hover:bg-primary/5"
-                            }`}
-                            onClick={() => {
-                              if ((slot as any).locationType === "in_person") {
-                                setIsManualAllocateOpen(false);
-                                setInPersonWarning({ clinicianId: clinician.id, slotId: slot.id, allocationMethod: "manual" });
-                              } else {
-                                handleAssign(clinician.id, slot.id, "manual");
-                                setIsManualAllocateOpen(false);
-                              }
-                            }}
-                          >
-                            <CalendarCheck className="h-3 w-3 mr-2" />
-                            <div className="text-left">
-                              <div className="font-medium">
-                                {slot.type === "SpecificDate" && slot.date
-                                  ? format(parseISO(slot.date), "d MMM yyyy")
-                                  : slot.day || format(parseISO(slot.date!), "EEE")}
+                        {getActiveSlots(clinician.availability).filter(slot => showUnavailableSlots || !getSlotUnavailableReason({
+                          isBooked: slot.isBooked,
+                          isPending: isSlotPending(slot),
+                          hasClinicianCapacity: (clinician.maxNewClients ?? 0) > 0,
+                          adminOverride: showAllClinicians,
+                          zoomLinkRequired: zoomLinkEmailEnabled && slot.locationType === "online" && !isValidZoomLink(clinician.zoomLink),
+                        })).map(slot => {
+                          const unavailableReason = getSlotUnavailableReason({
+                            isBooked: slot.isBooked,
+                            isPending: isSlotPending(slot),
+                            hasClinicianCapacity: (clinician.maxNewClients ?? 0) > 0,
+                            adminOverride: showAllClinicians,
+                            zoomLinkRequired: zoomLinkEmailEnabled && slot.locationType === "online" && !isValidZoomLink(clinician.zoomLink),
+                          });
+                          return (
+                            <Button
+                              key={slot.id}
+                              variant="outline"
+                              size="sm"
+                              disabled={unavailableReason !== null}
+                              title={unavailableReason || undefined}
+                              className={`justify-start h-auto py-2 px-3 text-xs ${
+                                unavailableReason ? "opacity-50 cursor-not-allowed" : "hover:border-primary hover:bg-primary/5"
+                              }`}
+                              onClick={() => {
+                                if ((slot as any).locationType === "in_person") {
+                                  setIsManualAllocateOpen(false);
+                                  setInPersonWarning({ clinicianId: clinician.id, slotId: slot.id, allocationMethod: "manual" });
+                                } else {
+                                  handleAssign(clinician.id, slot.id, "manual");
+                                  setIsManualAllocateOpen(false);
+                                }
+                              }}
+                            >
+                              <CalendarCheck className="h-3 w-3 mr-2" />
+                              <div className="text-left">
+                                <div className="font-medium">
+                                  {slot.type === "SpecificDate" && slot.date
+                                    ? format(parseISO(slot.date), "d MMM yyyy")
+                                    : slot.day || format(parseISO(slot.date!), "EEE")}
+                                </div>
+                                <div className="text-[10px] text-muted-foreground">{slot.startTime} - {slot.endTime}</div>
+                                <div className="mt-0.5">
+                                  {(slot as any).locationType === "in_person" ? (
+                                    <span className="inline-block text-[8px] px-1 py-0 rounded-full bg-amber-100 text-amber-700 border border-amber-300 leading-tight">In-Person</span>
+                                  ) : (
+                                    <span className="inline-block text-[8px] px-1 py-0 rounded-full bg-blue-100 text-blue-700 border border-blue-300 leading-tight">Online</span>
+                                  )}
+                                </div>
+                                {unavailableReason && <div className="text-[9px] font-medium text-destructive">{unavailableReason}</div>}
                               </div>
-                              <div className="text-[10px] text-muted-foreground">{slot.startTime} - {slot.endTime}</div>
-                              <div className="mt-0.5">
-                                {(slot as any).locationType === "in_person" ? (
-                                  <span className="inline-block text-[8px] px-1 py-0 rounded-full bg-amber-100 text-amber-700 border border-amber-300 leading-tight">In-Person</span>
-                                ) : (
-                                  <span className="inline-block text-[8px] px-1 py-0 rounded-full bg-blue-100 text-blue-700 border border-blue-300 leading-tight">Online</span>
-                                )}
-                              </div>
-                            </div>
-                          </Button>
-                        ))}
+                            </Button>
+                          );
+                        })}
+                        {!showUnavailableSlots && getActiveSlots(clinician.availability).length > 0
+                          && getActiveSlots(clinician.availability).every(slot => getSlotUnavailableReason({
+                            isBooked: slot.isBooked,
+                            isPending: isSlotPending(slot),
+                            hasClinicianCapacity: (clinician.maxNewClients ?? 0) > 0,
+                            adminOverride: showAllClinicians,
+                            zoomLinkRequired: zoomLinkEmailEnabled && slot.locationType === "online" && !isValidZoomLink(clinician.zoomLink),
+                          })) && (
+                          <div className="col-span-3 text-xs text-muted-foreground italic p-2 border border-dashed rounded bg-slate-50/50 text-center">
+                            All slots are unavailable. Turn on “Show unavailable” to see why.
+                          </div>
+                        )}
                         {getActiveSlots(clinician.availability).length === 0 && (
                           <div className="col-span-3 text-xs text-muted-foreground italic p-2 border border-dashed rounded bg-slate-50/50 text-center">
                             No availability set.

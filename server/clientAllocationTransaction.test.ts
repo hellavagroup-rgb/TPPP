@@ -396,6 +396,20 @@ describe("DatabaseStorage.assignClinicianToClient", () => {
     expect(state).toEqual(original);
   });
 
+  it("rejects a recurring slot whose availability has not started", async () => {
+    (state.slot as AssignmentState["slot"] & { startDate?: string }).startDate = "2999-01-01";
+    assignmentTransactions(state);
+    const original = structuredClone(state);
+
+    await expect(new DatabaseStorage().assignClinicianToClient(
+      "client-1", "clinician-1", "slot-1", "tenant-1",
+    )).rejects.toMatchObject({
+      reason: "slot_unavailable",
+      message: "The selected appointment slot is not yet available",
+    });
+    expect(state).toEqual(original);
+  });
+
   it("allows only one of two concurrent claims to commit", async () => {
     assignmentTransactions(state);
     const storage = new DatabaseStorage();

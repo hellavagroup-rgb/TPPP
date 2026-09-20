@@ -1,5 +1,87 @@
 import { describe, it, expect } from "vitest";
-import { addOneHour, splitIntoHourlySlots, TIME_OPTIONS } from "./availability-utils";
+import {
+  addOneHour,
+  findAvailabilityInSubmissions,
+  getSlotUnavailableReason,
+  normalizeAvailabilityValue,
+  rankSlotsByAvailability,
+  slotMatchesAvailability,
+  splitIntoHourlySlots,
+  TIME_OPTIONS,
+} from "./availability-utils";
+
+describe("allocation availability", () => {
+  it("normalizes broad periods using documented boundaries and preserves selected terms", () => {
+    const result = normalizeAvailabilityValue({ Monday: ["Morning", "Evening"], Sunday: ["Afternoon"] });
+    expect(result).toMatchObject({
+      status: "available",
+      selections: { Monday: ["Morning", "Evening"], Sunday: ["Afternoon"] },
+      windows: {
+        Monday: [
+          { start: "07:00", end: "12:00", label: "Morning" },
+          { start: "17:00", end: "21:00", label: "Evening" },
+        ],
+      },
+    });
+  });
+
+  it("normalizes exact times as one-hour windows", () => {
+    expect(normalizeAvailabilityValue({ Tuesday: ["09:30"] })).toMatchObject({
+      status: "available",
+      windows: { Tuesday: [{ start: "09:30", end: "10:30", label: "09:30" }] },
+    });
+  });
+
+  it("requires the full recurring appointment to fit a selected window", () => {
+    const availability = normalizeAvailabilityValue({ Monday: ["Morning"] });
+    expect(slotMatchesAvailability({ type: "Recurring", day: "Monday", startTime: "11:00", endTime: "12:00" }, availability)).toBe(true);
+    expect(slotMatchesAvailability({ type: "Recurring", day: "Monday", startTime: "11:30", endTime: "12:30" }, availability)).toBe(false);
+    expect(slotMatchesAvailability({ type: "Recurring", day: "Monday", startTime: "06:45", endTime: "07:45" }, availability)).toBe(false);
+  });
+
+  it("derives the weekday for specific-date slots without UTC date drift", () => {
+    const availability = normalizeAvailabilityValue({ Monday: ["17:00"] });
+    expect(slotMatchesAvailability({ type: "SpecificDate", date: "2026-09-21", startTime: "17:00", endTime: "18:00" }, availability)).toBe(true);
+  });
+
+  it("reports missing and malformed historic answers explicitly", () => {
+    expect(findAvailabilityInSubmissions([{ responses: { name: "A" } }]).status).toBe("missing");
+    expect(findAvailabilityInSubmissions([{ responses: { availability: { Monday: ["Any time"] } } }]).status).toBe("malformed");
+    expect(slotMatchesAvailability(
+      { day: "Monday", startTime: "09:00", endTime: "10:00" },
+      { status: "missing", selections: null, windows: null },
+    )).toBeNull();
+  });
+
+  it("orders selectable matches before selectable non-matches and unavailable slots", () => {
+    const availability = normalizeAvailabilityValue({ Monday: ["Morning"] });
+    const slots = [
+      { id: "booked", day: "Monday", startTime: "09:00", endTime: "10:00" },
+      { id: "outside", day: "Monday", startTime: "14:00", endTime: "15:00" },
+      { id: "match", day: "Monday", startTime: "10:00", endTime: "11:00" },
+    ];
+    expect(rankSlotsByAvailability(slots, availability, slot => slot.id === "booked" ? "Booked" : null).map(slot => slot.id))
+      .toEqual(["match", "outside", "booked"]);
+  });
+
+  it.each([
+    [{ isBooked: true, isPending: false, hasClinicianCapacity: true, adminOverride: false, zoomLinkRequired: false }, "Booked"],
+    [{ isBooked: false, isPending: false, hasClinicianCapacity: false, adminOverride: false, zoomLinkRequired: false }, "No clinician capacity"],
+    [{ isBooked: false, isPending: false, hasClinicianCapacity: true, adminOverride: false, zoomLinkRequired: true }, "Zoom link required"],
+    [{ isBooked: false, isPending: true, hasClinicianCapacity: true, adminOverride: false, zoomLinkRequired: false }, "Not yet available"],
+  ])("labels unavailable slots precisely", (input, reason) => {
+    expect(getSlotUnavailableReason(input)).toBe(reason);
+  });
+
+  it("lets Admin Override bypass capacity without bypassing slot restrictions", () => {
+    expect(getSlotUnavailableReason({
+      isBooked: false, isPending: false, hasClinicianCapacity: false, adminOverride: true, zoomLinkRequired: false,
+    })).toBeNull();
+    expect(getSlotUnavailableReason({
+      isBooked: true, isPending: false, hasClinicianCapacity: false, adminOverride: true, zoomLinkRequired: false,
+    })).toBe("Booked");
+  });
+});
 
 // ---------------------------------------------------------------------------
 // addOneHour

@@ -1048,6 +1048,22 @@ export class DatabaseStorage implements IStorage {
             "The selected appointment slot does not belong to this clinician",
           );
         }
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const startsLater = slot.startDate
+          ? new Date(`${slot.startDate}T00:00:00`) > today
+          : false;
+        const alreadyEnded = slot.endDate
+          ? new Date(`${slot.endDate}T00:00:00`) < today
+          : false;
+        if (slot.type === "Vacation" || startsLater || alreadyEnded) {
+          throw new ManualAssignmentError(
+            "slot_unavailable",
+            startsLater
+              ? "The selected appointment slot is not yet available"
+              : "The selected appointment slot is no longer available",
+          );
+        }
 
         const claimedSlots = await tx.update(timeSlots)
           .set({ isBooked: true })

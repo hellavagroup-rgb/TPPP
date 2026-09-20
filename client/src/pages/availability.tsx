@@ -5,7 +5,7 @@ import { useLocation } from "wouter";
 import { Card } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { ChevronLeft, ChevronRight, Plus, Trash2, UserPlus, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, Trash2, UserPlus, X, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { format, addDays, startOfDay, startOfWeek, parseISO, isWithinInterval, isBefore, differenceInWeeks } from "date-fns";
@@ -34,6 +34,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import type { Clinician, TimeSlot, Client } from "@shared/schema";
 import { addOneHour, splitIntoHourlySlots, TIME_OPTIONS } from "@/lib/availability-utils";
+import { useOperationalRefresh, invalidateOperationalData } from "@/lib/operationalRefresh";
 
 type SlotType = "Recurring" | "Vacation" | "SpecificDate";
 
@@ -60,6 +61,7 @@ export default function Availability() {
   const { toast } = useToast();
   const [, setLocation] = useLocation();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const { refresh, lastUpdated } = useOperationalRefresh(user?.role === "admin");
   
   const [weekStart, setWeekStart] = useState(startOfWeek(new Date(), { weekStartsOn: 1 }));
   const DAYS_TO_SHOW = 6;
@@ -91,7 +93,7 @@ export default function Availability() {
       const res = await apiRequest("PATCH", `/api/timeslots/${slotId}/location-type`, { locationType });
       if (!res.ok) throw new Error("Failed to update");
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/clinicians"] }),
+    onSuccess: () => invalidateOperationalData(queryClient),
     onError: () => toast({ title: "Error", description: "Failed to update location type", variant: "destructive" }),
   });
 
@@ -139,7 +141,7 @@ export default function Availability() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/clinicians"] });
+      invalidateOperationalData(queryClient);
     },
   });
 
@@ -151,7 +153,7 @@ export default function Availability() {
       return body;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/clinicians"] });
+      invalidateOperationalData(queryClient);
       toast({ title: "Slot Retired", description: "Time slot was retired and historical option records were preserved." });
       setIsDeleteOpen(false);
       setDeletingSlot(null);
@@ -175,8 +177,7 @@ export default function Availability() {
       url.searchParams.delete("allocate");
       window.history.replaceState({}, "", url.pathname);
       
-      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/clinicians"] });
+      invalidateOperationalData(queryClient);
       toast({ title: "Client Allocated", description: "Client has been assigned to the selected slot." });
       setIsAllocating(false);
       setAllocatingClientId(null);
@@ -620,6 +621,16 @@ export default function Availability() {
         </div>
 
         <div className="flex items-center gap-2">
+          {user?.role === "admin" && lastUpdated && (
+            <span className="text-xs text-muted-foreground">
+              Updated {new Date(lastUpdated).toLocaleTimeString()}
+            </span>
+          )}
+          {user?.role === "admin" && (
+            <Button variant="outline" size="sm" onClick={() => refresh()} className="gap-2">
+              <RefreshCw className="h-4 w-4" /> Refresh
+            </Button>
+          )}
           {isAllocating && (
             <div className="flex items-center gap-2 bg-primary/10 text-primary px-3 py-2 rounded-lg border border-primary/20">
               <UserPlus className="h-4 w-4" />

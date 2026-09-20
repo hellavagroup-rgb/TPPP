@@ -22,12 +22,15 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { CalendarClock, MoreHorizontal, Edit, CalendarCheck, Eye, Clock } from "lucide-react";
+import { CalendarClock, MoreHorizontal, Edit, CalendarCheck, Eye, Clock, RefreshCw } from "lucide-react";
 import { formatDateUK } from "@/lib/dateUtils";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 import type { Client as ClientType } from "@shared/schema";
 import { getAdminStatusOptions } from "@shared/clientWorkflow";
+import { useOperationalRefresh, invalidateOperationalData } from "@/lib/operationalRefresh";
+import { createEditSnapshot, reconcileServerSnapshot } from "@/lib/editSnapshot";
+import { useAuth } from "@/lib/auth";
 
 function mutationErrorMessage(error: Error, fallback: string): string {
   const jsonStart = error.message.indexOf("{");
@@ -43,6 +46,9 @@ function mutationErrorMessage(error: Error, fallback: string): string {
 export default function Waitlist() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
+  const { refresh, lastUpdated } = useOperationalRefresh(isAdmin);
 
   const { data: tenant } = useQuery({
     queryKey: ["/api/tenant"],
@@ -78,6 +84,31 @@ export default function Waitlist() {
     insurer: "",
     contactPreference: null as "email" | "phone" | null,
   });
+  const editSnapshotRef = useRef<typeof editClientData | null>(null);
+
+  useEffect(() => {
+    if (!editingClient) return;
+    const latest = clients.find((client) => client.id === editingClient.id);
+    if (latest) {
+      const latestSnapshot = {
+        email: latest.email || "",
+        phone: latest.phone || "",
+        notes: latest.notes || "",
+        insurer: latest.insurer || "",
+        contactPreference: (latest as any).contactPreference ?? null,
+      };
+      const reconciled = reconcileServerSnapshot(
+        editSnapshotRef.current,
+        editClientData,
+        latestSnapshot,
+        isEditClientOpen,
+      );
+      if (!reconciled.applied) return;
+      setEditingClient(latest);
+      setEditClientData(reconciled.formValue);
+      editSnapshotRef.current = reconciled.openedSnapshot;
+    }
+  }, [clients, editingClient, editClientData, isEditClientOpen]);
 
   const handleOpenEditStatus = (client: ClientType) => {
     setEditStatusClient(client);
@@ -87,13 +118,15 @@ export default function Waitlist() {
 
   const handleOpenEditClient = (client: ClientType) => {
     setEditingClient(client);
-    setEditClientData({
+    const snapshot = {
       email: client.email || "",
       phone: client.phone || "",
       notes: client.notes || "",
       insurer: client.insurer || "",
       contactPreference: (client as any).contactPreference ?? null,
-    });
+    };
+    editSnapshotRef.current = createEditSnapshot(snapshot);
+    setEditClientData(snapshot);
     setIsEditClientOpen(true);
   };
 
@@ -103,7 +136,7 @@ export default function Waitlist() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      invalidateOperationalData(queryClient);
       toast({ title: "Status Updated", description: "Client status has been changed." });
       setIsEditStatusOpen(false);
       setEditStatusClient(null);
@@ -123,7 +156,7 @@ export default function Waitlist() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      invalidateOperationalData(queryClient);
       toast({ title: "Client Updated", description: "Client details have been saved." });
       setIsEditClientOpen(false);
       setEditingClient(null);
@@ -139,7 +172,7 @@ export default function Waitlist() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      invalidateOperationalData(queryClient);
       toast({ title: "Client Archived", description: "This client has been moved to Archive/Didn't Engage." });
     },
     onError: () => {
@@ -156,7 +189,17 @@ export default function Waitlist() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-3xl font-serif font-bold text-foreground" data-testid="text-waitlist-title">Waitlist</h2>
+          <div className="flex items-center justify-between gap-3">
+          <h2 className="text-3xl font-serif font-bold text-foreground" data-testid="text-waitlist-title">Waitlist</h2>
+            {isAdmin && (
+              <div className="flex items-center gap-2">
+                {lastUpdated && <span className="text-xs text-muted-foreground">Updated {new Date(lastUpdated).toLocaleTimeString()}</span>}
+                <Button variant="outline" size="sm" onClick={() => refresh()} className="gap-2">
+                  <RefreshCw className="h-4 w-4" /> Refresh
+                </Button>
+              </div>
+            )}
+        </div>
         <p className="text-muted-foreground mt-1">Clients waiting for availability or specific clinician matches.</p>
       </div>
 

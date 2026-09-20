@@ -2,6 +2,7 @@ import { createContext, useContext, useState, ReactNode, useEffect } from "react
 import { useLocation } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 import * as api from "./api";
+import { setAuthLossHandler } from "./queryClient";
 import type { SafeUser } from "@shared/schema";
 
 export type UserRole = "admin" | "clinician";
@@ -38,6 +39,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [location, setLocation] = useLocation();
   const queryClient = useQueryClient();
 
+  useEffect(() => {
+    setAuthLossHandler(() => {
+      // A 401 means the server no longer accepts this session. Never leave
+      // tenant-scoped cached records visible while routing to sign-in.
+      if (location === "/login") return;
+      console.info("[auth] session expired or invalid; clearing tenant cache");
+      setUser(null);
+      queryClient.clear();
+      setLocation("/login");
+    });
+    return () => setAuthLossHandler(null);
+  }, [location, queryClient, setLocation]);
+
   // Check if user is already logged in on mount
   useEffect(() => {
     async function checkAuth() {
@@ -45,9 +59,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const currentUser = await api.getCurrentUser();
         if (currentUser) {
           setUser(currentUser as User);
+        } else {
+          setUser(null);
         }
       } catch (error) {
-        console.error("Auth check failed:", error);
+        console.error("[auth] session check failed:", error);
       } finally {
         setIsLoading(false);
       }
@@ -104,9 +120,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const currentUser = await api.getCurrentUser();
       if (currentUser) {
         setUser(currentUser as User);
+      } else {
+        console.info("[auth] session expired during refresh; clearing tenant cache");
+        setUser(null);
+        queryClient.clear();
+        setLocation("/login");
       }
     } catch (error) {
-      console.error("Failed to refresh user:", error);
+      console.error("[auth] failed to refresh session:", error);
     }
   };
 

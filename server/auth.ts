@@ -2,7 +2,7 @@ import passport from "passport";
 import { Strategy as LocalStrategy } from "passport-local";
 import type { Express } from "express";
 import session from "express-session";
-import createMemoryStore from "memorystore";
+import connectPgSimple from "connect-pg-simple";
 import { scrypt, randomBytes, timingSafeEqual } from "crypto";
 import { promisify } from "util";
 import { storage } from "./storage";
@@ -11,37 +11,46 @@ import type { User } from "@shared/schema";
 
 const scryptAsync = promisify(scrypt);
 
-const MemoryStore = createMemoryStore(session);
+const PgSession = connectPgSimple(session);
+export const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
-// Exposed so other modules (e.g. super-admin tenant reassignment) can force an
-// immediate logout for a user whose tenant assignment changes underneath an
-// already-live session — session cookies only carry a user id, but the
-// client's in-memory query cache does not get cleared just because the DB
-// row changed, so a stale session could otherwise keep showing the old
-// tenant's data until the user happens to log out on their own.
-let sessionStore: InstanceType<ReturnType<typeof createMemoryStore>> | null = null;
-
-export function destroySessionsForUser(userId: string): Promise<number> {
-  return new Promise((resolve) => {
-    if (!sessionStore || typeof (sessionStore as any).all !== "function") {
-      return resolve(0);
-    }
-    (sessionStore as any).all((err: any, sessions: Record<string, any> | any[]) => {
-      if (err || !sessions) return resolve(0);
-      const entries: [string, any][] = Array.isArray(sessions)
-        ? sessions.map((s: any) => [s.id, s])
-        : Object.entries(sessions);
-      const matching = entries.filter(([, sess]) => sess?.passport?.user === userId);
-      if (matching.length === 0) return resolve(0);
-      let remaining = matching.length;
-      for (const [sid] of matching) {
-        sessionStore!.destroy(sid, () => {
-          remaining -= 1;
-          if (remaining === 0) resolve(matching.length);
-        });
-      }
-    });
+export function createPersistentSessionStore(dbPool: typeof pool = pool): session.Store {
+  return new PgSession({
+    pool: dbPool,
+    tableName: "user_sessions",
+    createTableIfMissing: true,
+    pruneSessionInterval: SESSION_MAX_AGE_MS,
   });
+}
+
+export function buildSessionOptions(store: session.Store): session.SessionOptions {
+  return {
+    secret: process.env.SESSION_SECRET || "dev-only-insecure-secret-" + Date.now(),
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      maxAge: SESSION_MAX_AGE_MS,
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+    },
+    store,
+  };
+}
+
+// Exposed so super-admin tenant reassignment can revoke every live session for
+// a user. connect-pg-simple intentionally does not expose Store.all(), so use a
+// targeted, parameterized delete against its JSON session payload.
+export async function destroySessionsForUser(
+  userId: string,
+  dbPool: Pick<typeof pool, "query"> = pool,
+): Promise<number> {
+  const result = await dbPool.query(
+    `DELETE FROM "user_sessions"
+     WHERE sess -> 'passport' ->> 'user' = $1`,
+    [userId],
+  );
+  return result.rowCount ?? 0;
 }
 
 // Password hashing utilities (using scrypt - more secure than bcrypt)
@@ -80,20 +89,10 @@ export function setupAuth(app: Express) {
     console.warn("⚠️  WARNING: Using insecure default session secret. Set SESSION_SECRET environment variable.");
   }
   
-  const sessionSettings: session.SessionOptions = {
-    secret: process.env.SESSION_SECRET || "dev-only-insecure-secret-" + Date.now(),
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      maxAge: 24 * 60 * 60 * 1000, // 24 hours
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-    },
-    store: sessionStore = new MemoryStore({
-      checkPeriod: 86400000, // prune expired entries every 24h
-    }),
-  };
+  const persistentStore = createPersistentSessionStore();
+  console.info("[startup] configured PostgreSQL-backed session store");
+
+  const sessionSettings = buildSessionOptions(persistentStore);
 
   app.use(session(sessionSettings));
   app.use(passport.initialize());
@@ -155,12 +154,19 @@ export function requireAuth(req: any, res: any, next: any) {
   if (req.isAuthenticated()) {
     return next();
   }
+  console.warn("[auth] rejected request: session expired or invalid", {
+    method: req.method,
+    path: req.originalUrl,
+  });
   res.status(401).json({ error: "Unauthorized" });
 }
 
 // Middleware to require admin role
 export function requireAdmin(req: any, res: any, next: any) {
-  if (req.isAuthenticated() && req.user.role === "admin") {
+  if (!req.isAuthenticated()) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  if (req.user.role === "admin") {
     return next();
   }
   res.status(403).json({ error: "Forbidden: Admin access required" });
@@ -168,10 +174,10 @@ export function requireAdmin(req: any, res: any, next: any) {
 
 // Middleware to require clinician role (or admin)
 export function requireClinician(req: any, res: any, next: any) {
-  if (
-    req.isAuthenticated() &&
-    (req.user.role === "clinician" || req.user.role === "admin")
-  ) {
+  if (!req.isAuthenticated()) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  if (req.user.role === "clinician" || req.user.role === "admin") {
     return next();
   }
   res.status(403).json({ error: "Forbidden: Clinician access required" });

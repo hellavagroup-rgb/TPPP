@@ -1,6 +1,28 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
-async function throwIfResNotOk(res: Response) {
+export const OPERATIONAL_STALE_TIME = 2 * 60 * 1000;
+export const OPERATIONAL_REFETCH_INTERVAL = 5 * 60 * 1000;
+
+export class UnauthorizedError extends Error {
+  readonly status = 401;
+  constructor() {
+    super("401: Your session has expired. Please sign in again.");
+    this.name = "UnauthorizedError";
+  }
+}
+
+let authLossHandler: (() => void) | null = null;
+
+/** Registered by AuthProvider so any protected query can end a stale session safely. */
+export function setAuthLossHandler(handler: (() => void) | null): void {
+  authLossHandler = handler;
+}
+
+export async function throwIfResNotOk(res: Response) {
+  if (res.status === 401) {
+    authLossHandler?.();
+    throw new UnauthorizedError();
+  }
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
     throw new Error(`${res.status}: ${text}`);
@@ -45,9 +67,11 @@ export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       queryFn: getQueryFn({ on401: "throw" }),
-      refetchInterval: false,
-      refetchOnWindowFocus: false,
-      staleTime: Infinity,
+      refetchOnWindowFocus: true,
+      // Operational data should never remain indefinitely fresh. Five minutes
+      // bounds background staleness while focus refreshes staff workflows.
+      staleTime: OPERATIONAL_STALE_TIME,
+      refetchInterval: OPERATIONAL_REFETCH_INTERVAL,
       retry: false,
     },
     mutations: {

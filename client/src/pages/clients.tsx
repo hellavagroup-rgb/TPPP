@@ -70,6 +70,7 @@ import {
   ChevronDown,
   ChevronRight,
   X,
+  RefreshCw,
 } from "lucide-react";
 import { useEffect, useState, useRef } from "react";
 import { useLocation } from "wouter";
@@ -88,6 +89,7 @@ import {
   type ClientStatus as CanonicalClientStatus,
 } from "@shared/clientWorkflow";
 import { paymentProgress, registrationProgress } from "@shared/clientProgress";
+import { invalidateOperationalData, useOperationalRefresh } from "@/lib/operationalRefresh";
 
 function mutationErrorMessage(error: Error, fallback: string): string {
   const jsonStart = error.message.indexOf("{");
@@ -152,6 +154,7 @@ export default function Clients() {
   const { toast } = useToast();
   const registrationAttemptKeysRef = useRef(new Map<string, string>());
   const { user } = useAuth();
+  const { refresh, lastUpdated } = useOperationalRefresh(user?.role === "admin");
   const isAdmin = user?.role === "admin";
   const [, setLocation] = useLocation();
 
@@ -260,7 +263,7 @@ export default function Clients() {
     onSuccess: () => {
       clientCreationIdempotencyKey.current = null;
       setRecoveredClientId(null);
-      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      invalidateOperationalData(queryClient);
       toast({ title: "Client Created", description: "New referral added successfully." });
       setIsNewClientOpen(false);
       setNewClientData({
@@ -277,7 +280,7 @@ export default function Clients() {
       setSelectedNewClientFormIds([]);
     },
     onError: async (error: any) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      invalidateOperationalData(queryClient);
       if (error?.clientId) setRecoveredClientId(error.clientId);
       let description = error?.clientCreated
         ? "Client was created, but one or more forms failed to send. Failed forms remain selected for retry."
@@ -296,7 +299,7 @@ export default function Clients() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      invalidateOperationalData(queryClient);
     },
   });
 
@@ -306,7 +309,7 @@ export default function Clients() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      invalidateOperationalData(queryClient);
       toast({ title: "Client Assigned", description: "Client has been allocated a slot." });
       setSelectedClient(null);
       setIsManualAllocateOpen(false);
@@ -327,8 +330,7 @@ export default function Clients() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/clinicians"] });
+      invalidateOperationalData(queryClient);
       toast({ title: "Options Sent", description: "Client has been moved to Options Sent." });
       setSelectedClient(null);
       setIsAllocateDialogOpen(false);
@@ -379,7 +381,7 @@ export default function Clients() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      invalidateOperationalData(queryClient);
       toast({ title: "Zoom link sent", description: "The clinician's Zoom link was emailed to the client." });
     },
     onError: (error: Error) => {
@@ -403,7 +405,7 @@ export default function Clients() {
       // A later click after success is an explicit resend and gets a fresh key.
       // Errors retain the key so ambiguous network retries remain idempotent.
       registrationAttemptKeysRef.current.delete(clientId);
-      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      invalidateOperationalData(queryClient);
       toast({
         title: "Registration form sent",
         description: "The client has been emailed their registration form.",
@@ -515,7 +517,7 @@ export default function Clients() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      invalidateOperationalData(queryClient);
       toast({ title: "Client Archived", description: "This client has been moved to Archive/Didn't Engage." });
       setIsArchiveDialogOpen(false);
       setClientToArchive(null);
@@ -542,7 +544,7 @@ export default function Clients() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      invalidateOperationalData(queryClient);
       toast({ title: "Client Restored", description: "This client has been restored to the active list." });
     },
     onError: () => {
@@ -571,7 +573,7 @@ export default function Clients() {
       return data;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      invalidateOperationalData(queryClient);
       toast({ title: "Client Permanently Deleted", description: "The client record has been permanently removed." });
       setIsPermanentDeleteOpen(false);
       setClientToDelete(null);
@@ -632,8 +634,7 @@ export default function Clients() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/clinicians"] });
+      invalidateOperationalData(queryClient);
       toast({ title: "Allocation Updated", description: "Client allocation has been updated." });
       setIsEditStatusOpen(false);
       setEditStatusClient(null);
@@ -918,7 +919,7 @@ export default function Clients() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to generate link");
       setGeneratedPaymentUrl(data.url);
-      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      invalidateOperationalData(queryClient);
       toast({
         title: "Payment link created",
         description: data.emailSent
@@ -956,7 +957,7 @@ export default function Clients() {
     onSuccess: () => {
       toast({ title: "Session charged", description: "The payment has been processed." });
       setIsChargeOpen(false);
-      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      invalidateOperationalData(queryClient);
     },
     onError: (err: any) => {
       toast({ title: "Payment failed", description: err.message || "Failed to charge session", variant: "destructive" });
@@ -1236,7 +1237,7 @@ export default function Clients() {
         await apiRequest("PATCH", `/api/clients/${editingClient.id}/agreed-rate`, {
           agreedRatePence: editClientData.agreedRatePence ?? 0
         });
-        queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+        invalidateOperationalData(queryClient);
       }
       toast({ title: "Client Updated", description: "Changes saved successfully." });
       setIsEditClientOpen(false);
@@ -1312,7 +1313,7 @@ export default function Clients() {
               formIds: [intakeTemplateId],
             });
             const result = await response.json();
-            queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+            invalidateOperationalData(queryClient);
             if (!result.success) {
               setFormDeliveryStates(Object.fromEntries(result.outcomes.map((outcome: any) => [outcome.formId, outcome.status])));
               toast({ title: "Some forms were not sent", description: "Failed forms remain selected so you can retry them.", variant: "destructive" });
@@ -1373,7 +1374,7 @@ export default function Clients() {
           setIsRetryingCreatedForms(false);
           setSelectedNewClientFormIds([]);
           setIsNewClientOpen(false);
-          queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+          invalidateOperationalData(queryClient);
           toast({ title: "Forms Sent", description: "The created client's forms were sent successfully." });
         })
         .catch(() => {
@@ -1556,6 +1557,14 @@ export default function Clients() {
             <p className="mt-2 text-sm text-destructive">Registration is not ready: select a registration form in Settings before links can be sent.</p>
           )}
         </div>
+        {isAdmin && (
+          <div className="flex items-center gap-2">
+            {lastUpdated && <span className="text-xs text-muted-foreground">Updated {new Date(lastUpdated).toLocaleTimeString()}</span>}
+            <Button variant="outline" size="sm" onClick={() => refresh()} className="gap-2">
+              <RefreshCw className="h-4 w-4" /> Refresh
+            </Button>
+          </div>
+        )}
         
         <Dialog open={isNewClientOpen} onOpenChange={handleNewClientOpenChange}>
             <DialogTrigger asChild>

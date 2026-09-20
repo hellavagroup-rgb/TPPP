@@ -1630,7 +1630,7 @@ export async function registerRoutes(
 
   app.post("/api/clients/:clientId/assign", requireAdmin, auditLog("assign", "client"), async (req, res) => {
     try {
-      const { clinicianId, slotId, allocationMethod = "form", allocationReason } = req.body;
+      const { clinicianId, slotId, allocationMethod = "form", allocationReason, formatOverride } = req.body;
       
       if (!clinicianId || !slotId) {
         return res.status(400).json({ error: "Missing clinicianId or slotId" });
@@ -1671,6 +1671,19 @@ export async function registerRoutes(
           clinicianName: await getClinicianActivityName(clinicianId),
           slotDescription: slot ? formatActivitySlot(slot) : "",
         });
+        if (
+          formatOverride
+          && (formatOverride.preference === "online" || formatOverride.preference === "in_person")
+          && (formatOverride.slotFormat === "online" || formatOverride.slotFormat === "in_person")
+          && formatOverride.preference !== formatOverride.slotFormat
+          && requestedSlot?.locationType === formatOverride.slotFormat
+        ) {
+          await recordActivity(req, "activity_session_format_override", "client", req.params.clientId, {
+            clientDisplayId: updated.displayId,
+            submittedPreference: formatOverride.preference,
+            selectedSlotFormat: formatOverride.slotFormat,
+          });
+        }
       } catch (activityError) {
         console.error("Failed to record manual assignment activity:", activityError);
       }
@@ -1755,6 +1768,7 @@ export async function registerRoutes(
       }
 
       // Validate every selection: must have IDs, slot must be available, slot/clinician must belong to tenant
+      const confirmedFormatOverrides: Array<{ preference: "online" | "in_person"; slotFormat: "online" | "in_person" }> = [];
       for (const sel of selections) {
         if (!sel.clinicianId || !sel.slotId) {
           return res.status(400).json({ error: "Each selection must have clinicianId and slotId" });
@@ -1779,6 +1793,15 @@ export async function registerRoutes(
         }
         if (slot.tenantId && slot.tenantId !== req.tenant?.id) {
           return res.status(403).json({ error: `Slot ${sel.slotId} does not belong to this tenant` });
+        }
+        if (
+          sel.formatOverride
+          && (sel.formatOverride.preference === "online" || sel.formatOverride.preference === "in_person")
+          && (sel.formatOverride.slotFormat === "online" || sel.formatOverride.slotFormat === "in_person")
+          && sel.formatOverride.preference !== sel.formatOverride.slotFormat
+          && slot.locationType === sel.formatOverride.slotFormat
+        ) {
+          confirmedFormatOverrides.push(sel.formatOverride);
         }
 
         // Verify clinician belongs to this tenant
@@ -1867,6 +1890,13 @@ export async function registerRoutes(
         clientDisplayId: updated?.displayId || client.displayId,
         optionCount: selections.length,
       });
+      for (const override of confirmedFormatOverrides) {
+        await recordActivity(req, "activity_session_format_override", "client", req.params.clientId, {
+          clientDisplayId: updated?.displayId || client.displayId,
+          submittedPreference: override.preference,
+          selectedSlotFormat: override.slotFormat,
+        });
+      }
 
       res.json(updated);
     } catch (error) {

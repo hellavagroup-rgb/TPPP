@@ -115,6 +115,26 @@ describe("recent activity mapping", () => {
     expect(event.description).toContain("Dr Jones");
   });
 
+  it("renders a confirmed session-format override without form-response data", () => {
+    const event = toRecentActivityItem(activityLog({
+      action: "activity_session_format_override",
+      details: {
+        actorName: "Practice Admin",
+        clientDisplayId: "W12345",
+        submittedPreference: "online",
+        selectedSlotFormat: "in_person",
+      },
+    }));
+
+    expect(RECENT_ACTIVITY_CATEGORY_ACTIONS.clients).toContain("activity_session_format_override");
+    expect(event).toMatchObject({
+      eventType: "client",
+      title: "Session format mismatch accepted",
+      actorName: "Practice Admin",
+      description: "W12345 preferred online, but an in-person slot was selected.",
+    });
+  });
+
   it("maps legacy slot records without relying on the former structured payload", () => {
     const event = toRecentActivityItem(activityLog({
       action: "add_slots",

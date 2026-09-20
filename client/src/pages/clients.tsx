@@ -320,8 +320,8 @@ export default function Clients() {
   });
 
   const assignClientMutation = useMutation({
-    mutationFn: async ({ clientId, clinicianId, slotId, allocationMethod = "form", allocationReason }: { clientId: string; clinicianId: string; slotId: string; allocationMethod?: "form" | "manual"; allocationReason?: string }) => {
-      const response = await apiRequest("POST", `/api/clients/${clientId}/assign`, { clinicianId, slotId, allocationMethod, allocationReason });
+    mutationFn: async ({ clientId, clinicianId, slotId, allocationMethod = "form", allocationReason, formatOverride }: { clientId: string; clinicianId: string; slotId: string; allocationMethod?: "form" | "manual"; allocationReason?: string; formatOverride?: { preference: SessionFormat; slotFormat: SessionFormat } }) => {
+      const response = await apiRequest("POST", `/api/clients/${clientId}/assign`, { clinicianId, slotId, allocationMethod, allocationReason, formatOverride });
       return response.json();
     },
     onSuccess: () => {
@@ -338,10 +338,10 @@ export default function Clients() {
   });
 
   // CY&A: multi-clinician option selection state
-  const [selectedOptions, setSelectedOptions] = useState<{clinicianId: string; slotId: string}[]>([]);
+  const [selectedOptions, setSelectedOptions] = useState<{clinicianId: string; slotId: string; formatOverride?: { preference: SessionFormat; slotFormat: SessionFormat }}[]>([]);
 
   const allocateOptionsMutation = useMutation({
-    mutationFn: async ({ clientId, selections }: { clientId: string; selections: {clinicianId: string; slotId: string}[] }) => {
+    mutationFn: async ({ clientId, selections }: { clientId: string; selections: {clinicianId: string; slotId: string; formatOverride?: { preference: SessionFormat; slotFormat: SessionFormat }}[] }) => {
       const response = await apiRequest("POST", `/api/clients/${clientId}/allocate-options`, { selections });
       return response.json();
     },
@@ -1225,7 +1225,7 @@ export default function Clients() {
     }
   };
 
-  const handleAssign = (clinicianId: string, slotId: string, allocationMethod: "form" | "manual" = "form") => {
+  const handleAssign = (clinicianId: string, slotId: string, allocationMethod: "form" | "manual" = "form", formatOverride?: { preference: SessionFormat; slotFormat: SessionFormat }) => {
     // For unified dialog, always use selectedClient
     // For legacy manual dialog (isManualAllocateOpen), use manualAllocateClient
     const clientToAssign = isManualAllocateOpen ? manualAllocateClient : selectedClient;
@@ -1235,7 +1235,8 @@ export default function Clients() {
         clinicianId, 
         slotId,
         allocationMethod,
-        allocationReason: allocationReason.trim() || undefined
+        allocationReason: allocationReason.trim() || undefined,
+        formatOverride,
       });
     }
   };
@@ -4230,9 +4231,19 @@ export default function Clients() {
                 if (formatMismatchWarning) {
                   const { action } = formatMismatchWarning;
                   if (action.type === "select-option") {
-                    setSelectedOptions(prev => [...prev, { clinicianId: action.clinicianId, slotId: action.slotId }]);
+                    setSelectedOptions(prev => [...prev, {
+                      clinicianId: action.clinicianId,
+                      slotId: action.slotId,
+                      formatOverride: {
+                        preference: formatMismatchWarning.preference,
+                        slotFormat: formatMismatchWarning.slotFormat,
+                      },
+                    }]);
                   } else {
-                    handleAssign(action.clinicianId, action.slotId, action.allocationMethod);
+                    handleAssign(action.clinicianId, action.slotId, action.allocationMethod, {
+                      preference: formatMismatchWarning.preference,
+                      slotFormat: formatMismatchWarning.slotFormat,
+                    });
                     setIsAllocateDialogOpen(false);
                     setIsManualAllocateOpen(false);
                     setIsManualAllocation(false);

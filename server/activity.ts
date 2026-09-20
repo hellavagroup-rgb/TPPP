@@ -12,6 +12,7 @@ export const RECENT_ACTIVITY_ACTIONS = [
   "activity_client_reallocated",
   "activity_client_deallocated",
   "activity_client_options_sent",
+  "activity_session_format_override",
   "activity_form_completed",
   "activity_form_sent",
   "activity_form_delivery_failed",
@@ -55,6 +56,7 @@ export const RECENT_ACTIVITY_CATEGORY_ACTIONS = {
     "activity_client_reallocated",
     "activity_client_deallocated",
     "activity_client_options_sent",
+    "activity_session_format_override",
     "activity_form_completed",
     "activity_form_sent",
     "activity_form_delivery_failed",
@@ -190,6 +192,15 @@ export function toRecentActivityItem(log: AuditLog): RecentActivityItem {
       return { id: log.id, eventType: "client", title: "Client allocation released", description: `${clientDisplayId} was released from ${clinicianName}.`, actorName, timestamp: log.timestamp };
     case "activity_client_options_sent":
       return { id: log.id, eventType: "client", title: "Appointment options sent", description: `${number(details, "optionCount", 1)} appointment option${number(details, "optionCount", 1) === 1 ? "" : "s"} sent for ${clientDisplayId}.`, actorName, timestamp: log.timestamp };
+    case "activity_session_format_override":
+      return {
+        id: log.id,
+        eventType: "client",
+        title: "Session format mismatch accepted",
+        description: `${clientDisplayId} preferred ${text(details, "submittedPreference", "another format").replace("_", "-")}, but an ${text(details, "selectedSlotFormat", "alternative").replace("_", "-")} slot was selected.`,
+        actorName,
+        timestamp: log.timestamp,
+      };
     case "activity_form_completed":
       return { id: log.id, eventType: "form", title: "Form completed", description: `${clientDisplayId} completed ${text(details, "formTitle", "an intake form")}.`, actorName, timestamp: log.timestamp };
     case "activity_form_sent":

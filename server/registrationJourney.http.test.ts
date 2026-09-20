@@ -556,6 +556,37 @@ describe("registration journey HTTP routes", () => {
     expect(h.state.activities.filter(a => a.action === "activity_client_options_sent")).toHaveLength(1);
   });
 
+  it("records a verified session-format override when allocation options are sent", async () => {
+    h.state.options = [];
+    h.state.client.status = "FormsCompleted";
+    h.state.slot.locationType = "in_person";
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.tenant.autoAllocationEmailEnabled = true;
+
+    const response = await request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({
+        selections: [{
+          clinicianId: "clinician-a",
+          slotId: "slot-a",
+          formatOverride: { preference: "online", slotFormat: "in_person" },
+        }],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(h.state.activities).toContainEqual(expect.objectContaining({
+      tenantId: h.state.tenant.id,
+      action: "activity_session_format_override",
+      resourceId: "client-a",
+      details: expect.objectContaining({
+        clientDisplayId: h.state.client.displayId,
+        submittedPreference: "online",
+        selectedSlotFormat: "in_person",
+      }),
+    }));
+  });
+
   it("replaces stale options instead of including them in a new allocation email", async () => {
     h.state.client.status = "FormsCompleted";
     h.state.tenant.multiClinicianAllocationEnabled = true;
@@ -632,6 +663,61 @@ describe("registration journey HTTP routes", () => {
     expect(h.state.emails).toHaveLength(1);
     expect(h.state.client.registrationEmailSentAt).toBeInstanceOf(Date);
     expect(h.state.client.status).toBe("OptionSelected");
+  });
+
+  it("records a verified session-format override after manual allocation", async () => {
+    resetState({ client: {
+      status: "FormsCompleted",
+      assignedClinicianId: null,
+      assignedSlotId: null,
+    } });
+    h.state.slot.locationType = "in_person";
+
+    const response = await request("/api/clients/client-a/assign", {
+      method: "POST",
+      body: JSON.stringify({
+        clinicianId: "clinician-a",
+        slotId: "slot-a",
+        allocationMethod: "manual",
+        formatOverride: { preference: "online", slotFormat: "in_person" },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(h.state.activities).toContainEqual(expect.objectContaining({
+      tenantId: h.state.tenant.id,
+      action: "activity_session_format_override",
+      resourceId: "client-a",
+      details: expect.objectContaining({
+        clientDisplayId: h.state.client.displayId,
+        submittedPreference: "online",
+        selectedSlotFormat: "in_person",
+      }),
+    }));
+    const override = h.state.activities.find(a => a.action === "activity_session_format_override");
+    expect(override.details).not.toHaveProperty("formResponses");
+  });
+
+  it("does not record an unverified session-format override", async () => {
+    resetState({ client: {
+      status: "FormsCompleted",
+      assignedClinicianId: null,
+      assignedSlotId: null,
+    } });
+    h.state.slot.locationType = "online";
+
+    const response = await request("/api/clients/client-a/assign", {
+      method: "POST",
+      body: JSON.stringify({
+        clinicianId: "clinician-a",
+        slotId: "slot-a",
+        allocationMethod: "manual",
+        formatOverride: { preference: "online", slotFormat: "in_person" },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(h.state.activities.filter(a => a.action === "activity_session_format_override")).toHaveLength(0);
   });
 
   it("deduplicates repeated manual-allocation automatic delivery", async () => {

@@ -2274,7 +2274,9 @@ export default function Clients() {
                         <div className="flex flex-col gap-1">
                           <span className="font-mono font-semibold text-sm">{client.displayId}</span>
                           {client.status === "RegistrationPending" && (
-                            <span className="inline-flex items-center text-[9px] px-1.5 py-0 rounded-full bg-violet-100 text-violet-700 border border-violet-200 w-fit">Registration Pending</span>
+                            <span className="inline-flex items-center text-[9px] px-1.5 py-0 rounded-full bg-violet-100 text-violet-700 border border-violet-200 w-fit">
+                              {client.registrationFormSubmissionId ? "Payment Pending" : "Registration Pending"}
+                            </span>
                           )}
                           {client.status === "BookingConfirmed" && (
                             <span className="inline-flex items-center text-[9px] px-1.5 py-0 rounded-full bg-green-100 text-green-700 border border-green-200 w-fit">Booking Confirmed</span>
@@ -2390,7 +2392,7 @@ export default function Clients() {
                           {client.insurer && client.insurer !== "Private" && <Badge variant="outline" className="text-[10px] mb-2">{client.insurer}</Badge>}
                           {contactPreferenceBadge(client)}
                           {paymentStatusBadge(client) && <div className="mt-1">{paymentStatusBadge(client)}</div>}
-                          {client.status === "RegistrationPending" && (
+                          {client.status === "RegistrationPending" && !client.registrationFormSubmissionId && (
                             <p className="text-[10px] text-violet-600 mt-2 flex items-center gap-1"><Clock className="h-3 w-3" /> Awaiting registration</p>
                           )}
                           {client.status === "BookingConfirmed" && (

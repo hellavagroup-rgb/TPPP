@@ -358,6 +358,69 @@ function NotificationsTab() {
   );
 }
 
+function PaymentSettingsTab() {
+  const queryClient = useQueryClient();
+  const [secretKey, setSecretKey] = useState("");
+  const [webhookSecret, setWebhookSecret] = useState("");
+  const { data: status } = useQuery<{ configured: boolean; webhookConfigured: boolean; encryptionReady: boolean }>({
+    queryKey: ["/api/stripe/status"],
+  });
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("POST", "/api/settings/stripe", {
+        ...(secretKey ? { stripeSecretKey: secretKey } : {}),
+        ...(webhookSecret ? { stripeWebhookSecret: webhookSecret } : {}),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || "Stripe settings could not be saved.");
+      return body;
+    },
+    onSuccess: () => {
+      setSecretKey("");
+      setWebhookSecret("");
+      queryClient.invalidateQueries({ queryKey: ["/api/stripe/status"] });
+      toast.success("Payment settings saved");
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  return (
+    <Card className="border-none shadow-sm">
+      <CardHeader>
+        <CardTitle>Stripe payment setup</CardTitle>
+        <CardDescription>
+          Configure the practice Stripe secret key and webhook signing secret. Stored credentials are encrypted and are never displayed again.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <Alert>
+          <ShieldCheck className="h-4 w-4" />
+          <AlertDescription>
+            {status?.configured && status?.webhookConfigured
+              ? "Stripe and webhook signing are configured."
+              : "Both values are required before automatic payment setup can recover."}
+          </AlertDescription>
+        </Alert>
+        <div className="grid gap-2">
+          <Label htmlFor="stripe-secret-key">Stripe secret key</Label>
+          <Input id="stripe-secret-key" type="password" autoComplete="off" value={secretKey} onChange={event => setSecretKey(event.target.value)} placeholder={status?.configured ? "Configured — enter only to replace" : "sk_live_…"} />
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="stripe-webhook-secret">Webhook signing secret</Label>
+          <Input id="stripe-webhook-secret" type="password" autoComplete="off" value={webhookSecret} onChange={event => setWebhookSecret(event.target.value)} placeholder={status?.webhookConfigured ? "Configured — enter only to replace" : "whsec_…"} />
+        </div>
+        <Button
+          onClick={() => saveMutation.mutate()}
+          disabled={saveMutation.isPending || (!secretKey && !webhookSecret)}
+        >
+          {saveMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
+          Save payment settings
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
 function EmailTemplatesTab({
   paymentsEnabled,
   matchingEmailsEnabled,
@@ -1691,10 +1754,11 @@ export default function Settings() {
   const gmailEnabled = tenant?.gmailIntakeEnabled === true;
   const registrationFormEnabled = tenant?.registrationFormEnabled === true;
 
-  // Support ?tab=gmail deep-links, but fall back if the tab is disabled
+  // Support operational deep-links, but fall back if a feature tab is disabled.
   const urlTab = new URLSearchParams(window.location.search).get("tab");
   const defaultTab =
     urlTab === "gmail" && gmailEnabled ? "gmail" :
+    urlTab === "payments" ? "payments" :
     "notifications";
 
   return (
@@ -1708,6 +1772,7 @@ export default function Settings() {
         <TabsList className="flex-wrap h-auto">
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
           <TabsTrigger value="email-templates">Message Templates</TabsTrigger>
+          <TabsTrigger value="payments">Payments</TabsTrigger>
           {registrationFormEnabled && <TabsTrigger value="registration-form">Registration Form</TabsTrigger>}
           {registrationFormEnabled && <TabsTrigger value="registration-terms">Registration Terms</TabsTrigger>}
           <TabsTrigger value="non-engagement">Categories</TabsTrigger>
@@ -1731,6 +1796,10 @@ export default function Settings() {
             bookingConfirmedEmailEnabled={tenant?.bookingConfirmedEmailEnabled === true}
             zoomLinkEmailEnabled={tenant?.zoomLinkEmailEnabled === true}
           />
+        </TabsContent>
+
+        <TabsContent value="payments">
+          <PaymentSettingsTab />
         </TabsContent>
 
         {registrationFormEnabled && (

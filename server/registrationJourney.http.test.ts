@@ -22,7 +22,9 @@ const h = vi.hoisted(() => {
     emailResult: { success: true, outcome: "accepted" } as any,
     emailThrows: false,
     paymentResult: { url: "https://pay.test/session", paymentLinkId: "plink_1" } as any,
+    preventCheckoutSave: false,
   };
+  let transactionTail: Promise<void> = Promise.resolve();
 
   const tableName = (table: any) => {
     const symbol = Object.getOwnPropertySymbols(table).find(s => s.description === "drizzle:Name");
@@ -61,6 +63,7 @@ const h = vi.hoisted(() => {
   };
 
   const db: any = {
+    execute: vi.fn(async () => []),
     select: () => ({
       from: (table: any) => chain(() => rowsFor(table)),
     }),
@@ -122,7 +125,7 @@ const h = vi.hoisted(() => {
         if (patch.status === "RegistrationPending" && state.client.status !== "OptionSelected") return [];
         if (["BookingConfirmed", "Scheduled"].includes(patch.status)
           && !["OptionsSent", "RegistrationPending", "BookingConfirmed", "Scheduled"].includes(state.client.status)) return [];
-        if (patch.stripeCheckoutUrl && state.client.stripeCheckoutUrl) return [];
+        if (patch.stripeCheckoutUrl && (state.client.stripeCheckoutUrl || state.preventCheckoutSave)) return [];
         const resolvedPatch = { ...patch };
         if (resolvedPatch.agreedRatePence && typeof resolvedPatch.agreedRatePence === "object") {
           resolvedPatch.agreedRatePence = state.client.agreedRatePence > 0
@@ -134,6 +137,10 @@ const h = vi.hoisted(() => {
       }),
     }),
     transaction: async (callback: any) => {
+      const previous = transactionTail;
+      let release!: () => void;
+      transactionTail = new Promise<void>(resolve => { release = resolve; });
+      await previous;
       const backup = structuredClone({
         client: state.client, slot: state.slot, options: state.options,
         snapshots: state.bookingSnapshots, submissions: state.submissions,
@@ -147,6 +154,8 @@ const h = vi.hoisted(() => {
         state.bookingSnapshots = backup.snapshots;
         state.submissions = backup.submissions;
         throw error;
+      } finally {
+        release();
       }
     },
   };
@@ -266,6 +275,8 @@ function resetState(overrides: { client?: any; tenant?: any } = {}) {
     registrationTermsContent: "Current terms",
     registrationTermsVersion: 4,
     paymentsEnabled: false,
+    stripeSecretKey: "sk_test_tenant",
+    stripeWebhookSecret: "whsec_test_tenant",
     bookingConfirmedEmailEnabled: true,
     ...overrides.tenant,
   };
@@ -287,6 +298,9 @@ function resetState(overrides: { client?: any; tenant?: any } = {}) {
     registrationEmailClaimId: null,
     registrationEmailPendingToken: null,
     registrationPaymentAttemptKey: null,
+    registrationPaymentFailedAt: null,
+    registrationPaymentFailureCode: null,
+    registrationPaymentFailureReason: null,
     stripeCheckoutUrl: null,
     stripePaymentLinkId: null,
     paymentType: null,
@@ -325,6 +339,7 @@ function resetState(overrides: { client?: any; tenant?: any } = {}) {
   h.state.emailResult = { success: true, outcome: "accepted" };
   h.state.emailThrows = false;
   h.state.paymentResult = { url: "https://pay.test/session", paymentLinkId: "plink_1" };
+  h.state.preventCheckoutSave = false;
   vi.clearAllMocks();
 }
 
@@ -897,14 +912,20 @@ describe("registration journey HTTP routes", () => {
     const payload = JSON.stringify({ paymentType: "self_pay", termsVersion: 4, registrationTemplateUpdatedAt: "2026-09-06T12:00:00.000Z", registrationResponses: { agreement: "Yes" } });
     const noRate = await request("/api/public/register/client-a/registration-token", { method: "POST", body: payload });
     expect(noRate.status).toBe(422);
-    expect(h.state.client.status).toBe("OptionSelected");
+    expect(h.state.client).toMatchObject({
+      status: "RegistrationPending",
+      registrationPaymentFailureCode: "client_rate_required",
+    });
 
     h.state.client.agreedRatePence = 12000;
     const stripe = await import("./stripe");
     vi.mocked(stripe.isStripeConfigured).mockReturnValue(false);
     const noStripe = await request("/api/public/register/client-a/registration-token", { method: "POST", body: payload });
     expect(noStripe.status).toBe(503);
-    expect(h.state.client.status).toBe("OptionSelected");
+    expect(h.state.client).toMatchObject({
+      status: "RegistrationPending",
+      registrationPaymentFailureCode: "stripe_unavailable",
+    });
     vi.mocked(stripe.isStripeConfigured).mockReturnValue(true);
 
     h.state.tenant.paymentsEnabled = false;
@@ -912,6 +933,147 @@ describe("registration journey HTTP routes", () => {
     expect(disabled.status).toBe(200);
     expect(h.state.client.status).toBe("BookingConfirmed");
     expect(h.state.submissions).toHaveLength(1);
+  });
+
+  it("lets an administrator retry the same failed automatic payment attempt", async () => {
+    resetState({
+      tenant: { paymentsEnabled: true },
+      client: {
+        status: "RegistrationPending",
+        paymentType: "self_pay",
+        registrationFormSubmissionId: "submission-1",
+        registrationPaymentAttemptKey: "stable-attempt",
+        registrationPaymentFailedAt: new Date(),
+        registrationPaymentFailureCode: "provider_transient",
+        registrationPaymentFailureReason: "Retry the existing automatic setup.",
+      },
+    });
+
+    const first = await request("/api/clients/client-a/retry-payment-setup", { method: "POST" });
+    const second = await request("/api/clients/client-a/retry-payment-setup", { method: "POST" });
+
+    expect(first).toMatchObject({ status: 200, body: { url: "https://pay.test/session", idempotent: false } });
+    expect(second).toMatchObject({ status: 200, body: { url: "https://pay.test/session", idempotent: true } });
+    expect(h.state.paymentLinks).toHaveLength(1);
+    expect(h.state.paymentLinks[0].idempotencyKey).toBe("registration-payment-client-a-stable-attempt");
+    expect(h.state.client).toMatchObject({
+      registrationPaymentFailedAt: null,
+      registrationPaymentFailureCode: null,
+      registrationPaymentFailureReason: null,
+      stripePaymentLinkId: "plink_1",
+    });
+  });
+
+  it("uses the tenant key already decrypted by authenticated middleware", async () => {
+    resetState({
+      tenant: { paymentsEnabled: true, stripeSecretKey: "sk_plaintext_from_middleware" },
+      client: {
+        status: "RegistrationPending",
+        paymentType: "self_pay",
+        registrationFormSubmissionId: "submission-1",
+        registrationPaymentAttemptKey: "stable-attempt",
+        registrationPaymentFailedAt: new Date(),
+        registrationPaymentFailureCode: "stripe_unavailable",
+      },
+    });
+    const encryption = await import("./encryption");
+    vi.mocked(encryption.decryptSecret).mockImplementation(() => {
+      throw new Error("plaintext must not be decrypted twice");
+    });
+
+    const response = await request("/api/clients/client-a/retry-payment-setup", { method: "POST" });
+
+    expect(response.status).toBe(200);
+    expect(h.state.paymentLinks[0].tenantStripeKey).toBe("sk_plaintext_from_middleware");
+    expect(encryption.decryptSecret).not.toHaveBeenCalled();
+  });
+
+  it("serializes concurrent administrator retries", async () => {
+    resetState({
+      tenant: { paymentsEnabled: true },
+      client: {
+        status: "RegistrationPending",
+        paymentType: "self_pay",
+        registrationFormSubmissionId: "submission-1",
+        registrationPaymentAttemptKey: "stable-attempt",
+        registrationPaymentFailedAt: new Date(),
+        registrationPaymentFailureCode: "interrupted",
+      },
+    });
+
+    const [first, second] = await Promise.all([
+      request("/api/clients/client-a/retry-payment-setup", { method: "POST" }),
+      request("/api/clients/client-a/retry-payment-setup", { method: "POST" }),
+    ]);
+
+    expect([first.status, second.status]).toEqual([200, 200]);
+    expect(h.state.paymentLinks).toHaveLength(1);
+    expect([first.body.idempotent, second.body.idempotent].sort()).toEqual([false, true]);
+  });
+
+  it("reuses the provider identity after acceptance is interrupted before persistence", async () => {
+    resetState({
+      tenant: { paymentsEnabled: true },
+      client: {
+        status: "RegistrationPending",
+        paymentType: "self_pay",
+        registrationFormSubmissionId: "submission-1",
+        registrationPaymentAttemptKey: "stable-attempt",
+        registrationPaymentFailedAt: new Date(),
+        registrationPaymentFailureCode: "interrupted",
+      },
+    });
+    h.state.preventCheckoutSave = true;
+    const interrupted = await request("/api/clients/client-a/retry-payment-setup", { method: "POST" });
+    h.state.preventCheckoutSave = false;
+    const recovered = await request("/api/clients/client-a/retry-payment-setup", { method: "POST" });
+
+    expect(interrupted.status).toBe(409);
+    expect(recovered.status).toBe(200);
+    expect(h.state.paymentLinks).toHaveLength(2);
+    expect(new Set(h.state.paymentLinks.map(link => link.idempotencyKey))).toEqual(
+      new Set(["registration-payment-client-a-stable-attempt"]),
+    );
+  });
+
+  it("keeps automatic payment recovery tenant scoped", async () => {
+    resetState({
+      tenant: { id: "tenant-b", paymentsEnabled: true },
+      client: {
+        tenantId: "tenant-a",
+        status: "RegistrationPending",
+        paymentType: "self_pay",
+        registrationFormSubmissionId: "submission-1",
+        registrationPaymentAttemptKey: "stable-attempt",
+        registrationPaymentFailedAt: new Date(),
+      },
+    });
+
+    const response = await request("/api/clients/client-a/retry-payment-setup", { method: "POST" });
+    expect(response.status).toBe(404);
+    expect(h.state.paymentLinks).toHaveLength(0);
+  });
+
+  it("updates the existing warning when an administrator retry fails again", async () => {
+    resetState({
+      tenant: { paymentsEnabled: true },
+      client: {
+        status: "RegistrationPending",
+        paymentType: "self_pay",
+        registrationFormSubmissionId: "submission-1",
+        registrationPaymentAttemptKey: "stable-attempt",
+        registrationPaymentFailedAt: new Date("2026-09-01"),
+        registrationPaymentFailureCode: "interrupted",
+      },
+    });
+    h.state.paymentResult = null;
+
+    const response = await request("/api/clients/client-a/retry-payment-setup", { method: "POST" });
+
+    expect(response.status).toBe(502);
+    expect(h.state.client.registrationPaymentFailureCode).toBe("provider_transient");
+    expect(h.state.client.registrationPaymentFailedAt).toBeInstanceOf(Date);
+    expect(h.state.paymentLinks).toHaveLength(1);
   });
 
   it("completes non-payment registration once across response-loss retries", async () => {

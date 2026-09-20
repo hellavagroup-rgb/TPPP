@@ -197,6 +197,9 @@ export const clients = pgTable("clients", {
   stripePaymentLinkId: text("stripe_payment_link_id"), // Stripe Payment Link ID (plink_...) for deactivation
   registrationPaymentAttemptKey: text("registration_payment_attempt_key"),
   registrationPaymentFailedAt: timestamp("registration_payment_failed_at"),
+  registrationPaymentFailureCode: text("registration_payment_failure_code", {
+    enum: ["client_rate_required", "stripe_unavailable", "provider_rejected", "provider_transient", "interrupted"],
+  }),
   registrationPaymentFailureReason: text("registration_payment_failure_reason"),
   registrationFormSubmissionId: varchar("registration_form_submission_id"),
   paymentStatus: text("payment_status", { enum: ["none", "setup_pending", "active"] }).default("none"),

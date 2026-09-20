@@ -933,6 +933,44 @@ export default function Clients() {
     }
   };
 
+  const handleRetryAutomaticPaymentSetup = async () => {
+    if (!paymentLinkClient) return;
+    setIsGeneratingLink(true);
+    try {
+      const ratePence = Math.round(parseFloat(agreedRatePounds) * 100);
+      if (ratePence > 0 && ratePence !== paymentLinkClient.agreedRatePence) {
+        const rateResponse = await fetch(`/api/clients/${paymentLinkClient.id}/agreed-rate`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ agreedRatePence: ratePence }),
+        });
+        if (!rateResponse.ok) throw new Error("The agreed rate could not be saved.");
+      }
+      const response = await fetch(`/api/clients/${paymentLinkClient.id}/retry-payment-setup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Automatic payment setup could not be retried.");
+      setGeneratedPaymentUrl(data.url);
+      invalidateOperationalData(queryClient);
+      toast({
+        title: "Automatic payment setup recovered",
+        description: "The existing registration journey can now continue.",
+      });
+    } catch (error) {
+      toast({
+        title: "Payment setup still needs attention",
+        description: error instanceof Error ? error.message : "Automatic payment setup could not be retried.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsGeneratingLink(false);
+    }
+  };
+
   const handleOpenCharge = (client: ClientType) => {
     setChargeClient(client);
     const assignedClinician = clinicians.find(c => c.id === client.assignedClinicianId);
@@ -1104,10 +1142,26 @@ export default function Clients() {
               <FileText className="h-3 w-3 mr-1" /> Registration responses
             </Button>
           )}
-          {payment === "recovery_needed" && stripeEnabled && (
-            <Button size="sm" variant="outline" className="h-6 px-2 text-[10px] text-red-700 border-red-300" onClick={() => handleOpenPaymentLink(client)}>
-              <RotateCcw className="h-3 w-3 mr-1" /> Recover payment setup
-            </Button>
+          {payment === "recovery_needed" && (
+            client.registrationPaymentFailureCode === "stripe_unavailable" ? (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-6 px-2 text-[10px] text-red-700 border-red-300"
+                onClick={() => setLocation("/settings?tab=payments")}
+              >
+                <ExternalLink className="h-3 w-3 mr-1" /> Open Payment settings
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-6 px-2 text-[10px] text-red-700 border-red-300"
+                onClick={() => handleOpenPaymentLink(client)}
+              >
+                <RotateCcw className="h-3 w-3 mr-1" /> Recover payment setup
+              </Button>
+            )
           )}
         </div>
       </div>
@@ -3831,11 +3885,20 @@ export default function Clients() {
             <Button variant="outline" onClick={() => setIsPaymentLinkOpen(false)}>Close</Button>
             <Button
               data-testid="button-generate-payment-link"
-              onClick={handleGeneratePaymentLink}
-              disabled={isGeneratingLink || !agreedRatePounds || parseFloat(agreedRatePounds) <= 0}
+              onClick={paymentLinkClient?.registrationPaymentFailedAt
+                ? handleRetryAutomaticPaymentSetup
+                : handleGeneratePaymentLink}
+              disabled={
+                isGeneratingLink
+                || !agreedRatePounds
+                || parseFloat(agreedRatePounds) <= 0
+                || (!!paymentLinkClient?.registrationPaymentFailedAt && !stripeEnabled)
+              }
             >
               {isGeneratingLink ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <CreditCard className="h-4 w-4 mr-2" />}
-              {generatedPaymentUrl ? "Regenerate Link" : "Generate Link"}
+              {paymentLinkClient?.registrationPaymentFailedAt
+                ? "Retry automatic setup"
+                : generatedPaymentUrl ? "Regenerate Link" : "Generate Link"}
             </Button>
           </DialogFooter>
         </DialogContent>

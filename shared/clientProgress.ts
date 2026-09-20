@@ -22,6 +22,7 @@ export interface ClientProgressRecord {
   termsAcceptedAt?: Date | string | null;
   registrationPaymentAttemptKey?: string | null;
   registrationPaymentFailedAt?: Date | string | null;
+  registrationPaymentFailureCode?: string | null;
   registrationPaymentFailureReason?: string | null;
   stripeCheckoutUrl?: string | null;
   paymentStatus?: "none" | "setup_pending" | "active" | string | null;

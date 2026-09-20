@@ -24,6 +24,7 @@ describe("development schema synchronization", () => {
       id: clients.id,
       registrationPaymentAttemptKey: clients.registrationPaymentAttemptKey,
       registrationPaymentFailedAt: clients.registrationPaymentFailedAt,
+      registrationPaymentFailureCode: clients.registrationPaymentFailureCode,
       registrationPaymentFailureReason: clients.registrationPaymentFailureReason,
     }).from(clients);
 

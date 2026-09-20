@@ -60,6 +60,12 @@ import {
   normalizeStoredClientStatus,
   validateAdminStatusTransition,
 } from "@shared/clientWorkflow";
+import {
+  classifyPaymentSetupProviderFailure,
+  paymentSetupFailureMessage,
+  paymentSetupRecoveryHref,
+  type PaymentSetupFailureCode,
+} from "./paymentSetupRecovery";
 
 function formatActivitySlot(slot: { type?: string | null; day?: string | null; date?: string | null; startTime?: string | null; endTime?: string | null; locationType?: string | null }): string {
   const day = slot.type === "SpecificDate" ? slot.date : slot.day;
@@ -1134,6 +1140,9 @@ export async function registerRoutes(
         ...c,
         hasFailedPayment: failedMap.has(c.id),
         latestFailureReason: failedMap.get(c.id) ?? null,
+        paymentSetupRecoveryHref: c.registrationPaymentFailedAt
+          ? paymentSetupRecoveryHref(c.registrationPaymentFailureCode, c.id)
+          : null,
       }));
       res.json(clients);
     } catch (error) {
@@ -2974,9 +2983,31 @@ export async function registerRoutes(
           stripeAvailable: isStripeConfigured(registrationTenantStripeKey),
         });
         if (prerequisite === "client_rate_required") {
+          await db.update(clients).set({
+            registrationPaymentFailedAt: new Date(),
+            registrationPaymentFailureCode: "client_rate_required",
+            registrationPaymentFailureReason: paymentSetupFailureMessage("client_rate_required"),
+            updatedAt: new Date(),
+          }).where(and(
+            eq(clients.id, client.id),
+            eq(clients.status, "RegistrationPending"),
+            eq(clients.registrationPaymentAttemptKey, client.registrationPaymentAttemptKey!),
+            isNull(clients.stripeCheckoutUrl),
+          ));
           return res.status(422).json({ error: "A positive session rate must be configured before self-pay registration can continue." });
         }
         if (prerequisite === "stripe_unavailable") {
+          await db.update(clients).set({
+            registrationPaymentFailedAt: new Date(),
+            registrationPaymentFailureCode: "stripe_unavailable",
+            registrationPaymentFailureReason: paymentSetupFailureMessage("stripe_unavailable"),
+            updatedAt: new Date(),
+          }).where(and(
+            eq(clients.id, client.id),
+            eq(clients.status, "RegistrationPending"),
+            eq(clients.registrationPaymentAttemptKey, client.registrationPaymentAttemptKey!),
+            isNull(clients.stripeCheckoutUrl),
+          ));
           return res.status(503).json({ error: "Online payment is not configured for this practice. Please contact the practice." });
         }
       }
@@ -3027,21 +3058,6 @@ export async function registerRoutes(
           }
         }
 
-        const paymentPrerequisite = registrationPaymentPrerequisite({
-          paymentType: validatedPaymentType,
-          paymentsEnabled: tenant.paymentsEnabled === true,
-          agreedRatePence: client.agreedRatePence,
-          stripeAvailable: isStripeConfigured(registrationTenantStripeKey),
-        });
-        if (paymentPrerequisite === "client_rate_required") {
-          return res.status(422).json({ error: "A positive session rate must be configured before self-pay registration can continue." });
-        }
-        if (paymentPrerequisite === "stripe_unavailable") {
-          return res.status(503).json({ error: "Online payment is not configured for this practice. Please contact the practice." });
-        }
-        if (paymentPrerequisite === "stripe_required" && !process.env.APP_BASE_URL) {
-          return res.status(503).json({ error: "Payment setup is unavailable. Please contact the practice." });
-        }
         // All completion branches get a durable attempt key. It fences direct
         // confirmation side effects and drives Stripe idempotency when required.
         const claimedPaymentAttemptKey = crypto.randomUUID();
@@ -3115,6 +3131,36 @@ export async function registerRoutes(
         }
       }
 
+      const paymentPrerequisite = registrationPaymentPrerequisite({
+        paymentType: effectivePaymentType,
+        paymentsEnabled: tenant.paymentsEnabled === true,
+        agreedRatePence: client.agreedRatePence,
+        stripeAvailable: isStripeConfigured(registrationTenantStripeKey),
+      });
+      const prerequisiteFailureCode: PaymentSetupFailureCode | null =
+        paymentPrerequisite === "client_rate_required" ? "client_rate_required"
+        : paymentPrerequisite === "stripe_unavailable" ? "stripe_unavailable"
+        : paymentPrerequisite === "stripe_required" && !process.env.APP_BASE_URL ? "interrupted"
+        : null;
+      if (prerequisiteFailureCode && paymentAttemptKey) {
+        await db.update(clients).set({
+          registrationPaymentFailedAt: new Date(),
+          registrationPaymentFailureCode: prerequisiteFailureCode,
+          registrationPaymentFailureReason: paymentSetupFailureMessage(prerequisiteFailureCode),
+          updatedAt: new Date(),
+        }).where(and(
+          eq(clients.id, client.id),
+          eq(clients.status, "RegistrationPending"),
+          eq(clients.registrationPaymentAttemptKey, paymentAttemptKey),
+          isNull(clients.stripeCheckoutUrl),
+        ));
+        const status = prerequisiteFailureCode === "client_rate_required" ? 422 : 503;
+        const error = prerequisiteFailureCode === "client_rate_required"
+          ? "A positive session rate must be configured before self-pay registration can continue."
+          : "Payment setup is unavailable. Please contact the practice.";
+        return res.status(status).json({ error });
+      }
+
       // Create Stripe checkout session when payments are enabled, rate is set, and client is self-pay
       if (registrationCompletionBranch({
         paymentType: effectivePaymentType,
@@ -3130,6 +3176,7 @@ export async function registerRoutes(
         }
 
         let session: { url: string; paymentLinkId: string } | null = null;
+        let setupFailureCode: PaymentSetupFailureCode = "provider_transient";
         try {
           session = await createPaymentLink({
             clientId: client.id,
@@ -3147,7 +3194,19 @@ export async function registerRoutes(
             registrationAttemptKey: paymentAttemptKey,
           });
         } catch (stripeErr) {
-          console.error("Stripe payment link creation failed:", stripeErr);
+          setupFailureCode = classifyPaymentSetupProviderFailure(stripeErr);
+          await db.update(clients).set({
+            registrationPaymentFailedAt: new Date(),
+            registrationPaymentFailureCode: setupFailureCode,
+            registrationPaymentFailureReason: paymentSetupFailureMessage(setupFailureCode),
+            updatedAt: new Date(),
+          }).where(and(
+            eq(clients.id, client.id),
+            eq(clients.status, "RegistrationPending"),
+            eq(clients.registrationPaymentAttemptKey, paymentAttemptKey),
+            isNull(clients.stripeCheckoutUrl),
+          ));
+          console.error(`Stripe payment link creation failed (${setupFailureCode})`);
         }
 
         if (!session) {
@@ -3155,7 +3214,8 @@ export async function registerRoutes(
           // retried safely with the same Stripe idempotency keys.
           await db.update(clients).set({
             registrationPaymentFailedAt: new Date(),
-            registrationPaymentFailureReason: "Automatic payment setup could not be completed.",
+            registrationPaymentFailureCode: setupFailureCode,
+            registrationPaymentFailureReason: paymentSetupFailureMessage(setupFailureCode),
             updatedAt: new Date(),
           }).where(and(
             eq(clients.id, client.id),
@@ -3171,6 +3231,7 @@ export async function registerRoutes(
           stripePaymentLinkId: session.paymentLinkId,
           paymentStatus: "setup_pending",
           registrationPaymentFailedAt: null,
+          registrationPaymentFailureCode: null,
           registrationPaymentFailureReason: null,
           updatedAt: new Date(),
         }).where(and(
@@ -5159,6 +5220,135 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("Stripe checkout error:", error?.message);
       res.status(500).json({ error: error?.message || "Failed to create checkout session" });
+    }
+  });
+
+  // Resume the automatic registration payment attempt. This is deliberately
+  // separate from manual/routine payment-link creation.
+  app.post("/api/clients/:id/retry-payment-setup", requireAdmin, async (req, res) => {
+    try {
+      if (!req.tenant) return res.status(400).json({ error: "Tenant not found" });
+      const scopedClient = await storage.getClientById(req.params.id);
+      if (!scopedClient || scopedClient.tenantId !== req.tenant.id) {
+        return res.status(404).json({ error: "Client not found" });
+      }
+      // requireTenant decrypts tenant credentials before attaching them to req.
+      // Public registration routes fetch encrypted tenant rows and decrypt once,
+      // but authenticated routes must use this request-scoped plaintext value.
+      const tenantStripeKey = req.tenant.stripeSecretKey || null;
+      const baseUrl = process.env.APP_BASE_URL?.replace(/\/$/, "");
+      const result = await db.transaction(async (tx) => {
+        await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${req.tenant!.id}:${req.params.id}:payment-setup-retry`}))`);
+        const current = await tx.select().from(clients).where(and(
+          eq(clients.id, req.params.id),
+          eq(clients.tenantId, req.tenant!.id),
+        )).limit(1).then(rows => rows[0]);
+        if (!current) return { status: 404, error: "Client not found" } as const;
+        if (current.stripeCheckoutUrl && current.stripePaymentLinkId) {
+          return { status: 200, url: current.stripeCheckoutUrl, idempotent: true } as const;
+        }
+        if (
+          current.status !== "RegistrationPending"
+          || current.paymentType !== "self_pay"
+          || !current.registrationFormSubmissionId
+          || !current.registrationPaymentAttemptKey
+        ) {
+          return { status: 409, error: "This client has no recoverable automatic payment setup." } as const;
+        }
+
+        const prerequisite = registrationPaymentPrerequisite({
+          paymentType: "self_pay",
+          paymentsEnabled: req.tenant!.paymentsEnabled === true,
+          agreedRatePence: current.agreedRatePence,
+          stripeAvailable: isStripeConfigured(tenantStripeKey),
+        });
+        const failureCode: PaymentSetupFailureCode | null =
+          prerequisite === "client_rate_required" ? "client_rate_required"
+          : prerequisite === "stripe_unavailable" ? "stripe_unavailable"
+          : prerequisite === "stripe_required" && !baseUrl ? "interrupted"
+          : null;
+        if (failureCode) {
+          await tx.update(clients).set({
+            registrationPaymentFailedAt: new Date(),
+            registrationPaymentFailureCode: failureCode,
+            registrationPaymentFailureReason: paymentSetupFailureMessage(failureCode),
+            updatedAt: new Date(),
+          }).where(and(
+            eq(clients.id, current.id),
+            eq(clients.tenantId, req.tenant!.id),
+            eq(clients.registrationPaymentAttemptKey, current.registrationPaymentAttemptKey),
+            isNull(clients.stripeCheckoutUrl),
+          ));
+          return {
+            status: failureCode === "client_rate_required" ? 422 : 503,
+            error: paymentSetupFailureMessage(failureCode),
+            recoveryHref: paymentSetupRecoveryHref(failureCode, current.id),
+          } as const;
+        }
+
+        let link: { url: string; paymentLinkId: string } | null = null;
+        let providerFailure: PaymentSetupFailureCode = "provider_transient";
+        try {
+          link = await createPaymentLink({
+            clientId: current.id,
+            clientDisplayId: current.displayId,
+            amountPence: current.agreedRatePence!,
+            successUrl: `${baseUrl}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+            tenantId: current.tenantId,
+            tenantStripeKey,
+            practiceName: req.tenant!.name,
+            childName: req.tenant!.intakeClientSummaryEnabled === true
+              ? childNameFromClientNotes(current.notes)
+              : undefined,
+            previousPaymentLinkId: current.stripePaymentLinkId,
+            idempotencyKey: `registration-payment-${current.id}-${current.registrationPaymentAttemptKey}`,
+            registrationAttemptKey: current.registrationPaymentAttemptKey,
+          });
+        } catch (error) {
+          providerFailure = classifyPaymentSetupProviderFailure(error);
+          console.error(`Automatic payment setup retry failed (${providerFailure})`);
+        }
+        if (!link) {
+          await tx.update(clients).set({
+            registrationPaymentFailedAt: new Date(),
+            registrationPaymentFailureCode: providerFailure,
+            registrationPaymentFailureReason: paymentSetupFailureMessage(providerFailure),
+            updatedAt: new Date(),
+          }).where(and(
+            eq(clients.id, current.id),
+            eq(clients.tenantId, req.tenant!.id),
+            eq(clients.registrationPaymentAttemptKey, current.registrationPaymentAttemptKey),
+            isNull(clients.stripeCheckoutUrl),
+          ));
+          return {
+            status: 502,
+            error: paymentSetupFailureMessage(providerFailure),
+            recoveryHref: paymentSetupRecoveryHref(providerFailure, current.id),
+          } as const;
+        }
+
+        const saved = await tx.update(clients).set({
+          stripeCheckoutUrl: link.url,
+          stripePaymentLinkId: link.paymentLinkId,
+          paymentStatus: "setup_pending",
+          registrationPaymentFailedAt: null,
+          registrationPaymentFailureCode: null,
+          registrationPaymentFailureReason: null,
+          updatedAt: new Date(),
+        }).where(and(
+          eq(clients.id, current.id),
+          eq(clients.tenantId, req.tenant!.id),
+          eq(clients.registrationPaymentAttemptKey, current.registrationPaymentAttemptKey),
+          isNull(clients.stripeCheckoutUrl),
+        )).returning({ id: clients.id });
+        if (!saved.length) return { status: 409, error: "Payment setup changed while retrying. Refresh and try again." } as const;
+        return { status: 200, url: link.url, idempotent: false } as const;
+      });
+
+      if ("error" in result) return res.status(result.status).json(result);
+      return res.status(200).json(result);
+    } catch {
+      return res.status(500).json({ error: "Automatic payment setup could not be retried." });
     }
   });
 

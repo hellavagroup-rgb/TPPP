@@ -20,3 +20,4 @@
 - [Registration consent evidence](registration-consent-evidence.md) — use one form answer for consent; store its exact terms snapshot, answer, version, and server timestamp together.
 - [Designated intake and registration forms](designated-workflow-forms.md) — each tenant has one intake form and, when registration is enabled, one registration form.
 - [Automatic payment link workflow](automatic-payment-links.md) — new-workflow payment links are created automatically; admins do not need an early manual action.
+- [Confirmation state and slot retirement](confirmation-state-slot-retirement.md) — BookingConfirmed is feature-gated; confirmation retires availability but preserves a booking snapshot.

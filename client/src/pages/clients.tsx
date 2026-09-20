@@ -93,11 +93,17 @@ import { paymentProgress, registrationProgress } from "@shared/clientProgress";
 import { invalidateOperationalData, useOperationalRefresh } from "@/lib/operationalRefresh";
 import {
   findAvailabilityInSubmissions,
+  canCommitSlotSelection,
+  createLatestRequestGuard,
+  findSessionFormatPreference,
+  getSessionFormatMismatch,
   getSlotUnavailableReason,
   rankSlotsByAvailability,
   slotMatchesAvailability,
   WEEKDAYS,
   type NormalizedAvailability,
+  type SessionFormat,
+  type SessionFormatPreference,
 } from "@/lib/availability-utils";
 
 function mutationErrorMessage(error: Error, fallback: string): string {
@@ -494,7 +500,16 @@ export default function Clients() {
   const [isAllocateDialogOpen, setIsAllocateDialogOpen] = useState(false);
   const [isManualAllocation, setIsManualAllocation] = useState(false); // Track if current allocation is manual
   const [allocationReason, setAllocationReason] = useState(""); // Reason for allocation decision
-  const [inPersonWarning, setInPersonWarning] = useState<{ clinicianId: string; slotId: string; allocationMethod: "form" | "manual" } | null>(null);
+  const [sessionFormatPreference, setSessionFormatPreference] = useState<SessionFormatPreference>(null);
+  const [allocationPreferenceLoading, setAllocationPreferenceLoading] = useState(false);
+  const allocationPreferenceRequestGuard = useRef(createLatestRequestGuard());
+  const [formatMismatchWarning, setFormatMismatchWarning] = useState<{
+    preference: SessionFormat;
+    slotFormat: SessionFormat;
+    action:
+      | { type: "assign"; clinicianId: string; slotId: string; allocationMethod: "form" | "manual" }
+      | { type: "select-option"; clinicianId: string; slotId: string };
+  } | null>(null);
 
   const [archiveReason, setArchiveReason] = useState("");
   const [archiveCategory, setArchiveCategory] = useState("");
@@ -1481,16 +1496,52 @@ export default function Clients() {
 
   // Fetch client availability when allocation dialog opens
   const fetchClientAvailability = async (clientId: string) => {
+    const request = allocationPreferenceRequestGuard.current.begin();
     setClientAvailabilityForAllocation({ status: "missing", selections: null, windows: null });
+    setSessionFormatPreference(null);
+    setAllocationPreferenceLoading(true);
     try {
       const response = await apiRequest("GET", `/api/clients/${clientId}/submissions`);
+      if (!allocationPreferenceRequestGuard.current.isLatest(request)) return;
       if (response.ok) {
-        setClientAvailabilityForAllocation(findAvailabilityInSubmissions(await response.json()));
+        const clientSubmissions = await response.json();
+        if (!allocationPreferenceRequestGuard.current.isLatest(request)) return;
+        setClientAvailabilityForAllocation(findAvailabilityInSubmissions(clientSubmissions));
+        setSessionFormatPreference(findSessionFormatPreference(clientSubmissions));
         return;
       }
       setClientAvailabilityForAllocation({ status: "missing", selections: null, windows: null });
+      setSessionFormatPreference(null);
     } catch {
+      if (!allocationPreferenceRequestGuard.current.isLatest(request)) return;
       setClientAvailabilityForAllocation({ status: "missing", selections: null, windows: null });
+      setSessionFormatPreference(null);
+    } finally {
+      if (allocationPreferenceRequestGuard.current.isLatest(request)) {
+        setAllocationPreferenceLoading(false);
+      }
+    }
+  };
+
+  const requestSlotAction = (
+    slotFormat: unknown,
+    action:
+      | { type: "assign"; clinicianId: string; slotId: string; allocationMethod: "form" | "manual" }
+      | { type: "select-option"; clinicianId: string; slotId: string },
+  ) => {
+    if (!canCommitSlotSelection(allocationPreferenceLoading)) return;
+    const mismatch = getSessionFormatMismatch(sessionFormatPreference, slotFormat);
+    if (mismatch) {
+      setFormatMismatchWarning({ ...mismatch, action });
+      return;
+    }
+    if (action.type === "select-option") {
+      setSelectedOptions(prev => [...prev, { clinicianId: action.clinicianId, slotId: action.slotId }]);
+    } else {
+      handleAssign(action.clinicianId, action.slotId, action.allocationMethod);
+      setIsAllocateDialogOpen(false);
+      setIsManualAllocateOpen(false);
+      setIsManualAllocation(false);
     }
   };
 
@@ -2848,7 +2899,7 @@ export default function Clients() {
                             key={slot.id}
                             title={unavailableReason || undefined}
                             variant={isSelectedForOptions ? "default" : slot.isBooked ? "ghost" : "outline"}
-                            disabled={!isSelectedForOptions && isSlotUnavailable}
+                            disabled={allocationPreferenceLoading || (!isSelectedForOptions && isSlotUnavailable)}
                             className={`justify-start h-auto py-2 px-3 text-xs relative ${
                               isSelectedForOptions
                                 ? "bg-primary text-primary-foreground border-primary ring-2 ring-primary/30"
@@ -2866,18 +2917,11 @@ export default function Clients() {
                                 if (isSelectedForOptions) {
                                   setSelectedOptions(prev => prev.filter(o => !(o.clinicianId === clinician.id && o.slotId === slot.id)));
                                 } else if (!slot.isBooked && selectedOptions.length < 3) {
-                                  setSelectedOptions(prev => [...prev, { clinicianId: clinician.id, slotId: slot.id }]);
+                                  requestSlotAction(slot.locationType, { type: "select-option", clinicianId: clinician.id, slotId: slot.id });
                                 }
                               } else {
                                 const method = isManualAllocation ? "manual" : "form";
-                                if ((slot as any).locationType === "in_person") {
-                                  setIsAllocateDialogOpen(false);
-                                  setInPersonWarning({ clinicianId: clinician.id, slotId: slot.id, allocationMethod: method });
-                                } else {
-                                  handleAssign(clinician.id, slot.id, method);
-                                  setIsAllocateDialogOpen(false);
-                                  setIsManualAllocation(false);
-                                }
+                                requestSlotAction(slot.locationType, { type: "assign", clinicianId: clinician.id, slotId: slot.id, allocationMethod: method });
                               }
                             }}
                           >
@@ -2948,7 +2992,7 @@ export default function Clients() {
                   : `${selectedOptions.length}/3 selected`}
               </span>
               <Button
-                disabled={selectedOptions.length === 0 || allocateOptionsMutation.isPending}
+                disabled={allocationPreferenceLoading || selectedOptions.length === 0 || allocateOptionsMutation.isPending}
                 onClick={() => {
                   if (selectedClient) {
                     allocateOptionsMutation.mutate({ clientId: selectedClient.id, selections: selectedOptions });
@@ -3463,19 +3507,13 @@ export default function Clients() {
                               key={slot.id}
                               variant="outline"
                               size="sm"
-                              disabled={unavailableReason !== null}
+                              disabled={allocationPreferenceLoading || unavailableReason !== null}
                               title={unavailableReason || undefined}
                               className={`justify-start h-auto py-2 px-3 text-xs ${
                                 unavailableReason ? "opacity-50 cursor-not-allowed" : "hover:border-primary hover:bg-primary/5"
                               }`}
                               onClick={() => {
-                                if ((slot as any).locationType === "in_person") {
-                                  setIsManualAllocateOpen(false);
-                                  setInPersonWarning({ clinicianId: clinician.id, slotId: slot.id, allocationMethod: "manual" });
-                                } else {
-                                  handleAssign(clinician.id, slot.id, "manual");
-                                  setIsManualAllocateOpen(false);
-                                }
+                                requestSlotAction(slot.locationType, { type: "assign", clinicianId: clinician.id, slotId: slot.id, allocationMethod: "manual" });
                               }}
                             >
                               <CalendarCheck className="h-3 w-3 mr-2" />
@@ -4163,30 +4201,37 @@ export default function Clients() {
         </Dialog>
       )}
 
-      {/* In-Person Slot Warning (allocation dialogs) */}
-      <AlertDialog open={!!inPersonWarning} onOpenChange={(open) => { if (!open) setInPersonWarning(null); }}>
+      {/* Session-format mismatch warning (allocation dialogs) */}
+      <AlertDialog open={!!formatMismatchWarning} onOpenChange={(open) => { if (!open) setFormatMismatchWarning(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>In-Person Slot</AlertDialogTitle>
+            <AlertDialogTitle>Session format mismatch</AlertDialogTitle>
             <AlertDialogDescription>
-              This slot is marked as <strong>In-Person</strong>. Please ensure the client is aware they will need to attend in person before confirming.
+              The client submitted a preference for <strong>{formatMismatchWarning?.preference === "online" ? "Online" : "In-person"}</strong> sessions,
+              but this slot is <strong>{formatMismatchWarning?.slotFormat === "online" ? "Online" : "In-person"}</strong>.
+              Do you still want to continue?
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel data-testid="button-inperson-cancel-alloc">Cancel</AlertDialogCancel>
+            <AlertDialogCancel data-testid="button-format-mismatch-cancel">Cancel</AlertDialogCancel>
             <AlertDialogAction
-              data-testid="button-inperson-confirm-alloc"
+              data-testid="button-format-mismatch-confirm"
               onClick={() => {
-                if (inPersonWarning) {
-                  handleAssign(inPersonWarning.clinicianId, inPersonWarning.slotId, inPersonWarning.allocationMethod);
-                  if (inPersonWarning.allocationMethod === "manual") {
+                if (formatMismatchWarning) {
+                  const { action } = formatMismatchWarning;
+                  if (action.type === "select-option") {
+                    setSelectedOptions(prev => [...prev, { clinicianId: action.clinicianId, slotId: action.slotId }]);
+                  } else {
+                    handleAssign(action.clinicianId, action.slotId, action.allocationMethod);
+                    setIsAllocateDialogOpen(false);
+                    setIsManualAllocateOpen(false);
                     setIsManualAllocation(false);
                   }
-                  setInPersonWarning(null);
+                  setFormatMismatchWarning(null);
                 }
               }}
             >
-              Confirm Allocation
+              Continue
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

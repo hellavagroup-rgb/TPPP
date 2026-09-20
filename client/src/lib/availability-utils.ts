@@ -17,6 +17,89 @@ export type NormalizedAvailability =
   | { status: "available"; selections: Partial<Record<Weekday, string[]>>; windows: Partial<Record<Weekday, AvailabilityWindow[]>> }
   | { status: "missing" | "malformed"; selections: null; windows: null };
 
+export type SessionFormat = "online" | "in_person";
+export type SessionFormatPreference = SessionFormat | "both" | null;
+
+type FormField = {
+  id?: unknown;
+  name?: unknown;
+  options?: unknown;
+};
+
+function normalizedFormatTerm(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  return value.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+}
+
+function formatFromAnswer(value: unknown): SessionFormatPreference {
+  const values = Array.isArray(value) ? value : [value];
+  let online = false;
+  let inPerson = false;
+  for (const item of values) {
+    const term = normalizedFormatTerm(item);
+    if (term === "online") online = true;
+    else if (term === "in person") inPerson = true;
+    else if (term === "hybrid" || term === "both" || term === "online and in person" || term === "online & in person") {
+      online = true;
+      inPerson = true;
+    }
+  }
+  if (online && inPerson) return "both";
+  if (online) return "online";
+  if (inPerson) return "in_person";
+  return null;
+}
+
+/**
+ * Finds a session-format response by the configured choices, not a tenant-specific
+ * field id or label. Unknown historic formats are deliberately ignored.
+ */
+export function findSessionFormatPreference(submissions: unknown): SessionFormatPreference {
+  if (!Array.isArray(submissions)) return null;
+  for (const submission of submissions) {
+    if (!submission || typeof submission !== "object") continue;
+    const { formFields, responses } = submission as { formFields?: unknown; responses?: unknown };
+    if (!Array.isArray(formFields) || !responses || typeof responses !== "object" || Array.isArray(responses)) continue;
+    for (const field of formFields as FormField[]) {
+      if (!field || !Array.isArray(field.options)) continue;
+      const optionTerms = field.options.map(normalizedFormatTerm);
+      if (!optionTerms.includes("online") || !optionTerms.includes("in person")) continue;
+      const key = typeof field.id === "string" ? field.id : typeof field.name === "string" ? field.name : null;
+      if (!key) continue;
+      const preference = formatFromAnswer((responses as Record<string, unknown>)[key]);
+      if (preference) return preference;
+    }
+  }
+  return null;
+}
+
+export function getSessionFormatMismatch(
+  preference: SessionFormatPreference,
+  slotFormat: unknown,
+): { preference: SessionFormat; slotFormat: SessionFormat } | null {
+  if (!preference || preference === "both") return null;
+  const normalizedSlot = normalizedFormatTerm(slotFormat);
+  const slot = normalizedSlot === "online" ? "online" : normalizedSlot === "in person" ? "in_person" : null;
+  return slot && slot !== preference ? { preference, slotFormat: slot } : null;
+}
+
+export function canCommitSlotSelection(preferenceLoading: boolean): boolean {
+  return !preferenceLoading;
+}
+
+export function createLatestRequestGuard() {
+  let latestRequest = 0;
+  return {
+    begin(): number {
+      latestRequest += 1;
+      return latestRequest;
+    },
+    isLatest(request: number): boolean {
+      return request === latestRequest;
+    },
+  };
+}
+
 /**
  * Broad intake periods use these fixed boundaries throughout allocation:
  * Morning 07:00–12:00, Afternoon 12:00–17:00, Evening 17:00–21:00.

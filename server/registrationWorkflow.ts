@@ -16,7 +16,7 @@ export function isCompletedRegistrationRetry(
   supplied: string,
   status: string,
 ): boolean {
-  return status === "BookingConfirmed"
+  return (status === "BookingConfirmed" || status === "Scheduled")
     && !!token.registrationToken
     && token.registrationToken === supplied;
 }
@@ -132,7 +132,7 @@ export function nextTermsVersion(contentChanged: boolean, currentVersion: number
 }
 
 export function registrationRetryResponse(status: string, checkoutUrl: string | null): "completed" | "checkout" | "processing" | "invalid" {
-  if (status === "BookingConfirmed") return "completed";
+  if (status === "BookingConfirmed" || status === "Scheduled") return "completed";
   if (status === "RegistrationPending") return checkoutUrl ? "checkout" : "processing";
   return "invalid";
 }

@@ -1,5 +1,5 @@
 import { 
-  users, clients, clinicians, timeSlots, formTemplates, formSubmissions, formDeliveries, clientCreationRequests, tasks, auditLogs, emailTemplates, inviteTokens, passwordResetTokens, nonEngagementCategories, customInsurers, paymentCharges, intakeMessages, tenants, clientClinicianOptions,
+  users, clients, clinicians, timeSlots, formTemplates, formSubmissions, formDeliveries, clientCreationRequests, tasks, auditLogs, emailTemplates, inviteTokens, passwordResetTokens, nonEngagementCategories, customInsurers, paymentCharges, intakeMessages, tenants, clientClinicianOptions, bookingSnapshots,
   type User, type InsertUser, type SafeUser,
   type Tenant,
   type Client, type InsertClient, type FormDelivery,
@@ -33,6 +33,10 @@ import {
   hasActiveClientAllocation,
   hasFinalizedBooking,
 } from "./clientAllocationWorkflow";
+import {
+  confirmBookingInTransaction,
+  type BookingConfirmationResult,
+} from "./bookingConfirmation";
 
 export type StrandedAllocationRepairRow = {
   clientId: string;
@@ -100,6 +104,11 @@ export type SlotIntegrityReport = {
   skipped: SlotIntegrityRow[];
 };
 
+export type ReassignClientResult = {
+  client: Client;
+  confirmation?: BookingConfirmationResult;
+};
+
 class ClientMissingDuringAllocationUpdateError extends Error {}
 
 // Storage interface for all CRUD operations
@@ -156,7 +165,14 @@ export interface IStorage {
   restoreClient(id: string): Promise<Client | undefined>;
   deleteClientPermanently(id: string): Promise<boolean>;
   assignClinicianToClient(clientId: string, clinicianId: string, slotId: string, tenantId: string, allocationMethod?: "form" | "manual", allocationReason?: string): Promise<Client>;
-  reassignClient(clientId: string, newClinicianId: string | null, newSlotId: string | null, newStatus: string, tenantId: string): Promise<Client | undefined>;
+  reassignClient(
+    clientId: string,
+    newClinicianId: string | null,
+    newSlotId: string | null,
+    newStatus: string,
+    tenantId: string,
+    confirmationIdempotencyKey?: string,
+  ): Promise<ReassignClientResult | undefined>;
   repairStrandedClientAllocations(ipAddress?: string | null): Promise<StrandedAllocationRepairResult>;
   repairSlotIntegrity(tenantId?: string, ipAddress?: string | null): Promise<SlotIntegrityReport>;
   
@@ -481,13 +497,22 @@ export class DatabaseStorage implements IStorage {
           : eq(clients.isArchived, false));
 
     const rows = await db
-      .select({ client: clients, slotLocationType: timeSlots.locationType })
+      .select({
+        client: clients,
+        slotLocationType: timeSlots.locationType,
+        bookingSnapshot: bookingSnapshots,
+      })
       .from(clients)
       .leftJoin(timeSlots, eq(clients.assignedSlotId, timeSlots.id))
+      .leftJoin(bookingSnapshots, eq(clients.id, bookingSnapshots.clientId))
       .where(baseWhere)
       .orderBy(desc(clients.intakeDate));
 
-    return rows.map(r => ({ ...r.client, slotLocationType: r.slotLocationType ?? null })) as any;
+    return rows.map(r => ({
+      ...r.client,
+      slotLocationType: r.bookingSnapshot?.locationType ?? r.slotLocationType ?? null,
+      bookingSnapshot: r.bookingSnapshot ?? null,
+    })) as any;
   }
 
   async restoreClient(id: string): Promise<Client | undefined> {
@@ -1085,7 +1110,14 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async reassignClient(clientId: string, newClinicianId: string | null, newSlotId: string | null, newStatus: string, tenantId: string): Promise<Client | undefined> {
+  async reassignClient(
+    clientId: string,
+    newClinicianId: string | null,
+    newSlotId: string | null,
+    newStatus: string,
+    tenantId: string,
+    confirmationIdempotencyKey?: string,
+  ): Promise<ReassignClientResult | undefined> {
     return db.transaction(async (tx) => {
       const [existingClient] = await tx.select().from(clients).where(and(
         eq(clients.id, clientId),
@@ -1102,6 +1134,16 @@ export class DatabaseStorage implements IStorage {
         assignedSlotId: newSlotId,
       });
       const hasAllocation = !!(oldClinicianId && (oldSlotIdToRelease || existingClient.assignedSlot));
+
+      if (confirmationIdempotencyKey && !isReassigning && hasAllocation) {
+        const confirmation = await confirmBookingInTransaction(tx, {
+          clientId,
+          tenantId,
+          source: "reassignment",
+          idempotencyKey: confirmationIdempotencyKey,
+        });
+        return { client: confirmation.client, confirmation };
+      }
 
       if (isAllocatedStatus && !isReassigning && hasAllocation && newClinicianId !== oldClinicianId) {
         throw new Error("Current slot does not belong to selected clinician");
@@ -1182,7 +1224,7 @@ export class DatabaseStorage implements IStorage {
             updatedAt: new Date()
           }).where(and(eq(clients.id, clientId), eq(clients.tenantId, tenantId))).returning();
           if (!updated) throw new Error("Client reassignment update failed");
-          return updated;
+          return { client: updated };
         }
         const statusUpdates: any = {
           status: newStatus as any,
@@ -1196,7 +1238,7 @@ export class DatabaseStorage implements IStorage {
         const [updated] = await tx.update(clients).set(statusUpdates)
           .where(and(eq(clients.id, clientId), eq(clients.tenantId, tenantId))).returning();
         if (!updated) throw new Error("Client reassignment update failed");
-        return updated;
+        return { client: updated };
       }
 
       // Case 2: Reassign to a new slot
@@ -1279,7 +1321,17 @@ export class DatabaseStorage implements IStorage {
             .returning({ id: clinicians.id });
           if (incremented.length !== 1) throw new Error("Clinician workload update failed");
         }
-        return updated;
+        if (confirmationIdempotencyKey) {
+          const confirmation = await confirmBookingInTransaction(tx, {
+            clientId,
+            tenantId,
+            source: "reassignment",
+            idempotencyKey: confirmationIdempotencyKey,
+            expectedStatus: newStatus as Client["status"],
+          });
+          return { client: confirmation.client, confirmation };
+        }
+        return { client: updated };
       }
 
       // Case 3: Change to non-allocated status (release slot and clear assignment)
@@ -1315,7 +1367,7 @@ export class DatabaseStorage implements IStorage {
           updatedAt: new Date()
         }).where(and(eq(clients.id, clientId), eq(clients.tenantId, tenantId))).returning();
         if (!updated) throw new Error("Client reassignment update failed");
-        return updated;
+        return { client: updated };
       }
 
       // Case 4: Trying to set allocated status without existing allocation or new slot
@@ -1325,7 +1377,7 @@ export class DatabaseStorage implements IStorage {
         updatedAt: new Date()
       }).where(and(eq(clients.id, clientId), eq(clients.tenantId, tenantId))).returning();
       if (!updated) throw new Error("Client reassignment update failed");
-      return updated;
+      return { client: updated };
     });
   }
 

@@ -24,7 +24,7 @@ import { syncAllActiveConnections } from "./gmailSync";
 import { requireTenant } from './middleware/tenant';
 import { requireSuperAdmin } from './middleware/superAdmin';
 import { db } from "./db";
-import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, formDeliveries, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs, intakeMessages, gmailConnections, paymentCharges, clientClinicianOptions } from "@shared/schema";
+import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, formDeliveries, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs, intakeMessages, gmailConnections, paymentCharges, clientClinicianOptions, bookingSnapshots } from "@shared/schema";
 import { designatedIntakeCompletionBlocker } from "./workflowFormDesignation";
 import { isStripeConfigured, getStripeInstance, createPaymentLink, chargeOffSession, constructWebhookEvent, childNameFromClientNotes } from "./stripe";
 import { encryptSecret, decryptSecret, isEncryptionConfigured } from "./encryption";
@@ -54,6 +54,7 @@ import {
 } from "@shared/registrationConsent";
 import { isValidZoomLink, onlineBookingNeedsZoomLink, shouldResetZoomDelivery } from "@shared/bookingZoom";
 import { zoomDeliveryIdempotencyKey } from "./bookingZoomWorkflow";
+import { confirmBooking, confirmBookingInTransaction } from "./bookingConfirmation";
 import {
   hasActiveClientAllocation,
   normalizeStoredClientStatus,
@@ -1419,7 +1420,15 @@ export async function registerRoutes(
         updateData.assignedClinicianId = null;
       }
       
-      const updated = (isDeallocation || req.body.status === "Scheduled")
+      const confirmation = isConfirmation
+        ? await confirmBooking({
+            clientId: req.params.id,
+            tenantId: req.tenant!.id,
+            source: "manual",
+            idempotencyKey: String(req.get("Idempotency-Key") || `manual-confirmation-${req.params.id}`),
+          })
+        : null;
+      const updated = confirmation?.client || ((isDeallocation || req.body.status === "Scheduled")
         ? await storage.updateClientAndReleaseSlot(
             req.params.id,
             updateData,
@@ -1434,13 +1443,14 @@ export async function registerRoutes(
               currentClient.assignedSlotId,
               req.tenant!.id,
             )
-          : await storage.updateClient(req.params.id, updateData);
+          : await storage.updateClient(req.params.id, updateData));
       
       if (!updated) {
         return res.status(404).json({ error: "Client not found" });
       }
 
-      if (req.body.status && req.body.status !== oldStatus) {
+      const resultingStatus = confirmation?.status || req.body.status;
+      if (resultingStatus && resultingStatus !== oldStatus && (!isConfirmation || confirmation?.newlyConfirmed)) {
         const clinicianName = await getClinicianActivityName(currentClient.assignedClinicianId);
         await recordActivity(
           req,
@@ -1450,7 +1460,7 @@ export async function registerRoutes(
           {
             clientDisplayId: updated.displayId,
             oldStatus,
-            newStatus: req.body.status,
+            newStatus: resultingStatus,
             clinicianName,
           },
         );
@@ -1521,37 +1531,33 @@ export async function registerRoutes(
       }
 
       // CY&A: auto-send booking confirmed email when manually advancing to BookingConfirmed
-      if (req.body.status === "BookingConfirmed" && oldStatus !== "BookingConfirmed" && req.tenant?.bookingConfirmedEmailEnabled && updated.email) {
+      if (confirmation?.newlyConfirmed && confirmation.status === "BookingConfirmed" && req.tenant?.bookingConfirmedEmailEnabled && updated.email) {
         try {
-          const confirmedClinician = updated.assignedClinicianId
-            ? await db.select().from(clinicians).where(eq(clinicians.id, updated.assignedClinicianId)).limit(1).then(r => r[0])
-            : undefined;
-          const clinicianUser = confirmedClinician?.userId
-            ? await db.select({ name: users.name }).from(users).where(eq(users.id, confirmedClinician.userId)).limit(1).then(r => r[0])
-            : undefined;
-          const slotRow = updated.assignedSlotId
-            ? await db.select().from(timeSlots).where(eq(timeSlots.id, updated.assignedSlotId)).limit(1).then(r => r[0])
+          const confirmedClinician = confirmation.snapshot.clinicianId
+            ? await db.select().from(clinicians).where(eq(clinicians.id, confirmation.snapshot.clinicianId)).limit(1).then(r => r[0])
             : undefined;
           const tcBook = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor } : undefined;
           const bookEmail = await generateBookingConfirmedEmail({
-            clinicianName: clinicianUser?.name || 'Your Clinician',
-            type: slotRow?.type || null,
-            day: slotRow?.day || null,
-            date: slotRow?.date || null,
-            startTime: slotRow?.startTime || '',
-            endTime: slotRow?.endTime || '',
+            clinicianName: confirmation.snapshot.clinicianName,
+            type: confirmation.snapshot.slotType,
+            day: confirmation.snapshot.day,
+            date: confirmation.snapshot.date,
+            startTime: confirmation.snapshot.startTime,
+            endTime: confirmation.snapshot.endTime,
           }, tcBook);
           const bookingDelivery = await sendEmail({ ...bookEmail, to: updated.email });
           if (bookingDelivery.success && tcBook) {
+            await db.update(clients).set({ bookingConfirmationSentAt: new Date() })
+              .where(and(eq(clients.id, updated.id), isNull(clients.bookingConfirmationSentAt)));
             await sendOnlineZoomFollowUp({
               enabled: req.tenant.zoomLinkEmailEnabled === true,
               clientId: updated.id,
               clientEmail: updated.email,
-              clinicianName: clinicianUser?.name || 'Your Clinician',
+              clinicianName: confirmation.snapshot.clinicianName,
               zoomLink: confirmedClinician?.zoomLink,
-              locationType: slotRow?.locationType,
+              locationType: confirmation.snapshot.locationType,
               tenant: tcBook,
-              idempotencyKey: `zoom-follow-up-${updated.id}-${updated.assignedSlotId || "no-slot"}`,
+              idempotencyKey: `zoom-follow-up-${updated.id}-${confirmation.snapshot.slotId || "no-slot"}`,
               notifyAdminsOnFailure: true,
             });
           }
@@ -1890,17 +1896,24 @@ export async function registerRoutes(
       if (req.tenant.zoomLinkEmailEnabled !== true) {
         return res.status(409).json({ error: "Zoom link emails are not enabled for this practice" });
       }
-      if (client.status !== "BookingConfirmed" || !client.assignedClinicianId || !client.assignedSlotId) {
-        return res.status(409).json({ error: "A Zoom link can only be sent for a confirmed, allocated booking" });
+      if (client.status !== "BookingConfirmed") {
+        return res.status(409).json({ error: "A Zoom link can only be sent for a confirmed booking" });
       }
-      const [clinician, slot] = await Promise.all([
-        db.select().from(clinicians).where(and(eq(clinicians.id, client.assignedClinicianId), eq(clinicians.tenantId, req.tenant.id))).limit(1).then(rows => rows[0]),
-        db.select().from(timeSlots).where(eq(timeSlots.id, client.assignedSlotId)).limit(1).then(rows => rows[0]),
-      ]);
-      if (!clinician || !slot || (slot.tenantId && slot.tenantId !== req.tenant.id)) {
-        return res.status(409).json({ error: "The assigned clinician or appointment is no longer available" });
+      const snapshot = await db.select().from(bookingSnapshots).where(and(
+        eq(bookingSnapshots.clientId, client.id),
+        eq(bookingSnapshots.tenantId, req.tenant.id),
+      )).limit(1).then(rows => rows[0]);
+      if (!snapshot?.clinicianId) {
+        return res.status(409).json({ error: "The confirmed clinician is no longer available" });
       }
-      if (!onlineBookingNeedsZoomLink(slot.locationType)) {
+      const clinician = await db.select().from(clinicians).where(and(
+        eq(clinicians.id, snapshot.clinicianId),
+        eq(clinicians.tenantId, req.tenant.id),
+      )).limit(1).then(rows => rows[0]);
+      if (!clinician) {
+        return res.status(409).json({ error: "The confirmed clinician is no longer available" });
+      }
+      if (!onlineBookingNeedsZoomLink(snapshot.locationType)) {
         return res.status(409).json({ error: "In-person bookings do not require a Zoom link" });
       }
       if (!isValidZoomLink(clinician.zoomLink)) {
@@ -1916,7 +1929,7 @@ export async function registerRoutes(
         clientEmail: client.email,
         clinicianName,
         zoomLink: clinician.zoomLink,
-        locationType: slot.locationType,
+        locationType: snapshot.locationType,
         tenant: {
           id: req.tenant.id,
           name: req.tenant.name,
@@ -1925,10 +1938,10 @@ export async function registerRoutes(
         },
         idempotencyKey: zoomDeliveryIdempotencyKey({
           clientId: client.id,
-          slotId: slot.id,
+          slotId: snapshot.slotId || snapshot.id,
           clinicianId: clinician.id,
           clientEmail: client.email,
-          zoomLink: clinician.zoomLink,
+          zoomLink: clinician.zoomLink!,
         }),
       });
       if (!sent) return res.status(502).json({ error: "The Zoom link email was not accepted. Please try again." });
@@ -2183,17 +2196,23 @@ export async function registerRoutes(
         });
       }
 
-      const updated = await storage.reassignClient(
+      const finalReassignment = ["Scheduled", "BookingConfirmed"].includes(transition.status);
+      const reassignmentResult = await storage.reassignClient(
         req.params.clientId,
-        clinicianId || null,
-        slotId || null,
-        transition.status,
+        clinicianId || clientToReassign.assignedClinicianId || null,
+        slotId || clientToReassign.assignedSlotId || null,
+        finalReassignment ? "Assigned" : transition.status,
         req.tenant!.id,
+        finalReassignment
+          ? String(req.get("Idempotency-Key") || `reassignment-confirmation-${req.params.clientId}`)
+          : undefined,
       );
-      if (!updated) {
+      if (!reassignmentResult) {
         return res.status(404).json({ error: "Client not found" });
       }
-      if (clientToReassign.status === "OptionsSent" && transition.status !== "OptionsSent") {
+      const updated = reassignmentResult.client;
+      const reassignmentConfirmation = reassignmentResult.confirmation;
+      if (!reassignmentConfirmation && clientToReassign.status === "OptionsSent" && transition.status !== "OptionsSent") {
         await db.update(clientClinicianOptions).set({ status: "declined" }).where(and(
           eq(clientClinicianOptions.clientId, clientToReassign.id),
           eq(clientClinicianOptions.tenantId, req.tenant!.id),
@@ -2206,7 +2225,7 @@ export async function registerRoutes(
             eq(timeSlots.tenantId, req.tenant!.id),
           )).limit(1).then(rows => rows[0])
         : undefined;
-      await recordActivity(
+      if (!finalReassignment || reassignmentConfirmation?.newlyConfirmed) await recordActivity(
         req,
         clinicianId ? "activity_client_reallocated" : "activity_client_deallocated",
         "client",
@@ -2219,6 +2238,56 @@ export async function registerRoutes(
           slotDescription: slot ? formatActivitySlot(slot) : "",
         },
       );
+      if (
+        reassignmentConfirmation?.newlyConfirmed
+        && reassignmentConfirmation.status === "BookingConfirmed"
+        && req.tenant?.bookingConfirmedEmailEnabled
+        && updated.email
+      ) {
+        try {
+          const confirmedClinician = reassignmentConfirmation.snapshot.clinicianId
+            ? await db.select().from(clinicians)
+              .where(eq(clinicians.id, reassignmentConfirmation.snapshot.clinicianId))
+              .limit(1).then(rows => rows[0])
+            : undefined;
+          const tenantContext = {
+            id: req.tenant.id,
+            name: req.tenant.name,
+            fromEmail: req.tenant.fromEmail,
+            primaryColor: req.tenant.primaryColor,
+          };
+          const email = await generateBookingConfirmedEmail({
+            clinicianName: reassignmentConfirmation.snapshot.clinicianName,
+            type: reassignmentConfirmation.snapshot.slotType,
+            day: reassignmentConfirmation.snapshot.day,
+            date: reassignmentConfirmation.snapshot.date,
+            startTime: reassignmentConfirmation.snapshot.startTime,
+            endTime: reassignmentConfirmation.snapshot.endTime,
+          }, tenantContext);
+          const delivery = await sendEmail({
+            ...email,
+            to: updated.email,
+            idempotencyKey: `reassignment-confirmation-${updated.id}-${reassignmentConfirmation.snapshot.id}`,
+          });
+          if (delivery.success) {
+            await db.update(clients).set({ bookingConfirmationSentAt: new Date() })
+              .where(and(eq(clients.id, updated.id), isNull(clients.bookingConfirmationSentAt)));
+            await sendOnlineZoomFollowUp({
+              enabled: req.tenant.zoomLinkEmailEnabled === true,
+              clientId: updated.id,
+              clientEmail: updated.email,
+              clinicianName: reassignmentConfirmation.snapshot.clinicianName,
+              zoomLink: confirmedClinician?.zoomLink,
+              locationType: reassignmentConfirmation.snapshot.locationType,
+              tenant: tenantContext,
+              idempotencyKey: `reassignment-zoom-follow-up-${updated.id}-${reassignmentConfirmation.snapshot.id}`,
+              notifyAdminsOnFailure: true,
+            });
+          }
+        } catch (error) {
+          console.error("Failed to send booking confirmation after reassignment:", error);
+        }
+      }
       res.json(updated);
     } catch (error: any) {
       console.error("Failed to reassign client:", error);
@@ -2528,7 +2597,9 @@ export async function registerRoutes(
             && (!client.registrationTokenExpiresAt || client.registrationTokenExpiresAt > new Date())) {
             return res.json({ selected: true, registrationUrl: `/register/${optionRow.clientId}/${client.registrationToken}`, idempotent: true });
           }
-          if (client.status === "BookingConfirmed") return res.json({ selected: true, bookingConfirmed: true, idempotent: true });
+          if (client.status === "BookingConfirmed" || client.status === "Scheduled") {
+            return res.json({ selected: true, bookingConfirmed: true, idempotent: true });
+          }
         }
         return res.status(409).json({ error: "Selection has already been submitted" });
       }
@@ -2585,8 +2656,9 @@ export async function registerRoutes(
       const registrationToken = registrationEnabled ? crypto.randomBytes(32).toString("hex") : null;
       const nextStatus = progression.status;
 
+      let optionTransactionConfirmation: Awaited<ReturnType<typeof confirmBooking>> | null;
       try {
-        await db.transaction(async (tx) => {
+        optionTransactionConfirmation = await db.transaction(async (tx) => {
           const [selectedClinician] = await tx.select({
             sessionRatePence: clinicians.sessionRatePence,
           }).from(clinicians).where(and(
@@ -2655,16 +2727,15 @@ export async function registerRoutes(
           await tx.update(clientClinicianOptions).set({ status: "declined" })
             .where(and(eq(clientClinicianOptions.clientId, optionRow.clientId), eq(clientClinicianOptions.status, "pending")));
           if (!registrationEnabled) {
-            const retired = await tx.update(timeSlots).set({
-              isBooked: false,
-              retiredAt: new Date(),
-              retirementReason: "Appointment confirmed",
-            }).where(and(
-              eq(timeSlots.id, selectedOption.slotId),
-              or(eq(timeSlots.tenantId, optionRow.tenantId), isNull(timeSlots.tenantId)),
-            )).returning({ id: timeSlots.id });
-            if (retired.length !== 1) throw new Error("SELECTED_SLOT_UNAVAILABLE");
+            return confirmBookingInTransaction(tx, {
+              clientId: optionRow.clientId,
+              tenantId: optionRow.tenantId,
+              source: "option-selection",
+              idempotencyKey: `option-confirmation-${optionRow.clientId}-${clinicianOptionId}`,
+              expectedStatus: nextStatus,
+            });
           }
+          return null;
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : "";
@@ -2680,13 +2751,18 @@ export async function registerRoutes(
         throw err;
       }
 
-      await recordActivity(req, registrationEnabled ? "activity_appointment_option_selected" : "activity_booking_confirmed", "client", client.id, {
+      // Non-registration selections are completed by the shared confirmation
+      // contract. The option transaction above claims the option and retires
+      // the slot; confirmBooking records the immutable snapshot and applies
+      // the tenant feature-gated final status (including safe retries).
+      const optionConfirmation = optionTransactionConfirmation!;
+      if (registrationEnabled || optionConfirmation?.newlyConfirmed) await recordActivity(req, registrationEnabled ? "activity_appointment_option_selected" : "activity_booking_confirmed", "client", client.id, {
         actorName: "Client",
         clientDisplayId: client.displayId || "Client",
       }, client.tenantId);
       // Feature-off follows the ordinary confirmation route rather than exposing a
       // registration link. The successful state transition above is the once-only claim.
-      if (!registrationEnabled && tenant.bookingConfirmedEmailEnabled && client.email) {
+      if (!registrationEnabled && optionConfirmation?.newlyConfirmed && optionConfirmation.status === "BookingConfirmed" && tenant.bookingConfirmedEmailEnabled && client.email) {
         try {
           const [confirmedClinician] = await db.select().from(clinicians).where(eq(clinicians.id, selectedOption.clinicianId)).limit(1);
           const clinicianUser = confirmedClinician?.userId
@@ -3123,8 +3199,14 @@ export async function registerRoutes(
 
       // Deliver before finalizing. Retries reuse the provider key, so a crash after
       // provider acceptance but before the status CAS cannot duplicate the email.
+      const registrationConfirmation = await confirmBooking({
+        clientId: client.id,
+        tenantId: client.tenantId!,
+        source: "registration",
+        idempotencyKey: `registration-confirmation-${client.id}-${paymentAttemptKey}`,
+      });
       let bookingEmailDelivered = false;
-      if (tenant?.bookingConfirmedEmailEnabled && client.email) {
+      if (registrationConfirmation.newlyConfirmed && registrationConfirmation.status === "BookingConfirmed" && tenant?.bookingConfirmedEmailEnabled && client.email) {
         try {
           const confirmedClinician = client.assignedClinicianId
             ? await db.select().from(clinicians).where(eq(clinicians.id, client.assignedClinicianId)).limit(1).then(r => r[0])
@@ -3137,12 +3219,12 @@ export async function registerRoutes(
             : undefined;
           const tcBook = tenant ? { id: tenant.id, name: tenant.name, fromEmail: tenant.fromEmail, primaryColor: tenant.primaryColor } : undefined;
           const bookEmail = await generateBookingConfirmedEmail({
-            clinicianName: clinicianUser?.name || 'Your Clinician',
-            type: slotRow?.type || null,
-            day: slotRow?.day || null,
-            date: slotRow?.date || null,
-            startTime: slotRow?.startTime || '',
-            endTime: slotRow?.endTime || '',
+            clinicianName: registrationConfirmation.snapshot.clinicianName,
+            type: registrationConfirmation.snapshot.slotType,
+            day: registrationConfirmation.snapshot.day,
+            date: registrationConfirmation.snapshot.date,
+            startTime: registrationConfirmation.snapshot.startTime,
+            endTime: registrationConfirmation.snapshot.endTime,
           }, tcBook);
           const delivery = await sendEmail({
             ...bookEmail,
@@ -3172,46 +3254,11 @@ export async function registerRoutes(
         }
       }
 
-      // Insurer or payments not enabled — finalize exactly once. A retry of a
-      // pending direct branch reaches this same CAS with the persisted attempt key.
-      const confirmed = await db.transaction(async (tx) => {
-        const moved = await tx.update(clients).set({
-          status: "BookingConfirmed",
-          registrationTokenRevokedAt: new Date(),
-          bookingConfirmationSentAt: bookingEmailDelivered ? new Date() : client.bookingConfirmationSentAt,
-          updatedAt: new Date(),
-        }).where(and(
-          eq(clients.id, client.id),
-          eq(clients.status, "RegistrationPending"),
-          eq(clients.registrationPaymentAttemptKey, paymentAttemptKey),
-        )).returning({ id: clients.id });
-        if (!moved.length || !client.assignedSlotId || !client.tenantId) return moved;
-        const retired = await tx.update(timeSlots).set({
-          isBooked: false,
-          retiredAt: new Date(),
-          retirementReason: "Appointment confirmed",
-        }).where(and(
-          eq(timeSlots.id, client.assignedSlotId),
-          or(eq(timeSlots.tenantId, client.tenantId), isNull(timeSlots.tenantId)),
-        )).returning({ id: timeSlots.id });
-        if (retired.length !== 1) {
-          throw new Error("Confirmed appointment slot could not be retired");
-        }
-        await tx.update(clientClinicianOptions).set({ status: "unavailable" }).where(and(
-          eq(clientClinicianOptions.slotId, client.assignedSlotId),
-          eq(clientClinicianOptions.tenantId, client.tenantId),
-          eq(clientClinicianOptions.status, "pending"),
-        ));
-        return moved;
-      });
-      if (!confirmed.length) {
-        const current = await storage.getClientById(client.id);
-        if (current?.status === "BookingConfirmed") {
-          return res.json({ success: true, alreadyCompleted: true });
-        }
-        return res.status(409).json({ error: "Registration completion changed while processing. Please retry." });
+      if (bookingEmailDelivered) {
+        await db.update(clients).set({ bookingConfirmationSentAt: new Date() })
+          .where(and(eq(clients.id, client.id), isNull(clients.bookingConfirmationSentAt)));
       }
-      await recordActivity(req, "activity_booking_confirmed", "client", client.id, {
+      if (registrationConfirmation.newlyConfirmed) await recordActivity(req, "activity_booking_confirmed", "client", client.id, {
         actorName: "Client",
         clientDisplayId: client.displayId || "Client",
       }, client.tenantId);
@@ -5299,12 +5346,21 @@ export async function registerRoutes(
 
         // CY&A: advance to BookingConfirmed when client came through the CY&A registration flow
         const paymentTenant = client.tenantId ? await storage.getTenantById(client.tenantId).catch(() => undefined) : undefined;
-        if (client.status === "RegistrationPending" && validRegistrationPayment) {
+        if (validRegistrationPayment && ["RegistrationPending", "Scheduled", "BookingConfirmed"].includes(client.status)) {
+          const stripeConfirmation = await confirmBooking({
+            clientId,
+            tenantId: client.tenantId!,
+            source: "stripe",
+            idempotencyKey: `stripe-booking-confirmation-${client.id}-${paymentIntentId || session.id}`,
+            expectedStatus: client.status === "RegistrationPending" ? "RegistrationPending" : undefined,
+            expectedPaymentLinkId: completedPaymentLinkId!,
+            expectedPaymentAttemptKey: registrationAttemptKey,
+          });
           let bookingEmailDelivered = false;
 
           // Deliver before the status CAS. Stripe retries reuse this provider key,
           // so a crash after acceptance cannot duplicate the confirmation email.
-          if (paymentTenant?.bookingConfirmedEmailEnabled && client.email) {
+          if (stripeConfirmation.newlyConfirmed && stripeConfirmation.status === "BookingConfirmed" && paymentTenant?.bookingConfirmedEmailEnabled && client.email) {
             try {
                 const confirmedClinician = client.assignedClinicianId
                   ? await db.select().from(clinicians).where(eq(clinicians.id, client.assignedClinicianId)).limit(1).then(r => r[0])
@@ -5317,12 +5373,12 @@ export async function registerRoutes(
                   : undefined;
                 const tcBook = paymentTenant ? { id: paymentTenant.id, name: paymentTenant.name, fromEmail: paymentTenant.fromEmail, primaryColor: paymentTenant.primaryColor } : undefined;
                 const bookEmail = await generateBookingConfirmedEmail({
-                  clinicianName: clinicianUser?.name || 'Your Clinician',
-                  type: slotRow?.type || null,
-                  day: slotRow?.day || null,
-                  date: slotRow?.date || null,
-                  startTime: slotRow?.startTime || '',
-                  endTime: slotRow?.endTime || '',
+                  clinicianName: stripeConfirmation.snapshot.clinicianName,
+                  type: stripeConfirmation.snapshot.slotType,
+                  day: stripeConfirmation.snapshot.day,
+                  date: stripeConfirmation.snapshot.date,
+                  startTime: stripeConfirmation.snapshot.startTime,
+                  endTime: stripeConfirmation.snapshot.endTime,
                 }, tcBook);
               const delivery = await sendEmail({
                 ...bookEmail,
@@ -5352,38 +5408,11 @@ export async function registerRoutes(
             }
           }
 
-          const confirmed = await db.transaction(async (tx) => {
-            const moved = await tx.update(clients).set({
-              status: "BookingConfirmed",
-              registrationTokenRevokedAt: new Date(),
-              bookingConfirmationSentAt: bookingEmailDelivered ? new Date() : client.bookingConfirmationSentAt,
-              updatedAt: new Date(),
-            }).where(and(
-              eq(clients.id, clientId),
-              eq(clients.status, "RegistrationPending"),
-              eq(clients.registrationPaymentAttemptKey, registrationAttemptKey),
-              eq(clients.stripePaymentLinkId, completedPaymentLinkId!),
-            )).returning({ id: clients.id });
-            if (!moved.length || !client.assignedSlotId || !client.tenantId) return moved;
-            const retired = await tx.update(timeSlots).set({
-              isBooked: false,
-              retiredAt: new Date(),
-              retirementReason: "Appointment confirmed",
-            }).where(and(
-              eq(timeSlots.id, client.assignedSlotId),
-              or(eq(timeSlots.tenantId, client.tenantId), isNull(timeSlots.tenantId)),
-            )).returning({ id: timeSlots.id });
-            if (retired.length !== 1) {
-              throw new Error("Confirmed appointment slot could not be retired");
-            }
-            await tx.update(clientClinicianOptions).set({ status: "unavailable" }).where(and(
-              eq(clientClinicianOptions.slotId, client.assignedSlotId),
-              eq(clientClinicianOptions.tenantId, client.tenantId),
-              eq(clientClinicianOptions.status, "pending"),
-            ));
-            return moved;
-          });
-          if (confirmed.length) {
+          if (bookingEmailDelivered) {
+            await db.update(clients).set({ bookingConfirmationSentAt: new Date() })
+              .where(and(eq(clients.id, client.id), isNull(clients.bookingConfirmationSentAt)));
+          }
+          if (stripeConfirmation.newlyConfirmed) {
             await recordActivity(req, "activity_booking_confirmed", "client", client.id, {
               actorName: "Client",
               clientDisplayId: client.displayId || "Client",

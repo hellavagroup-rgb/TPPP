@@ -2431,16 +2431,24 @@ export default function Clients() {
                     )}
                   </div>
                   <div className="flex items-center gap-2">
-                    {client.status === "Scheduled" && (client as any).confirmedAt && (
+                    {(client.status === "Scheduled" || client.status === "BookingConfirmed") && (client as any).confirmedAt && (
                       <span className="text-xs text-muted-foreground">
                         <Clock className="h-3 w-3 inline mr-1" />
                         Confirmed: {formatDateUK((client as any).confirmedAt)}
                       </span>
                     )}
-                    {client.assignedClinicianId && (
+                    {((client as any).bookingSnapshot?.clinicianName || client.assignedClinicianId) && (
                       <span className="text-sm text-muted-foreground">
                         <UserCheck className="h-4 w-4 inline mr-1" />
-                        {clinicians.find(c => c.id === client.assignedClinicianId)?.name.split(",")[0]}
+                        {(client as any).bookingSnapshot?.clinicianName
+                          || clinicians.find(c => c.id === client.assignedClinicianId)?.name.split(",")[0]}
+                      </span>
+                    )}
+                    {(client as any).bookingSnapshot && (
+                      <span className="text-sm text-muted-foreground font-mono">
+                        {(client as any).bookingSnapshot.date || (client as any).bookingSnapshot.day}
+                        {" "}
+                        {(client as any).bookingSnapshot.startTime}–{(client as any).bookingSnapshot.endTime}
                       </span>
                     )}
                     {(client as any).slotLocationType === "in_person" ? (
@@ -2455,7 +2463,7 @@ export default function Clients() {
                         data-testid={`badge-zoom-link-status-${client.id}`}
                       >
                         <AlertTriangle className="h-3 w-3" />
-                        {isValidZoomLink(clinicians.find(c => c.id === client.assignedClinicianId)?.zoomLink)
+                        {isValidZoomLink(clinicians.find(c => c.id === ((client as any).bookingSnapshot?.clinicianId || client.assignedClinicianId))?.zoomLink)
                           ? "Zoom link ready to send"
                           : "Clinician Zoom link missing"}
                       </Badge>

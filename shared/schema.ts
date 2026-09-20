@@ -262,6 +262,33 @@ export const selectClientSchema = createSelectSchema(clients);
 export type InsertClient = z.infer<typeof insertClientSchema>;
 export type Client = typeof clients.$inferSelect;
 
+// Immutable history of a confirmed appointment.  Assignment rows are retired
+// after confirmation, so confirmation views and delivery retries must never
+// depend on the live allocation relationship.
+export const bookingSnapshots = pgTable("booking_snapshots", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").references(() => tenants.id).notNull(),
+  clientId: varchar("client_id").references(() => clients.id).notNull(),
+  slotId: varchar("slot_id").references(() => timeSlots.id, { onDelete: "set null" }),
+  clinicianId: varchar("clinician_id").references(() => clinicians.id, { onDelete: "set null" }),
+  clinicianName: text("clinician_name").notNull(),
+  slotType: text("slot_type").notNull(),
+  date: text("date"),
+  day: text("day"),
+  startTime: text("start_time").notNull(),
+  endTime: text("end_time").notNull(),
+  locationType: text("location_type").notNull(),
+  confirmedAt: timestamp("confirmed_at").defaultNow().notNull(),
+  idempotencyKey: text("idempotency_key").notNull(),
+}, (table) => [
+  uniqueIndex("booking_snapshots_client_unique").on(table.clientId),
+  uniqueIndex("booking_snapshots_idempotency_unique").on(table.tenantId, table.idempotencyKey),
+]);
+
+export const insertBookingSnapshotSchema = createInsertSchema(bookingSnapshots).omit({ id: true, confirmedAt: true });
+export const selectBookingSnapshotSchema = createSelectSchema(bookingSnapshots);
+export type BookingSnapshot = typeof bookingSnapshots.$inferSelect;
+
 // ============ FORM TEMPLATES ============
 export const formTemplates = pgTable("form_templates", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

@@ -1,6 +1,7 @@
 import express from "express";
 import { createServer, type Server } from "http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { bookingSnapshots } from "@shared/schema";
 
 const h = vi.hoisted(() => {
   const state = {
@@ -15,6 +16,7 @@ const h = vi.hoisted(() => {
     paymentLinks: [] as any[],
     registrationTemplate: null as any,
     submissions: [] as any[],
+    bookingSnapshots: [] as any[],
     slotClaimFails: false,
     stripeLinkActive: true,
     emailResult: { success: true, outcome: "accepted" } as any,
@@ -40,6 +42,7 @@ const h = vi.hoisted(() => {
       case "form_templates": return state.registrationTemplate?.id
         && state.registrationTemplate.tenantId === state.tenant?.id ? [state.registrationTemplate] : [];
       case "form_submissions": return state.submissions;
+      case "booking_snapshots": return state.bookingSnapshots;
       default: return [];
     }
   };
@@ -51,6 +54,7 @@ const h = vi.hoisted(() => {
       where: () => builder,
       limit: (count: number) => Promise.resolve(execute().slice(0, count)),
       returning: () => Promise.resolve(execute()),
+      for: () => builder,
       then: (resolve: any, reject: any) => Promise.resolve(execute()).then(resolve, reject),
     };
     return builder;
@@ -74,6 +78,11 @@ const h = vi.hoisted(() => {
             id: `submission-${state.submissions.length + index + 1}`, ...value,
           }));
           state.submissions.push(...inserted);
+        } else if (table === bookingSnapshots || tableName(table) === "booking_snapshots") {
+          inserted = (Array.isArray(values) ? values : [values]).map((value, index) => ({
+            id: `booking-snapshot-${state.bookingSnapshots.length + index + 1}`, ...value,
+          }));
+          state.bookingSnapshots.push(...inserted);
         }
         const result: any = {
           returning: () => Promise.resolve(inserted),
@@ -100,7 +109,9 @@ const h = vi.hoisted(() => {
         }
         if (name === "client_clinician_options") {
           for (const option of state.options) {
-            if (patch.status !== "declined" || option.status === "pending") Object.assign(option, patch);
+            if (patch.status === "declined" || patch.status === "unavailable"
+              ? option.status === "pending"
+              : true) Object.assign(option, patch);
           }
           return state.options;
         }
@@ -109,7 +120,8 @@ const h = vi.hoisted(() => {
         if (patch.registrationEmailClaimId && state.client.registrationEmailSendingAt
           && state.client.registrationEmailSendingAt > new Date(Date.now() - 5 * 60 * 1000)) return [];
         if (patch.status === "RegistrationPending" && state.client.status !== "OptionSelected") return [];
-        if (patch.status === "BookingConfirmed" && !["OptionsSent", "RegistrationPending"].includes(state.client.status)) return [];
+        if (["BookingConfirmed", "Scheduled"].includes(patch.status)
+          && !["OptionsSent", "RegistrationPending", "BookingConfirmed", "Scheduled"].includes(state.client.status)) return [];
         if (patch.stripeCheckoutUrl && state.client.stripeCheckoutUrl) return [];
         const resolvedPatch = { ...patch };
         if (resolvedPatch.agreedRatePence && typeof resolvedPatch.agreedRatePence === "object") {
@@ -121,7 +133,22 @@ const h = vi.hoisted(() => {
         return [state.client];
       }),
     }),
-    transaction: async (callback: any) => callback(db),
+    transaction: async (callback: any) => {
+      const backup = structuredClone({
+        client: state.client, slot: state.slot, options: state.options,
+        snapshots: state.bookingSnapshots, submissions: state.submissions,
+      });
+      try {
+        return await callback(db);
+      } catch (error) {
+        state.client = backup.client;
+        state.slot = backup.slot;
+        state.options = backup.options;
+        state.bookingSnapshots = backup.snapshots;
+        state.submissions = backup.submissions;
+        throw error;
+      }
+    },
   };
 
   const storage: any = new Proxy({
@@ -248,8 +275,8 @@ function resetState(overrides: { client?: any; tenant?: any } = {}) {
     tenantId: "tenant-a",
     email: "client@example.test",
     status: "OptionsSent",
-    assignedClinicianId: null,
-    assignedSlotId: null,
+    assignedClinicianId: "clinician-a",
+    assignedSlotId: "slot-a",
     agreedRatePence: 12000,
     registrationToken: null,
     registrationTokenExpiresAt: null,
@@ -277,7 +304,8 @@ function resetState(overrides: { client?: any; tenant?: any } = {}) {
   }];
   h.state.slot = {
     id: "slot-a", tenantId: "tenant-a", clinicianId: "clinician-a", isBooked: false,
-    type: "SpecificDate", date: "2026-09-10", startTime: "10:00", endTime: "11:00",
+    type: "SpecificDate", day: null, date: "2026-09-10",
+    startTime: "10:00", endTime: "11:00", locationType: "online",
   };
   h.state.clinician = {
     id: "clinician-a",
@@ -291,6 +319,7 @@ function resetState(overrides: { client?: any; tenant?: any } = {}) {
   h.state.paymentLinks = [];
   h.state.registrationTemplate = null;
   h.state.submissions = [];
+  h.state.bookingSnapshots = [];
   h.state.slotClaimFails = false;
   h.state.stripeLinkActive = true;
   h.state.emailResult = { success: true, outcome: "accepted" };
@@ -457,7 +486,70 @@ describe("registration journey HTTP routes", () => {
     expect(h.state.client.status).toBe("BookingConfirmed");
     expect(h.state.slot).toMatchObject({ isBooked: false, retirementReason: "Appointment confirmed" });
     expect(h.state.slot.retiredAt).toBeInstanceOf(Date);
+    expect(h.state.bookingSnapshots).toHaveLength(1);
+    expect(h.state.bookingSnapshots[0]).toMatchObject({
+      clientId: "client-a",
+      clinicianId: "clinician-a",
+      clinicianName: "Dr Test",
+      slotType: "SpecificDate",
+      date: "2026-09-10",
+      day: null,
+      startTime: "10:00",
+      endTime: "11:00",
+      locationType: "online",
+    });
     expect(h.state.emails).toHaveLength(1);
+    expect(h.state.activities.filter(a => a.action === "activity_booking_confirmed")).toHaveLength(1);
+  });
+
+  it("retires the same recurring slot but uses legacy Scheduled when confirmation email is disabled", async () => {
+    resetState({
+      tenant: {
+        registrationFormEnabled: false,
+        bookingConfirmedEmailEnabled: false,
+      },
+    });
+    Object.assign(h.state.slot, {
+      type: "Recurring",
+      day: "Tuesday",
+      date: null,
+      startTime: "14:00",
+      endTime: "15:00",
+      locationType: "in_person",
+    });
+
+    const first = await request("/api/public/options/selection-token-a/select", {
+      method: "POST", body: JSON.stringify({ clinicianOptionId: "option-a" }),
+    });
+    const retry = await request("/api/public/options/selection-token-a/select", {
+      method: "POST", body: JSON.stringify({ clinicianOptionId: "option-a" }),
+    });
+
+    expect(first.body).toMatchObject({ selected: true, bookingConfirmed: true });
+    expect(retry.body).toMatchObject({ bookingConfirmed: true, idempotent: true });
+    expect(h.state.client.status).toBe("Scheduled");
+    expect(h.state.client).toMatchObject({
+      assignedClinicianId: null,
+      assignedSlotId: null,
+      assignedSlot: null,
+    });
+    expect(h.state.slot).toMatchObject({
+      isBooked: false,
+      retirementReason: "Appointment confirmed",
+    });
+    expect(h.state.slot.retiredAt).toBeInstanceOf(Date);
+    expect(h.state.bookingSnapshots).toHaveLength(1);
+    expect(h.state.bookingSnapshots[0]).toMatchObject({
+      clientId: "client-a",
+      clinicianName: "Dr Test",
+      slotType: "Recurring",
+      date: null,
+      day: "Tuesday",
+      startTime: "14:00",
+      endTime: "15:00",
+      locationType: "in_person",
+    });
+    expect(h.state.emails).toHaveLength(0);
     expect(h.state.activities.filter(a => a.action === "activity_booking_confirmed")).toHaveLength(1);
   });
 

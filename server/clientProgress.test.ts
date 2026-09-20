@@ -3,7 +3,13 @@ import { paymentProgress, registrationProgress } from "../shared/clientProgress"
 
 describe("durable client progress", () => {
   it("uses persisted registration delivery and submission records", () => {
-    expect(registrationProgress({})).toBe("not_sent");
+    expect(registrationProgress({ status: "OptionsSent" })).toBe("waiting_for_option");
+    expect(registrationProgress({ status: "Assigned" })).toBe("allocation_incomplete");
+    expect(registrationProgress({
+      status: "Assigned",
+      assignedClinicianId: "clinician",
+      assignedSlotId: "slot",
+    })).toBe("automatic_pending");
     expect(registrationProgress({ registrationEmailSendingAt: "2026-01-01" })).toBe("sending");
     expect(registrationProgress({ registrationEmailFailedAt: "2026-01-01" })).toBe("failed");
     expect(registrationProgress({ registrationEmailSentAt: "2026-01-01" })).toBe("sent");

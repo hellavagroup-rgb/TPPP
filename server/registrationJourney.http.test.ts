@@ -174,6 +174,19 @@ const h = vi.hoisted(() => {
       state.submissions.filter(submission => submission.clientId === clientId).map(submission => ({ ...submission }))),
     getFormTemplateById: vi.fn(async (id: string) =>
       state.registrationTemplate?.id === id ? { ...state.registrationTemplate } : undefined),
+    assignClinicianToClient: vi.fn(async (clientId: string, clinicianId: string, slotId: string, tenantId: string) => {
+      if (state.client.id !== clientId || state.client.tenantId !== tenantId) {
+        throw new Error("client not found");
+      }
+      Object.assign(state.client, {
+        assignedClinicianId: clinicianId,
+        assignedSlotId: slotId,
+        status: "Assigned",
+      });
+      state.slot.isBooked = true;
+      return { ...state.client };
+    }),
+    getTimeSlotById: vi.fn(async (id: string) => state.slot.id === id ? { ...state.slot } : undefined),
     createAuditLog: vi.fn(async (activity: any) => {
       state.activities.push(activity);
       return activity;
@@ -568,7 +581,7 @@ describe("registration journey HTTP routes", () => {
     expect(h.state.emails[0].html).not.toContain("Option 2:");
   });
 
-  it("automatically moves option selection into registration exactly once", async () => {
+  it("automatically delivers registration after option selection exactly once", async () => {
     const first = await request("/api/public/options/selection-token-a/select", {
       method: "POST", body: JSON.stringify({ clinicianOptionId: "option-a" }),
     });
@@ -578,12 +591,84 @@ describe("registration journey HTTP routes", () => {
 
     expect(first.status).toBe(200);
     expect(first.body.registrationUrl).toMatch(/^\/register\/client-a\//);
+    expect(h.state.emails[0].html).toContain(first.body.registrationUrl.split("/").at(-1));
     expect(retry.body).toMatchObject({ registrationUrl: first.body.registrationUrl, idempotent: true });
     expect(h.state.client.status).toBe("OptionSelected");
     expect(h.state.client.agreedRatePence).toBe(12000);
     expect(h.state.client.registrationTokenExpiresAt).toBeInstanceOf(Date);
     expect(h.state.activities.filter(a => a.action === "activity_appointment_option_selected")).toHaveLength(1);
-    expect(h.state.emails).toHaveLength(0);
+    expect(h.state.emails).toHaveLength(1);
+    expect(h.state.client.registrationEmailSentAt).toBeInstanceOf(Date);
+    expect(h.state.activities.filter(a => a.action === "activity_registration_sent")).toHaveLength(1);
+  });
+
+  it("records option-selection delivery failure while preserving the direct registration link", async () => {
+    h.state.emailResult = { success: false, outcome: "rejected" };
+
+    const response = await request("/api/public/options/selection-token-a/select", {
+      method: "POST", body: JSON.stringify({ clinicianOptionId: "option-a" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body.registrationUrl).toMatch(/^\/register\/client-a\//);
+    expect(h.state.client.registrationEmailSentAt).toBeNull();
+    expect(h.state.client.registrationEmailFailedAt).toBeInstanceOf(Date);
+    expect(h.state.client.registrationToken).toBeTruthy();
+  });
+
+  it("automatically delivers registration after a complete manual allocation", async () => {
+    resetState({ client: {
+      status: "FormsCompleted",
+      assignedClinicianId: null,
+      assignedSlotId: null,
+    } });
+
+    const response = await request("/api/clients/client-a/assign", {
+      method: "POST",
+      body: JSON.stringify({ clinicianId: "clinician-a", slotId: "slot-a", allocationMethod: "manual" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(h.state.emails).toHaveLength(1);
+    expect(h.state.client.registrationEmailSentAt).toBeInstanceOf(Date);
+    expect(h.state.client.status).toBe("OptionSelected");
+  });
+
+  it("deduplicates repeated manual-allocation automatic delivery", async () => {
+    resetState({ client: {
+      status: "FormsCompleted",
+      assignedClinicianId: null,
+      assignedSlotId: null,
+    } });
+    const body = JSON.stringify({ clinicianId: "clinician-a", slotId: "slot-a", allocationMethod: "manual" });
+
+    expect((await request("/api/clients/client-a/assign", { method: "POST", body })).status).toBe(200);
+    expect((await request("/api/clients/client-a/assign", { method: "POST", body })).status).toBe(200);
+
+    expect(h.state.emails).toHaveLength(1);
+    expect(h.state.activities.filter(a => a.action === "activity_registration_sent")).toHaveLength(1);
+  });
+
+  it("records manual-allocation delivery failure without claiming registration was sent", async () => {
+    resetState({ client: {
+      status: "FormsCompleted",
+      assignedClinicianId: null,
+      assignedSlotId: null,
+    } });
+    h.state.emailResult = { success: false, outcome: "rejected" };
+
+    const response = await request("/api/clients/client-a/assign", {
+      method: "POST",
+      body: JSON.stringify({ clinicianId: "clinician-a", slotId: "slot-a", allocationMethod: "manual" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(h.state.client.registrationEmailSentAt).toBeNull();
+    expect(h.state.client.registrationEmailFailedAt).toBeInstanceOf(Date);
+    expect(h.state.client).toMatchObject({
+      assignedClinicianId: "clinician-a",
+      assignedSlotId: "slot-a",
+    });
   });
 
   it("applies the selected clinician rate when the client has no specific rate", async () => {

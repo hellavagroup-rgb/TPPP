@@ -15,7 +15,7 @@ import {
 } from "@shared/schema";
 import { classifyPaymentReturn, type PaymentReturnResult } from "./paymentReturn";
 import { z } from "zod";
-import { sendEmail, buildFromAddress, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateFormCompletedNotificationEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail, generateClinicianWelcomeEmail, generateAdminInviteEmail, generateAllocationOptionsEmail, generateBookingConfirmedEmail, generateZoomLinkEmail, generateRegistrationInviteEmail, getFormCompletionPageContent, GENERIC_PRACTICE_NAME } from "./email";
+import { sendEmail, buildFromAddress, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateFormCompletedNotificationEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail, generateClinicianWelcomeEmail, generateAdminInviteEmail, generateAllocationOptionsEmail, generateBookingConfirmedEmail, generateZoomLinkEmail, getFormCompletionPageContent, GENERIC_PRACTICE_NAME } from "./email";
 import { forceReseedDatabase } from "./seed";
 import { seedDemoData } from "./seedDemo";
 import { parseIntakeEmailBody } from "./intakeParser";
@@ -30,10 +30,9 @@ import { designatedIntakeCompletionBlocker } from "./workflowFormDesignation";
 import { isStripeConfigured, getStripeInstance, createPaymentLink, chargeOffSession, constructWebhookEvent, childNameFromClientNotes } from "./stripe";
 import { encryptSecret, decryptSecret, isEncryptionConfigured } from "./encryption";
 import { getAuthUrl, exchangeCodeForTokens, syncConnection, buildRedirectUri } from "./gmailSync";
-import { isNull, isNotNull, eq, and, or, lt, inArray, desc, like, sql as drizzleSql } from "drizzle-orm";
+import { isNull, isNotNull, eq, and, or, inArray, desc, like, sql as drizzleSql } from "drizzle-orm";
 import { isRecentActivityCategory, mergeRecentActivityItems } from "./activity";
 import {
-  canSendRegistration,
   isActiveRegistrationToken,
   isCompletedRegistrationRetry,
   optionSelectionProgression,
@@ -67,6 +66,7 @@ import {
   paymentSetupRecoveryHref,
   type PaymentSetupFailureCode,
 } from "./paymentSetupRecovery";
+import { deliverRegistration, RegistrationDeliveryError } from "./registrationDelivery";
 
 export function handleLoginResult(
   req: Request,
@@ -1656,6 +1656,23 @@ export async function registerRoutes(
       } catch (activityError) {
         console.error("Failed to record manual assignment activity:", activityError);
       }
+      if (req.tenant.registrationFormEnabled === true) {
+        try {
+          await deliverRegistration({
+            tenant: req.tenant,
+            clientId: updated.id,
+            attemptKey: `automatic-manual-${updated.id}-${clinicianId}-${slotId}`,
+            recordSent: async (registrationClient) => {
+              await recordActivity(req, "activity_registration_sent", "client", registrationClient.id, {
+                clientDisplayId: registrationClient.displayId,
+                actorName: "Automatic email",
+              });
+            },
+          });
+        } catch (deliveryError) {
+          console.error("Automatic registration delivery after manual allocation failed:", deliveryError);
+        }
+      }
       res.json(updated);
     } catch (error) {
       if (error instanceof ManualAssignmentError) {
@@ -1983,216 +2000,23 @@ export async function registerRoutes(
 
   // Send (or safely resend) registration to a client allocated outside option selection.
   app.post("/api/clients/:clientId/send-registration", requireAdmin, async (req, res) => {
-    let claimedAttemptKey: string | null = null;
-    let claimedClaimId: string | null = null;
-    let providerAcceptedSend = false;
-    let priorRegistrationEmailSentAt: Date | null = null;
     try {
-      if (!req.tenant?.registrationFormEnabled) {
-        return res.status(400).json({ error: "Registration forms are disabled for this practice" });
-      }
-      // `undefined` is retained only for older in-process test fixtures; persisted
-      // tenants use null until an administrator deliberately selects a template.
-      if (req.tenant.registrationFormTemplateId === null) {
-        return res.status(400).json({ error: "A registration form template must be configured before sending" });
-      }
-      if (req.tenant.registrationFormTemplateId) {
-        const [template] = await db.select({ id: formTemplates.id }).from(formTemplates).where(and(
-          eq(formTemplates.id, req.tenant.registrationFormTemplateId),
-          eq(formTemplates.tenantId, req.tenant.id),
-        )).limit(1);
-        if (!template) return res.status(400).json({ error: "The configured registration form template is unavailable" });
-      }
+      if (!req.tenant) return res.status(403).json({ error: "Access denied" });
       const attemptKey = typeof req.body?.attemptKey === "string" ? req.body.attemptKey.trim() : "";
-      if (!/^[a-zA-Z0-9-]{16,100}$/.test(attemptKey)) {
-        return res.status(400).json({ error: "A valid send attempt key is required" });
-      }
-      const client = await storage.getClientById(req.params.clientId);
-      if (!client) return res.status(404).json({ error: "Client not found" });
-      if (client.tenantId !== req.tenant.id) return res.status(403).json({ error: "Access denied" });
-      if (!client.email) return res.status(400).json({ error: "This client has no email address" });
-      priorRegistrationEmailSentAt = client.registrationEmailSentAt;
-      if (!client.assignedClinicianId || !client.assignedSlotId) {
-        return res.status(400).json({ error: "Registration can only be sent to an allocated client" });
-      }
-      if (!canSendRegistration({
-        featureEnabled: req.tenant.registrationFormEnabled === true,
-        requestTenantId: req.tenant.id,
-        clientTenantId: client.tenantId,
-        assignedClinicianId: client.assignedClinicianId,
-        assignedSlotId: client.assignedSlotId,
-        status: client.status,
-      })) {
-        return res.status(409).json({ error: "Registration can only be sent before the booking is confirmed" });
-      }
-      const eligibleStatuses: Array<typeof client.status> = ["Assigned", "AwaitingConfirmation", "OptionSelected"];
-      const appBase = process.env.APP_BASE_URL;
-      if (!appBase) return res.status(503).json({ error: "Registration links are not configured" });
-      if (client.registrationEmailAttemptKey === attemptKey && client.registrationEmailSentAt) {
-        return res.json({ success: true, resent: true, idempotent: true });
-      }
-      const recoverableAttempt = !!client.registrationEmailAttemptKey
-        && !client.registrationEmailSentAt
-        && (
-          !client.registrationEmailSendingAt
-          || client.registrationEmailSendingAt < new Date(Date.now() - 5 * 60 * 1000)
-        );
-      // Crash recovery inherits the original provider key. A different incoming
-      // key cannot turn recovery into a second provider delivery.
-      const effectiveAttemptKey = recoverableAttempt ? client.registrationEmailAttemptKey! : attemptKey;
-      const claimId = crypto.randomUUID();
-      // Serialize provider delivery. The same key is also sent to Resend as its
-      // provider idempotency key, so a recovered stale claim cannot duplicate mail.
-      const sendClaim = await db.update(clients).set({
-        registrationEmailAttemptKey: effectiveAttemptKey,
-        registrationEmailClaimId: claimId,
-        registrationEmailSendingAt: new Date(),
-        registrationEmailSentAt: null,
-        registrationEmailFailedAt: null,
-        registrationEmailFailureReason: null,
-        updatedAt: new Date(),
-      }).where(and(
-        eq(clients.id, client.id),
-        eq(clients.tenantId, req.tenant.id),
-        inArray(clients.status, eligibleStatuses),
-        or(
-          isNull(clients.registrationEmailSendingAt),
-          lt(clients.registrationEmailSendingAt, new Date(Date.now() - 5 * 60 * 1000)),
-        ),
-      )).returning({ id: clients.id });
-      if (!sendClaim.length) {
-        const current = await storage.getClientById(client.id);
-        if (current && current.registrationEmailAttemptKey === effectiveAttemptKey && current.registrationEmailSentAt) {
-          return res.json({ success: true, resent: true, idempotent: true });
-        }
-        return res.status(409).json({ error: "A registration email is already being sent. Please wait a moment." });
-      }
-      claimedAttemptKey = effectiveAttemptKey;
-      claimedClaimId = claimId;
-      // A recovered attempt must reuse the exact token already sent to the
-      // provider. Keep it pending so the previously delivered link remains active
-      // until the replacement email is accepted.
-      let token = recoverableAttempt && client.registrationEmailPendingToken
-        ? client.registrationEmailPendingToken
-        : recoverableAttempt && client.registrationToken
-          ? client.registrationToken
-        : crypto.randomBytes(32).toString("hex");
-      const tokenUpdate = await db.update(clients).set({
-        registrationEmailPendingToken: token,
-        updatedAt: new Date(),
-      }).where(and(
-        eq(clients.id, client.id),
-        eq(clients.tenantId, req.tenant.id),
-        eq(clients.registrationEmailAttemptKey, effectiveAttemptKey),
-        eq(clients.registrationEmailClaimId, claimId),
-      )).returning({ registrationEmailPendingToken: clients.registrationEmailPendingToken });
-      if (!tokenUpdate.length) {
-        const current = await storage.getClientById(client.id);
-        if (!current?.registrationEmailPendingToken) {
-          await db.update(clients).set({
-            registrationEmailSendingAt: null,
-            registrationEmailAttemptKey: null,
-            registrationEmailClaimId: null,
-            updatedAt: new Date(),
-          }).where(and(
-            eq(clients.id, client.id),
-            eq(clients.registrationEmailAttemptKey, effectiveAttemptKey),
-            eq(clients.registrationEmailClaimId, claimId),
-          ));
-          claimedAttemptKey = null;
-          claimedClaimId = null;
-          return res.status(409).json({ error: "Registration is already being prepared. Please retry." });
-        }
-        token = current.registrationEmailPendingToken;
-      }
-      const registrationUrl = `${appBase.replace(/\/$/, "")}/register/${client.id}/${token}`;
-      const tenantContext = { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor };
-      const email = await generateRegistrationInviteEmail(registrationUrl, tenantContext);
-      const delivery = await sendEmail({
-        ...email,
-        to: client.email,
-        idempotencyKey: `registration-${client.id}-${effectiveAttemptKey}`,
+      const result = await deliverRegistration({
+        tenant: req.tenant,
+        clientId: req.params.clientId,
+        attemptKey,
+        recordSent: async (client) => {
+          await recordActivity(req, "activity_registration_sent", "client", client.id, {
+            clientDisplayId: client.displayId,
+          });
+        },
       });
-      providerAcceptedSend = delivery.outcome !== "rejected";
-      if (!delivery.success) {
-        await db.update(clients).set({
-          registrationEmailSendingAt: null,
-          registrationEmailFailedAt: new Date(),
-          registrationEmailFailureReason: delivery.outcome === "rejected"
-            ? "The email provider rejected the registration message."
-            : "Delivery could not be confirmed.",
-          // Explicit provider rejection is safe to retry as a new attempt.
-          // Unknown transport outcome retains the provider key for deduplication.
-          registrationEmailAttemptKey: delivery.outcome === "rejected" ? null : effectiveAttemptKey,
-          registrationEmailClaimId: null,
-          ...(delivery.outcome === "rejected" ? {
-            registrationEmailSentAt: client.registrationEmailSentAt,
-            registrationEmailPendingToken: null,
-          } : {}),
-          updatedAt: new Date(),
-        }).where(and(
-          eq(clients.id, client.id),
-          eq(clients.registrationEmailAttemptKey, effectiveAttemptKey),
-          eq(clients.registrationEmailClaimId, claimId),
-        ));
-        claimedAttemptKey = null;
-        claimedClaimId = null;
-        return res.status(502).json({ error: "Registration email could not be delivered. Please try again." });
-      }
-      const completedSend = await db.update(clients).set({
-        registrationEmailSentAt: new Date(),
-        registrationEmailSendingAt: null,
-        registrationEmailFailedAt: null,
-        registrationEmailFailureReason: null,
-        registrationEmailClaimId: null,
-        registrationEmailPendingToken: null,
-        registrationToken: token,
-        registrationTokenExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-        registrationTokenRevokedAt: null,
-        status: "OptionSelected",
-        updatedAt: new Date(),
-      }).where(and(
-        eq(clients.id, client.id),
-        eq(clients.tenantId, req.tenant.id),
-        eq(clients.registrationEmailAttemptKey, effectiveAttemptKey),
-        eq(clients.registrationEmailClaimId, claimId),
-        isNotNull(clients.registrationEmailSendingAt),
-        inArray(clients.status, eligibleStatuses),
-      )).returning({ id: clients.id });
-      if (!completedSend.length) {
-        return res.status(409).json({ error: "The client workflow changed while the email was being sent. Please refresh." });
-      }
-      // Intentionally no client email, token, answers, or other PII in activity details.
-      await recordActivity(req, "activity_registration_sent", "client", client.id, { clientDisplayId: client.displayId });
-      claimedAttemptKey = null;
-      claimedClaimId = null;
-      return res.json({ success: true, resent: !!client.registrationEmailSentAt });
+      return res.json(result);
     } catch (error) {
-      if (claimedAttemptKey && claimedClaimId) {
-        try {
-          await db.update(clients).set({
-            registrationEmailSendingAt: null,
-            registrationEmailFailedAt: new Date(),
-            registrationEmailFailureReason: providerAcceptedSend
-              ? "Delivery was accepted but the workflow could not finish. Retry safely."
-              : "Registration delivery failed before provider acceptance.",
-            // Once the provider accepted the message, preserve its stable key so
-            // an ambiguous retry is deduplicated by Resend.
-            registrationEmailAttemptKey: providerAcceptedSend ? claimedAttemptKey : null,
-            registrationEmailClaimId: null,
-            ...(!providerAcceptedSend ? {
-              registrationEmailSentAt: priorRegistrationEmailSentAt,
-              registrationEmailPendingToken: null,
-            } : {}),
-            updatedAt: new Date(),
-          }).where(and(
-            eq(clients.id, req.params.clientId),
-            eq(clients.registrationEmailAttemptKey, claimedAttemptKey),
-            eq(clients.registrationEmailClaimId, claimedClaimId),
-          ));
-        } catch (cleanupError) {
-          console.error("Failed to release registration email claim:", cleanupError);
-        }
+      if (error instanceof RegistrationDeliveryError) {
+        return res.status(error.status).json({ error: error.message });
       }
       console.error("Failed to send registration:", error);
       return res.status(500).json({ error: "Failed to send registration" });
@@ -2785,6 +2609,24 @@ export async function registerRoutes(
         actorName: "Client",
         clientDisplayId: client.displayId || "Client",
       }, client.tenantId);
+      if (registrationEnabled) {
+        try {
+          await deliverRegistration({
+            tenant,
+            clientId: client.id,
+            attemptKey: `automatic-option-${client.id}-${clinicianOptionId}`,
+            preferredToken: registrationToken,
+            recordSent: async (registrationClient) => {
+              await recordActivity(req, "activity_registration_sent", "client", registrationClient.id, {
+                clientDisplayId: registrationClient.displayId,
+                actorName: "Automatic email",
+              }, registrationClient.tenantId);
+            },
+          });
+        } catch (deliveryError) {
+          console.error("Automatic registration delivery after option selection failed:", deliveryError);
+        }
+      }
       // Feature-off follows the ordinary confirmation route rather than exposing a
       // registration link. The successful state transition above is the once-only claim.
       if (!registrationEnabled && optionConfirmation?.newlyConfirmed && optionConfirmation.status === "BookingConfirmed" && tenant.bookingConfirmedEmailEnabled && client.email) {

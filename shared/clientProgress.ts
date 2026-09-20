@@ -1,5 +1,7 @@
 export type RegistrationProgressState =
-  | "not_sent"
+  | "waiting_for_option"
+  | "allocation_incomplete"
+  | "automatic_pending"
   | "sending"
   | "sent"
   | "failed"
@@ -14,6 +16,8 @@ export type PaymentProgressState =
 
 export interface ClientProgressRecord {
   status?: string | null;
+  assignedClinicianId?: string | null;
+  assignedSlotId?: string | null;
   registrationEmailSentAt?: Date | string | null;
   registrationEmailSendingAt?: Date | string | null;
   registrationEmailFailedAt?: Date | string | null;
@@ -38,7 +42,9 @@ export function registrationProgress(client: ClientProgressRecord): Registration
   if (client.registrationEmailSendingAt) return "sending";
   if (client.registrationEmailFailedAt) return "failed";
   if (client.registrationEmailSentAt) return "sent";
-  return "not_sent";
+  if (client.status === "OptionsSent") return "waiting_for_option";
+  if (!client.assignedClinicianId || !client.assignedSlotId) return "allocation_incomplete";
+  return "automatic_pending";
 }
 
 export function paymentProgress(

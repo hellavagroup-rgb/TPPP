@@ -4,6 +4,7 @@ import {
   MATCHED_ALLOCATION_STATUSES,
   isAwaitingConfirmationStatus,
   isMatchedAllocationStatus,
+  registrationProgressCopy,
 } from "./clientWorkflowColumns";
 import { CLIENT_STATUSES } from "@shared/clientWorkflow";
 
@@ -29,4 +30,22 @@ describe("client workflow column membership", () => {
       expect(isAwaitingConfirmationStatus(status)).toBe(AWAITING_CONFIRMATION_STATUSES.includes(status as never));
     },
   );
+});
+
+describe("registration progress copy", () => {
+  it.each([
+    ["waiting_for_option", "Waiting for option selection"],
+    ["allocation_incomplete", "Allocation incomplete"],
+    ["automatic_pending", "Automatic registration delivery pending"],
+    ["sending", "Automatic registration delivery in progress"],
+    ["failed", "Registration delivery failed"],
+    ["sent", "Registration sent"],
+    ["completed", "Registration completed"],
+  ] as const)("describes %s accurately", (state, title) => {
+    expect(registrationProgressCopy(state)[0]).toBe(title);
+  });
+
+  it("shows the recorded provider failure when delivery needs retry", () => {
+    expect(registrationProgressCopy("failed", "Provider rejected it")[1]).toBe("Provider rejected it");
+  });
 });

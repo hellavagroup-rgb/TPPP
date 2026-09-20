@@ -3,6 +3,7 @@ import { Client, ClientStatus, FormTemplate } from "@/lib/mockData";
 import {
   isAwaitingConfirmationStatus,
   isMatchedAllocationStatus,
+  registrationProgressCopy,
 } from "@/lib/clientWorkflowColumns";
 import { formatDateUK, formatAssignedSlot } from "@/lib/dateUtils";
 import { Card, CardContent } from "@/components/ui/card";
@@ -427,7 +428,8 @@ export default function Clients() {
     registrationReady &&
     !!client.assignedClinicianId &&
     !!client.assignedSlotId &&
-    (["Assigned", "AwaitingConfirmation", "OptionSelected"] as string[]).includes(client.status);
+    (["Assigned", "AwaitingConfirmation", "OptionSelected"] as string[]).includes(client.status) &&
+    !!client.registrationEmailFailedAt;
 
   // Send Forms State
   const [isSendFormsOpen, setIsSendFormsOpen] = useState(false);
@@ -1093,19 +1095,12 @@ export default function Clients() {
     const payment = paymentProgress(client, {
       paymentsEnabled: tenant?.paymentsEnabled === true,
     });
-    const registrationCopy = {
-      not_sent: ["Registration not sent", "Staff: send the registration form when the allocation is ready."],
-      sending: ["Registration sending", "System: delivery is in progress. Refresh shortly."],
-      sent: [
-        `Registration sent ${client.registrationEmailSentAt ? formatDateUK(client.registrationEmailSentAt) : ""}`.trim(),
-        "Client: complete the registration form.",
-      ],
-      failed: ["Registration delivery failed", client.registrationEmailFailureReason || "Staff: retry registration delivery."],
-      completed: [
-        `Registration completed ${client.termsAcceptedAt ? formatDateUK(client.termsAcceptedAt) : ""}`.trim(),
-        "The submitted registration remains available below.",
-      ],
-    }[registration];
+    const registrationCopy = registrationProgressCopy(registration, client.registrationEmailFailureReason);
+    if (registration === "sent" && client.registrationEmailSentAt) {
+      registrationCopy[0] = `Registration sent ${formatDateUK(client.registrationEmailSentAt)}`;
+    } else if (registration === "completed" && client.termsAcceptedAt) {
+      registrationCopy[0] = `Registration completed ${formatDateUK(client.termsAcceptedAt)}`;
+    }
     const paymentCopy = {
       not_required: null,
       automatic_pending: ["Payment setup pending", "System: the payment step is being prepared automatically."],
@@ -2150,7 +2145,7 @@ export default function Clients() {
                               {sendRegistrationMutation.isPending
                                 ? <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                                 : <Mail className="h-4 w-4 mr-2" />}
-                              Send Registration Form
+                              Retry Registration Delivery
                             </DropdownMenuItem>
                           )}
                           {client.status === "OptionsSent" && (
@@ -2218,7 +2213,7 @@ export default function Clients() {
                             {sendRegistrationMutation.isPending
                               ? <Loader2 className="h-3 w-3 animate-spin flex-shrink-0" />
                               : <Mail className="h-3 w-3 flex-shrink-0" />}
-                            Send Registration Form
+                            Retry Registration Delivery
                           </Button>
                           )}
                         <Button
@@ -2344,7 +2339,7 @@ export default function Clients() {
                                 {sendRegistrationMutation.isPending
                                   ? <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                                   : <Mail className="h-4 w-4 mr-2" />}
-                                Send Registration Form
+                                Retry Registration Delivery
                               </DropdownMenuItem>
                             )}
                             <DropdownMenuSeparator />

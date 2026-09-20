@@ -59,7 +59,7 @@
     "embla-carousel-react": "^8.6.0",
     "exceljs": "^4.4.0",
     "express": "^4.21.2",
-    "express-rate-limit": "^8.2.2",
+    "express-rate-limit": "^8.7.0",
     "express-session": "^1.18.1",
     "framer-motion": "^12.23.24",
     "googleapis": "^173.0.0",
@@ -67,7 +67,7 @@
     "input-otp": "^1.4.2",
     "lucide-react": "^0.545.0",
     "memorystore": "^1.6.7",
-    "multer": "^2.2.0",
+    "multer": "^2.3.0",
     "next-themes": "^0.4.6",
     "passport": "^0.7.0",
     "passport-local": "^1.0.0",
@@ -108,20 +108,25 @@
     "@vitejs/plugin-react": "^5.0.4",
     "autoprefixer": "^10.4.21",
     "drizzle-kit": "^0.31.10",
-    "esbuild": "^0.25.0",
-    "postcss": "^8.5.14",
+    "esbuild": "^0.25.12",
+    "postcss": "^8.5.28",
     "tailwindcss": "^4.1.14",
-    "tsx": "^4.20.5",
+    "tsx": "^4.23.13",
     "typescript": "5.6.3",
-    "vite": "^7.3.3",
-    "vitest": "^4.1.10"
+    "vite": "^7.3.6",
+    "vitest": "^4.1.11"
   },
   "optionalDependencies": {
     "bufferutil": "^4.0.8"
   },
   "overrides": {
     "path-to-regexp": "0.1.13",
-    "ip-address": "10.1.1",
+    "ip-address": "10.7.0",
+    "qs": "6.16.0",
+    "uuid": "11.1.1",
+    "tsx": {
+      "esbuild": "0.28.2"
+    },
     "picomatch": "4.0.4",
     "lodash": "4.18.1",
     "@esbuild-kit/core-utils": {

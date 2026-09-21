@@ -895,6 +895,7 @@ export default function Clients() {
   const [agreedRatePounds, setAgreedRatePounds] = useState("");
   const [generatedPaymentUrl, setGeneratedPaymentUrl] = useState("");
   const [isGeneratingLink, setIsGeneratingLink] = useState(false);
+  const [isResendingPaymentLink, setIsResendingPaymentLink] = useState(false);
 
   // Charge Session Dialog
   const [isChargeOpen, setIsChargeOpen] = useState(false);
@@ -929,12 +930,16 @@ export default function Clients() {
       // Save agreed rate first if changed
       const ratePence = Math.round(parseFloat(agreedRatePounds) * 100);
       if (ratePence > 0) {
-        await fetch(`/api/clients/${paymentLinkClient.id}/agreed-rate`, {
+        const rateResponse = await fetch(`/api/clients/${paymentLinkClient.id}/agreed-rate`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
           body: JSON.stringify({ agreedRatePence: ratePence }),
         });
+        if (!rateResponse.ok) {
+          const error = await rateResponse.json().catch(() => ({}));
+          throw new Error(error.error || "The agreed rate could not be saved.");
+        }
       }
       // Create checkout session
       const res = await fetch("/api/stripe/checkout", {
@@ -957,6 +962,31 @@ export default function Clients() {
       toast({ title: "Error", description: err.message || "Failed to create payment link", variant: "destructive" });
     } finally {
       setIsGeneratingLink(false);
+    }
+  };
+
+  const handleResendPaymentLink = async () => {
+    if (!paymentLinkClient || !generatedPaymentUrl) return;
+    setIsResendingPaymentLink(true);
+    try {
+      const response = await fetch(`/api/clients/${paymentLinkClient.id}/resend-payment-link`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Failed to resend payment link");
+      toast({
+        title: "Payment link resent",
+        description: `The existing payment link was emailed to ${paymentLinkClient.email}.`,
+      });
+    } catch (error: any) {
+      toast({
+        title: "Email not sent",
+        description: error.message || "Failed to resend payment link",
+        variant: "destructive",
+      });
+    } finally {
+      setIsResendingPaymentLink(false);
     }
   };
 
@@ -1182,6 +1212,17 @@ export default function Clients() {
                 <RotateCcw className="h-3 w-3 mr-1" /> Recover payment setup
               </Button>
             )
+          )}
+          {payment === "awaiting_client" && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 px-2 text-[10px]"
+              onClick={() => handleOpenPaymentLink(client)}
+              data-testid={`button-manage-payment-link-${client.id}`}
+            >
+              <CreditCard className="h-3 w-3 mr-1" /> Payment link
+            </Button>
           )}
         </div>
       </div>
@@ -2535,7 +2576,11 @@ export default function Clients() {
                             <Mail className="h-4 w-4 mr-2" /> Send Zoom Link
                           </DropdownMenuItem>
                         )}
-                        {stripeEnabled && !client.isArchived && (
+                        {!client.isArchived
+                          && (
+                            (client.paymentStatus === "active" && stripeEnabled)
+                            || (client.paymentStatus !== "active" && (stripeEnabled || !!client.stripeCheckoutUrl))
+                          ) && (
                           <>
                             <DropdownMenuSeparator />
                             {client.paymentStatus === "active" ? (
@@ -2549,7 +2594,7 @@ export default function Clients() {
                               </>
                             ) : (
                               <DropdownMenuItem onClick={() => handleOpenPaymentLink(client)}>
-                                <CreditCard className="h-4 w-4 mr-2" /> Generate Payment Link
+                                <CreditCard className="h-4 w-4 mr-2" /> {client.stripeCheckoutUrl ? "Payment Link" : "Generate Payment Link"}
                               </DropdownMenuItem>
                             )}
                           </>
@@ -3879,10 +3924,12 @@ export default function Clients() {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <CreditCard className="h-5 w-5" /> Generate Payment Link
+              <CreditCard className="h-5 w-5" /> {generatedPaymentUrl ? "Payment Link" : "Generate Payment Link"}
             </DialogTitle>
             <DialogDescription>
-              Set an agreed rate and create a Stripe Checkout link for {paymentLinkClient?.displayId}. The client pays the first session and their card is saved for future charges.
+              {generatedPaymentUrl
+                ? `Copy or resend the existing payment link for ${paymentLinkClient?.displayId}.`
+                : `Set an agreed rate and create a Stripe Checkout link for ${paymentLinkClient?.displayId}. The client pays the first session and their card is saved for future charges.`}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
@@ -3898,6 +3945,7 @@ export default function Clients() {
                   placeholder="e.g. 150.00"
                   value={agreedRatePounds}
                   onChange={e => setAgreedRatePounds(e.target.value)}
+                  disabled={!!generatedPaymentUrl}
                   className="flex h-10 w-full rounded-md border border-input bg-background px-8 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 />
               </div>
@@ -3934,28 +3982,38 @@ export default function Clients() {
                 >
                   <ExternalLink className="h-3 w-3" /> Preview checkout page
                 </a>
+                <p className="text-xs text-muted-foreground">Payment links do not expire. Resending uses this same link.</p>
               </div>
             ) : null}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsPaymentLinkOpen(false)}>Close</Button>
-            <Button
-              data-testid="button-generate-payment-link"
-              onClick={paymentLinkClient?.registrationPaymentFailedAt
-                ? handleRetryAutomaticPaymentSetup
-                : handleGeneratePaymentLink}
-              disabled={
-                isGeneratingLink
-                || !agreedRatePounds
-                || parseFloat(agreedRatePounds) <= 0
-                || (!!paymentLinkClient?.registrationPaymentFailedAt && !stripeEnabled)
-              }
-            >
-              {isGeneratingLink ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <CreditCard className="h-4 w-4 mr-2" />}
-              {paymentLinkClient?.registrationPaymentFailedAt
-                ? "Retry automatic setup"
-                : generatedPaymentUrl ? "Regenerate Link" : "Generate Link"}
-            </Button>
+            {generatedPaymentUrl ? (
+              <Button
+                onClick={handleResendPaymentLink}
+                disabled={isResendingPaymentLink || isGeneratingLink}
+                data-testid="button-resend-payment-link"
+              >
+                {isResendingPaymentLink ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Mail className="h-4 w-4 mr-2" />}
+                Resend email
+              </Button>
+            ) : (
+              <Button
+                data-testid="button-generate-payment-link"
+                onClick={paymentLinkClient?.registrationPaymentFailedAt
+                  ? handleRetryAutomaticPaymentSetup
+                  : handleGeneratePaymentLink}
+                disabled={
+                  isGeneratingLink
+                  || !agreedRatePounds
+                  || parseFloat(agreedRatePounds) <= 0
+                  || (!!paymentLinkClient?.registrationPaymentFailedAt && !stripeEnabled)
+                }
+              >
+                {isGeneratingLink ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <CreditCard className="h-4 w-4 mr-2" />}
+                {paymentLinkClient?.registrationPaymentFailedAt ? "Retry automatic setup" : "Generate Link"}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

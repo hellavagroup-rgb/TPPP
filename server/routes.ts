@@ -1528,27 +1528,43 @@ export async function registerRoutes(
             console.warn(`AwaitingConfirmation: client ${updated.id} has no agreed rate and no clinician default — checkout skipped`);
           } else {
             const appBase = process.env.APP_BASE_URL || `${req.protocol}://${req.get("host")}`;
-            const checkoutResult = await createPaymentLink({
-              clientId: updated.id,
-              clientDisplayId: updated.displayId,
-              amountPence,
-              successUrl: `${appBase}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-              tenantId: req.tenant?.id,
-              tenantStripeKey: req.tenant?.stripeSecretKey,
-              practiceName: req.tenant?.name,
-              childName: req.tenant?.intakeClientSummaryEnabled === true
-                ? childNameFromClientNotes(updated.notes)
-                : undefined,
-              previousPaymentLinkId: updated.stripePaymentLinkId,
-            });
-            if (checkoutResult) {
-              await db.update(clients).set({
-                stripeCheckoutUrl: checkoutResult.url,
-                stripePaymentLinkId: checkoutResult.paymentLinkId,
+            const checkoutResult = await db.transaction(async (tx) => {
+              await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${req.tenant!.id}:${updated.id}:payment-link-creation`}))`);
+              const current = await tx.select().from(clients).where(and(
+                eq(clients.id, updated.id),
+                eq(clients.tenantId, req.tenant!.id),
+              )).limit(1).then(rows => rows[0]);
+              if (!current || current.paymentStatus === "active" || current.stripeCheckoutUrl || current.stripePaymentLinkId) {
+                return null;
+              }
+              const created = await createPaymentLink({
+                clientId: current.id,
+                clientDisplayId: current.displayId,
+                amountPence,
+                successUrl: `${appBase}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+                tenantId: req.tenant!.id,
+                tenantStripeKey: req.tenant!.stripeSecretKey,
+                practiceName: req.tenant!.name,
+                childName: req.tenant!.intakeClientSummaryEnabled === true
+                  ? childNameFromClientNotes(current.notes)
+                  : undefined,
+                idempotencyKey: `awaiting-confirmation-payment-${current.id}-${amountPence}`,
+              });
+              if (!created) return null;
+              const saved = await tx.update(clients).set({
+                stripeCheckoutUrl: created.url,
+                stripePaymentLinkId: created.paymentLinkId,
                 paymentStatus: "setup_pending",
                 updatedAt: new Date(),
-              }).where(eq(clients.id, updated.id));
-
+              }).where(and(
+                eq(clients.id, current.id),
+                eq(clients.tenantId, req.tenant!.id),
+                isNull(clients.stripeCheckoutUrl),
+                isNull(clients.stripePaymentLinkId),
+              )).returning({ id: clients.id });
+              return saved.length ? created : null;
+            });
+            if (checkoutResult) {
               // Email the payment link to the client
               const amountPounds = (amountPence / 100).toFixed(2);
               const tcAuto = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor } : undefined;
@@ -3105,83 +3121,94 @@ export async function registerRoutes(
           return res.status(503).json({ error: "Payment setup is unavailable. Please contact the practice." });
         }
 
-        let session: { url: string; paymentLinkId: string } | null = null;
-        let setupFailureCode: PaymentSetupFailureCode = "provider_transient";
-        try {
-          session = await createPaymentLink({
-            clientId: client.id,
-            clientDisplayId: client.displayId,
-            amountPence: client.agreedRatePence!,
-            successUrl: `${baseUrl}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-            tenantId: client.tenantId,
-            tenantStripeKey: registrationTenantStripeKey,
-            practiceName: tenant?.name || null,
-            childName: tenant?.intakeClientSummaryEnabled === true
-              ? childNameFromClientNotes(client.notes)
-              : undefined,
-            previousPaymentLinkId: client.stripePaymentLinkId,
-            idempotencyKey: `registration-payment-${client.id}-${paymentAttemptKey}`,
-            registrationAttemptKey: paymentAttemptKey,
-          });
-        } catch (stripeErr) {
-          setupFailureCode = classifyPaymentSetupProviderFailure(stripeErr);
-          await db.update(clients).set({
-            registrationPaymentFailedAt: new Date(),
-            registrationPaymentFailureCode: setupFailureCode,
-            registrationPaymentFailureReason: paymentSetupFailureMessage(setupFailureCode),
-            updatedAt: new Date(),
-          }).where(and(
+        const creation = await db.transaction(async (tx) => {
+          await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${client.tenantId}:${client.id}:payment-link-creation`}))`);
+          const current = await tx.select().from(clients).where(and(
             eq(clients.id, client.id),
-            eq(clients.status, "RegistrationPending"),
-            eq(clients.registrationPaymentAttemptKey, paymentAttemptKey),
-            isNull(clients.stripeCheckoutUrl),
-          ));
-          console.error(`Stripe payment link creation failed (${setupFailureCode})`);
-        }
-
-        if (!session) {
-          // Keep the durable attempt key so an ambiguous provider failure can be
-          // retried safely with the same Stripe idempotency keys.
-          await db.update(clients).set({
-            registrationPaymentFailedAt: new Date(),
-            registrationPaymentFailureCode: setupFailureCode,
-            registrationPaymentFailureReason: paymentSetupFailureMessage(setupFailureCode),
-            updatedAt: new Date(),
-          }).where(and(
-            eq(clients.id, client.id),
-            eq(clients.status, "RegistrationPending"),
-            eq(clients.registrationPaymentAttemptKey, paymentAttemptKey),
-            isNull(clients.stripeCheckoutUrl),
-          ));
-          return res.status(502).json({ error: "Payment setup is unavailable. Please try again or contact the practice." });
-        }
-
-        const savedLink = await db.update(clients).set({
-          stripeCheckoutUrl: session.url,
-          stripePaymentLinkId: session.paymentLinkId,
-          paymentStatus: "setup_pending",
-          registrationPaymentFailedAt: null,
-          registrationPaymentFailureCode: null,
-          registrationPaymentFailureReason: null,
-          updatedAt: new Date(),
-        }).where(and(
-          eq(clients.id, client.id),
-          eq(clients.status, "RegistrationPending"),
-          eq(clients.registrationPaymentAttemptKey, paymentAttemptKey),
-          isNull(clients.stripeCheckoutUrl),
-        )).returning({ id: clients.id });
-        if (!savedLink.length) {
-          const current = await storage.getClientById(client.id);
-          if (current?.stripeCheckoutUrl) {
-            return res.json({ checkoutUrl: current.stripeCheckoutUrl, idempotent: true });
+            eq(clients.tenantId, client.tenantId!),
+          )).limit(1).then(rows => rows[0]);
+          if (!current) return { status: 404, error: "Client not found" } as const;
+          if (current.stripeCheckoutUrl) {
+            return { status: 200, url: current.stripeCheckoutUrl, idempotent: true } as const;
           }
-          return res.status(409).json({ error: "Payment setup changed while processing. Please retry." });
+          if (
+            current.status !== "RegistrationPending"
+            || current.registrationPaymentAttemptKey !== paymentAttemptKey
+          ) {
+            return { status: 409, error: "Payment setup changed while processing. Please retry." } as const;
+          }
+
+          let session: { url: string; paymentLinkId: string } | null = null;
+          let setupFailureCode: PaymentSetupFailureCode = "provider_transient";
+          try {
+            session = await createPaymentLink({
+              clientId: current.id,
+              clientDisplayId: current.displayId,
+              amountPence: current.agreedRatePence!,
+              successUrl: `${baseUrl}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+              tenantId: current.tenantId,
+              tenantStripeKey: registrationTenantStripeKey,
+              practiceName: tenant?.name || null,
+              childName: tenant?.intakeClientSummaryEnabled === true
+                ? childNameFromClientNotes(current.notes)
+                : undefined,
+              idempotencyKey: `registration-payment-${current.id}-${paymentAttemptKey}`,
+              registrationAttemptKey: paymentAttemptKey,
+            });
+          } catch (stripeErr) {
+            setupFailureCode = classifyPaymentSetupProviderFailure(stripeErr);
+            console.error(`Stripe payment link creation failed (${setupFailureCode})`);
+          }
+
+          if (!session) {
+            await tx.update(clients).set({
+              registrationPaymentFailedAt: new Date(),
+              registrationPaymentFailureCode: setupFailureCode,
+              registrationPaymentFailureReason: paymentSetupFailureMessage(setupFailureCode),
+              updatedAt: new Date(),
+            }).where(and(
+              eq(clients.id, current.id),
+              eq(clients.tenantId, current.tenantId!),
+              eq(clients.status, "RegistrationPending"),
+              eq(clients.registrationPaymentAttemptKey, paymentAttemptKey),
+              isNull(clients.stripeCheckoutUrl),
+            ));
+            return {
+              status: 502,
+              error: "Payment setup is unavailable. Please try again or contact the practice.",
+            } as const;
+          }
+
+          const savedLink = await tx.update(clients).set({
+            stripeCheckoutUrl: session.url,
+            stripePaymentLinkId: session.paymentLinkId,
+            paymentStatus: "setup_pending",
+            registrationPaymentFailedAt: null,
+            registrationPaymentFailureCode: null,
+            registrationPaymentFailureReason: null,
+            updatedAt: new Date(),
+          }).where(and(
+            eq(clients.id, current.id),
+            eq(clients.tenantId, current.tenantId!),
+            eq(clients.status, "RegistrationPending"),
+            eq(clients.registrationPaymentAttemptKey, paymentAttemptKey),
+            isNull(clients.stripeCheckoutUrl),
+            isNull(clients.stripePaymentLinkId),
+          )).returning({ id: clients.id });
+          if (!savedLink.length) {
+            return { status: 409, error: "Payment setup changed while processing. Please retry." } as const;
+          }
+          return { status: 200, url: session.url, idempotent: false } as const;
+        });
+        if ("error" in creation) return res.status(creation.status).json({ error: creation.error });
+        if (creation.idempotent) {
+          return res.json({ checkoutUrl: creation.url, idempotent: true });
         }
         await recordActivity(req, "activity_registration_submitted", "client", client.id, {
           actorName: "Client",
           clientDisplayId: client.displayId || "Client",
         }, client.tenantId);
-        return res.json({ checkoutUrl: session.url });
+        return res.json({ checkoutUrl: creation.url });
       }
 
       if (!paymentAttemptKey) {
@@ -5087,69 +5114,134 @@ export async function registerRoutes(
       }
       const { clientId } = req.body as { clientId: string };
       if (!clientId) return res.status(400).json({ error: "clientId required" });
-
-      const client = await storage.getClientById(clientId);
-      if (!client) return res.status(404).json({ error: "Client not found" });
-      if (req.tenant?.id && client.tenantId !== req.tenant.id) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-      if (!client.email) return res.status(400).json({ error: "Client has no email address" });
-
-      let amountPence = client.agreedRatePence ?? 0;
-      if (amountPence <= 0 && client.assignedClinicianId) {
-        const assignedClinician = await storage.getClinicianById(client.assignedClinicianId);
-        if (assignedClinician?.sessionRatePence && assignedClinician.sessionRatePence > 0) {
-          amountPence = assignedClinician.sessionRatePence;
-          await db.update(clients).set({ agreedRatePence: amountPence, updatedAt: new Date() })
-            .where(eq(clients.id, clientId));
-        }
-      }
-      if (amountPence <= 0) {
-        return res.status(400).json({ error: "No rate found. Set a session rate on the client or their assigned clinician first." });
-      }
-
       const appBase = process.env.APP_BASE_URL || `${req.protocol}://${req.get("host")}`;
-      const result = await createPaymentLink({
-        clientId: client.id,
-        clientDisplayId: client.displayId,
-        amountPence,
-        successUrl: `${appBase}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-        tenantId: req.tenant?.id,
-        tenantStripeKey: req.tenant?.stripeSecretKey,
-        practiceName: req.tenant?.name,
-        childName: req.tenant?.intakeClientSummaryEnabled === true
-          ? childNameFromClientNotes(client.notes)
-          : undefined,
-        previousPaymentLinkId: client.stripePaymentLinkId,
+      const creation = await db.transaction(async (tx) => {
+        await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${req.tenant!.id}:${clientId}:payment-link-creation`}))`);
+        const client = await tx.select().from(clients).where(and(
+          eq(clients.id, clientId),
+          eq(clients.tenantId, req.tenant!.id),
+        )).limit(1).then(rows => rows[0]);
+        if (!client) return { status: 404, error: "Client not found" } as const;
+        if (!client.email) return { status: 400, error: "Client has no email address" } as const;
+        if (client.paymentStatus === "active") {
+          return { status: 409, error: "Payment setup is already complete for this client." } as const;
+        }
+        if (client.stripeCheckoutUrl || client.stripePaymentLinkId) {
+          return {
+            status: 409,
+            error: "This client already has a payment link. Open it to copy or resend the existing link.",
+          } as const;
+        }
+
+        let amountPence = client.agreedRatePence ?? 0;
+        if (amountPence <= 0 && client.assignedClinicianId) {
+          const assignedClinician = await storage.getClinicianById(client.assignedClinicianId);
+          if (assignedClinician?.sessionRatePence && assignedClinician.sessionRatePence > 0) {
+            amountPence = assignedClinician.sessionRatePence;
+            await tx.update(clients).set({ agreedRatePence: amountPence, updatedAt: new Date() })
+              .where(and(eq(clients.id, clientId), eq(clients.tenantId, req.tenant!.id)));
+          }
+        }
+        if (amountPence <= 0) {
+          return {
+            status: 400,
+            error: "No rate found. Set a session rate on the client or their assigned clinician first.",
+          } as const;
+        }
+
+        const result = await createPaymentLink({
+          clientId: client.id,
+          clientDisplayId: client.displayId,
+          amountPence,
+          successUrl: `${appBase}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+          tenantId: req.tenant!.id,
+          tenantStripeKey: req.tenant!.stripeSecretKey,
+          practiceName: req.tenant!.name,
+          childName: req.tenant!.intakeClientSummaryEnabled === true
+            ? childNameFromClientNotes(client.notes)
+            : undefined,
+          idempotencyKey: `manual-payment-${client.id}-${amountPence}`,
+        });
+        if (!result) return { status: 500, error: "Failed to create payment link" } as const;
+
+        const saved = await tx.update(clients).set({
+          stripeCheckoutUrl: result.url,
+          stripePaymentLinkId: result.paymentLinkId,
+          paymentStatus: "setup_pending",
+          updatedAt: new Date(),
+        }).where(and(
+          eq(clients.id, clientId),
+          eq(clients.tenantId, req.tenant!.id),
+          isNull(clients.stripeCheckoutUrl),
+          isNull(clients.stripePaymentLinkId),
+        )).returning({ id: clients.id });
+        if (!saved.length) {
+          return { status: 409, error: "Payment setup changed while creating the link. Refresh and try again." } as const;
+        }
+
+        return { status: 200, client, amountPence, result } as const;
       });
-
-      if (!result) return res.status(500).json({ error: "Failed to create payment link" });
-
-      // Store payment link URL/ID on client; mark as setup_pending.
-      // stripeCustomerId is written by the webhook after the client pays.
-      await db.update(clients).set({
-        stripeCheckoutUrl: result.url,
-        stripePaymentLinkId: result.paymentLinkId,
-        paymentStatus: "setup_pending",
-        updatedAt: new Date(),
-      }).where(eq(clients.id, clientId));
+      if ("error" in creation) return res.status(creation.status).json({ error: creation.error });
 
       // Email the payment link to the client
       let emailSent = false;
       try {
-        const amountPounds = (amountPence / 100).toFixed(2);
+        const amountPounds = (creation.amountPence / 100).toFixed(2);
         const tcPL = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor } : undefined;
-        const emailOptions = await generatePaymentLinkEmail(result.url, amountPounds, tcPL);
-        const emailResult = await sendEmail({ ...emailOptions, to: client.email });
+        const emailOptions = await generatePaymentLinkEmail(creation.result.url, amountPounds, tcPL);
+        const emailResult = await sendEmail({ ...emailOptions, to: creation.client.email });
         emailSent = emailResult.success;
       } catch (emailError) {
         console.error("Failed to send payment link email:", emailError);
       }
 
-      res.json({ url: result.url, emailSent });
+      res.json({ url: creation.result.url, emailSent });
     } catch (error: any) {
       console.error("Stripe checkout error:", error?.message);
       res.status(500).json({ error: error?.message || "Failed to create checkout session" });
+    }
+  });
+
+  // Resend the currently stored payment link without replacing or deactivating it.
+  app.post("/api/clients/:id/resend-payment-link", requireAdmin, async (req, res) => {
+    try {
+      if (!req.tenant) return res.status(400).json({ error: "Tenant not found" });
+      const client = await storage.getClientById(req.params.id);
+      if (!client || client.tenantId !== req.tenant.id) {
+        return res.status(404).json({ error: "Client not found" });
+      }
+      if (client.paymentStatus === "active") {
+        return res.status(409).json({ error: "Payment setup is already complete for this client." });
+      }
+      if (!client.stripeCheckoutUrl) {
+        return res.status(409).json({ error: "This client does not have a payment link to resend." });
+      }
+      if (!client.email) {
+        return res.status(400).json({ error: "Client has no email address" });
+      }
+      if (!client.agreedRatePence || client.agreedRatePence <= 0) {
+        return res.status(409).json({ error: "Set the client's agreed session rate before resending the payment link." });
+      }
+
+      const amountPounds = (client.agreedRatePence / 100).toFixed(2);
+      const tenantContext = {
+        id: req.tenant.id,
+        name: req.tenant.name,
+        fromEmail: req.tenant.fromEmail,
+        primaryColor: req.tenant.primaryColor,
+      };
+      const emailOptions = await generatePaymentLinkEmail(client.stripeCheckoutUrl, amountPounds, tenantContext);
+      const emailResult = await sendEmail({ ...emailOptions, to: client.email });
+      if (!emailResult.success) {
+        return res.status(502).json({
+          error: "The payment link is still available, but the email could not be sent. Copy the link and send it manually.",
+        });
+      }
+
+      return res.json({ success: true, url: client.stripeCheckoutUrl });
+    } catch (error) {
+      console.error("Payment link resend error:", error);
+      return res.status(500).json({ error: "The payment link email could not be resent." });
     }
   });
 
@@ -5168,7 +5260,7 @@ export async function registerRoutes(
       const tenantStripeKey = req.tenant.stripeSecretKey || null;
       const baseUrl = process.env.APP_BASE_URL?.replace(/\/$/, "");
       const result = await db.transaction(async (tx) => {
-        await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${req.tenant!.id}:${req.params.id}:payment-setup-retry`}))`);
+        await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${req.tenant!.id}:${req.params.id}:payment-link-creation`}))`);
         const current = await tx.select().from(clients).where(and(
           eq(clients.id, req.params.id),
           eq(clients.tenantId, req.tenant!.id),

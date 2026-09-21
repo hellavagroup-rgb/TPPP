@@ -1368,6 +1368,125 @@ describe("registration journey HTTP routes", () => {
     });
   });
 
+  it("resends an existing payment link without creating or replacing it", async () => {
+    resetState({
+      tenant: { paymentsEnabled: true },
+      client: {
+        paymentStatus: "setup_pending",
+        stripeCheckoutUrl: "https://pay.test/existing",
+        stripePaymentLinkId: "plink_existing",
+      },
+    });
+
+    const response = await request("/api/clients/client-a/resend-payment-link", { method: "POST" });
+
+    expect(response).toMatchObject({
+      status: 200,
+      body: { success: true, url: "https://pay.test/existing" },
+    });
+    expect(h.state.paymentLinks).toHaveLength(0);
+    expect(h.state.client.stripeCheckoutUrl).toBe("https://pay.test/existing");
+    expect(h.state.emails).toHaveLength(1);
+    expect(h.state.emails[0].to).toBe("client@example.test");
+  });
+
+  it("keeps payment-link resends tenant scoped", async () => {
+    resetState({
+      tenant: { id: "tenant-b", paymentsEnabled: true },
+      client: {
+        tenantId: "tenant-a",
+        paymentStatus: "setup_pending",
+        stripeCheckoutUrl: "https://pay.test/existing",
+      },
+    });
+
+    const response = await request("/api/clients/client-a/resend-payment-link", { method: "POST" });
+
+    expect(response.status).toBe(404);
+    expect(h.state.emails).toHaveLength(0);
+  });
+
+  it("does not resend a setup link after payment is active", async () => {
+    resetState({
+      tenant: { paymentsEnabled: true },
+      client: {
+        paymentStatus: "active",
+        stripeCheckoutUrl: "https://pay.test/completed",
+      },
+    });
+
+    const response = await request("/api/clients/client-a/resend-payment-link", { method: "POST" });
+
+    expect(response.status).toBe(409);
+    expect(h.state.emails).toHaveLength(0);
+  });
+
+  it("does not replace an existing payment link through routine manual generation", async () => {
+    resetState({
+      tenant: { paymentsEnabled: true },
+      client: {
+        paymentStatus: "setup_pending",
+        stripeCheckoutUrl: "https://pay.test/existing",
+        stripePaymentLinkId: "plink_existing",
+      },
+    });
+
+    const response = await request("/api/stripe/checkout", {
+      method: "POST",
+      body: JSON.stringify({ clientId: "client-a" }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(h.state.paymentLinks).toHaveLength(0);
+    expect(h.state.client.stripeCheckoutUrl).toBe("https://pay.test/existing");
+  });
+
+  it("does not create a new payment link after payment is active", async () => {
+    resetState({
+      tenant: { paymentsEnabled: true },
+      client: {
+        paymentStatus: "active",
+        stripeCheckoutUrl: null,
+        stripePaymentLinkId: null,
+      },
+    });
+
+    const response = await request("/api/stripe/checkout", {
+      method: "POST",
+      body: JSON.stringify({ clientId: "client-a" }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(h.state.paymentLinks).toHaveLength(0);
+  });
+
+  it("creates only one routine payment link across concurrent requests", async () => {
+    resetState({
+      tenant: { paymentsEnabled: true },
+      client: {
+        paymentStatus: "none",
+        stripeCheckoutUrl: null,
+        stripePaymentLinkId: null,
+      },
+    });
+
+    const [first, second] = await Promise.all([
+      request("/api/stripe/checkout", {
+        method: "POST",
+        body: JSON.stringify({ clientId: "client-a" }),
+      }),
+      request("/api/stripe/checkout", {
+        method: "POST",
+        body: JSON.stringify({ clientId: "client-a" }),
+      }),
+    ]);
+
+    expect([first.status, second.status].sort()).toEqual([200, 409]);
+    expect(h.state.paymentLinks).toHaveLength(1);
+    expect(h.state.client.stripeCheckoutUrl).toBe("https://pay.test/session");
+    expect(h.state.emails).toHaveLength(1);
+  });
+
   it("uses the tenant key already decrypted by authenticated middleware", async () => {
     resetState({
       tenant: { paymentsEnabled: true, stripeSecretKey: "sk_plaintext_from_middleware" },

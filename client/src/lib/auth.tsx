@@ -37,6 +37,17 @@ export type LoginResult =
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+export function isPublicAuthLocation(location: string): boolean {
+  return location === "/login"
+    || location.startsWith("/fill/")
+    || location.startsWith("/accept-invite")
+    || location.startsWith("/reset-password")
+    || location.startsWith("/payment-success")
+    || location.startsWith("/payment-cancel")
+    || location.startsWith("/options/")
+    || location.startsWith("/register/");
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -47,7 +58,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAuthLossHandler(() => {
       // A 401 means the server no longer accepts this session. Never leave
       // tenant-scoped cached records visible while routing to sign-in.
-      if (location === "/login") return;
+      // Public client journeys do not have staff sessions and must never be
+      // redirected to the staff login because one of their public APIs failed.
+      if (isPublicAuthLocation(location)) return;
       console.info("[auth] session expired or invalid; clearing tenant cache");
       setUser(null);
       queryClient.clear();

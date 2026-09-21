@@ -3,7 +3,7 @@ import { users, tenants } from "@shared/schema";
 import { eq } from "drizzle-orm";
 import { decryptSecret } from "../encryption";
 
-export async function requireTenant(req: any, res: any, next: any) {
+export function isOpenTenantPath(req: any): boolean {
   const openPaths = [
     '/auth/login',
     '/auth/logout',
@@ -14,13 +14,14 @@ export async function requireTenant(req: any, res: any, next: any) {
     '/tenant/branding',
   ];
 
-  if (
+  return (
     openPaths.some(path => req.path === path) ||
     req.path.startsWith('/super-admin/') ||
     req.path === '/super-admin' ||
     req.path.startsWith('/auth/reset-password/') ||
     req.path.startsWith('/admin-users/invite/') ||
     req.path.startsWith('/clients/public/') ||
+    req.path.startsWith('/public/form-completion-page/') ||
     req.path.startsWith('/public/options/') ||
     req.path.startsWith('/public/register/') ||
     (req.path.startsWith('/forms/') && !req.user?.id) ||
@@ -28,7 +29,11 @@ export async function requireTenant(req: any, res: any, next: any) {
     req.path.startsWith('/form-drafts') ||
     req.path === '/public/payment-return' ||
     req.path === '/stripe/webhook'
-  ) {
+  );
+}
+
+export async function requireTenant(req: any, res: any, next: any) {
+  if (isOpenTenantPath(req)) {
     return next();
   }
 

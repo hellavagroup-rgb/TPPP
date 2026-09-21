@@ -23,3 +23,4 @@
 - [Confirmation state and slot retirement](confirmation-state-slot-retirement.md) — BookingConfirmed is feature-gated; confirmation retires availability but preserves a booking snapshot.
 - [Drizzle query builders are not Promises](drizzle-query-builder-await.md) — await builders inside try/catch; do not chain Promise.catch directly on them.
 - [Payment return pages are read-only observers](payment-return-observer.md) — a Stripe redirect never confirms a booking; only verified webhooks may advance durable state.
+- [Public pages must ignore staff-session 401 redirects](public-pages-auth-loss.md) — a public API 401 must not send form, registration, option, or payment visitors to staff login.

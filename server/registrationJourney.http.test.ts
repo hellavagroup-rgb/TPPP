@@ -24,6 +24,7 @@ const h = vi.hoisted(() => {
     emailThrows: false,
     paymentResult: { url: "https://pay.test/session", paymentLinkId: "plink_1" } as any,
     checkoutSession: null as any,
+    checkoutSessions: [] as any[],
     checkoutError: null as any,
     preventCheckoutSave: false,
   };
@@ -128,7 +129,8 @@ const h = vi.hoisted(() => {
         if (patch.status === "RegistrationPending" && state.client.status !== "OptionSelected") return [];
         if (["BookingConfirmed", "Scheduled"].includes(patch.status)
           && !["OptionsSent", "RegistrationPending", "BookingConfirmed", "Scheduled"].includes(state.client.status)) return [];
-        if (patch.stripeCheckoutUrl && (state.client.stripeCheckoutUrl || state.preventCheckoutSave)) return [];
+        if (patch.stripeCheckoutUrl
+          && ((state.client.stripeCheckoutUrl && state.stripeLinkActive) || state.preventCheckoutSave)) return [];
         const resolvedPatch = { ...patch };
         if (resolvedPatch.agreedRatePence && typeof resolvedPatch.agreedRatePence === "object") {
           resolvedPatch.agreedRatePence = state.client.agreedRatePence > 0
@@ -255,7 +257,8 @@ vi.mock("./stripe", () => ({
   isStripeConfigured: vi.fn(() => true),
   getStripeInstance: vi.fn(() => ({
     paymentLinks: {
-      retrieve: vi.fn(async () => ({ active: h.state.stripeLinkActive })),
+        retrieve: vi.fn(async () => ({ active: h.state.stripeLinkActive })),
+        update: vi.fn(async () => ({ active: false })),
     },
     checkout: {
       sessions: {
@@ -263,6 +266,11 @@ vi.mock("./stripe", () => ({
           if (h.state.checkoutError) throw h.state.checkoutError;
           return h.state.checkoutSession;
         }),
+        list: vi.fn(() => ({
+          async *[Symbol.asyncIterator]() {
+            for (const session of h.state.checkoutSessions) yield session;
+          },
+        })),
       },
     },
   })),
@@ -384,6 +392,7 @@ function resetState(overrides: { client?: any; tenant?: any } = {}) {
   h.state.emailThrows = false;
   h.state.paymentResult = { url: "https://pay.test/session", paymentLinkId: "plink_1" };
   h.state.checkoutSession = null;
+  h.state.checkoutSessions = [];
   h.state.checkoutError = null;
   h.state.preventCheckoutSave = false;
   vi.clearAllMocks();
@@ -1388,6 +1397,85 @@ describe("registration journey HTTP routes", () => {
     expect(h.state.client.stripeCheckoutUrl).toBe("https://pay.test/existing");
     expect(h.state.emails).toHaveLength(1);
     expect(h.state.emails[0].to).toBe("client@example.test");
+  });
+
+  it("safely replaces an inactive unpaid link before resending it", async () => {
+    resetState({
+      tenant: { paymentsEnabled: true },
+      client: {
+        paymentStatus: "setup_pending",
+        stripeCheckoutUrl: "https://pay.test/inactive",
+        stripePaymentLinkId: "plink_inactive",
+      },
+    });
+    h.state.stripeLinkActive = false;
+
+    const response = await request("/api/clients/client-a/resend-payment-link", { method: "POST" });
+
+    expect(response).toMatchObject({
+      status: 200,
+      body: {
+        success: true,
+        url: "https://pay.test/session",
+        replacedInactiveLink: true,
+      },
+    });
+    expect(h.state.paymentLinks).toHaveLength(1);
+    expect(h.state.client).toMatchObject({
+      stripeCheckoutUrl: "https://pay.test/session",
+      stripePaymentLinkId: "plink_1",
+    });
+    expect(h.state.emails).toHaveLength(1);
+    expect(h.state.emails[0].html).toContain("https://pay.test/session");
+  });
+
+  it("does not replace an inactive link when Stripe shows a completed payment", async () => {
+    resetState({
+      tenant: { paymentsEnabled: true },
+      client: {
+        paymentStatus: "setup_pending",
+        stripeCheckoutUrl: "https://pay.test/inactive",
+        stripePaymentLinkId: "plink_inactive",
+      },
+    });
+    h.state.stripeLinkActive = false;
+    h.state.checkoutSessions = [{
+      id: "cs_paid",
+      status: "complete",
+      payment_status: "paid",
+    }];
+
+    const response = await request("/api/clients/client-a/resend-payment-link", { method: "POST" });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error).toContain("completed payment");
+    expect(h.state.paymentLinks).toHaveLength(0);
+    expect(h.state.emails).toHaveLength(0);
+    expect(h.state.client.stripeCheckoutUrl).toBe("https://pay.test/inactive");
+  });
+
+  it("does not replace an inactive link while a checkout session is still open", async () => {
+    resetState({
+      tenant: { paymentsEnabled: true },
+      client: {
+        paymentStatus: "setup_pending",
+        stripeCheckoutUrl: "https://pay.test/inactive",
+        stripePaymentLinkId: "plink_inactive",
+      },
+    });
+    h.state.stripeLinkActive = false;
+    h.state.checkoutSessions = [{
+      id: "cs_open",
+      status: "open",
+      payment_status: "unpaid",
+    }];
+
+    const response = await request("/api/clients/client-a/resend-payment-link", { method: "POST" });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error).toContain("open checkout");
+    expect(h.state.paymentLinks).toHaveLength(0);
+    expect(h.state.emails).toHaveLength(0);
   });
 
   it("keeps payment-link resends tenant scoped", async () => {

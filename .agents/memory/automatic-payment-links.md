@@ -8,3 +8,7 @@ In the new workflow, payment-link creation and delivery are automatic as the cli
 **Why:** A manual creation action duplicates the automated progression and creates uncertainty about which path staff should use. Routine replacement can also leave multiple payable links or invalidate the link the client already has.
 
 **How to apply:** Show payment progress and failures to administrators. For an awaiting-client state, expose the existing link with copy and resend actions. Reserve recovery for failures; do not present routine replacement or early creation as the normal workflow.
+
+An inactive stored link is an exceptional recovery case, not permission to replace it immediately. Check every Stripe Checkout Session for that link first: any paid or still-open session must block replacement. Only an inactive, unpaid link with no open checkout may be replaced, and the replacement must be persisted before it is shared or emailed.
+
+**Why:** Stripe can deactivate a link after payment, while an already-open Checkout Session can still be in progress. Replacing either case risks requesting a duplicate payment.

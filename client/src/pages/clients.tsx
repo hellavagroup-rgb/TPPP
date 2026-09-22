@@ -975,9 +975,13 @@ export default function Clients() {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "Failed to resend payment link");
+      setGeneratedPaymentUrl(data.url);
+      if (data.replacedInactiveLink) invalidateOperationalData(queryClient);
       toast({
-        title: "Payment link resent",
-        description: `The existing payment link was emailed to ${paymentLinkClient.email}.`,
+        title: data.replacedInactiveLink ? "Inactive payment link replaced" : "Payment link resent",
+        description: data.replacedInactiveLink
+          ? `Stripe confirmed the old link was inactive and unpaid. A safe replacement was emailed to ${paymentLinkClient.email}.`
+          : `The existing payment link was emailed to ${paymentLinkClient.email}.`,
       });
     } catch (error: any) {
       toast({

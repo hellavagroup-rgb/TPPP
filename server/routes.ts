@@ -5202,43 +5202,158 @@ export async function registerRoutes(
     }
   });
 
-  // Resend the currently stored payment link without replacing or deactivating it.
+  // Reuse an active stored link; recover an inactive unpaid link before resending.
   app.post("/api/clients/:id/resend-payment-link", requireAdmin, async (req, res) => {
     try {
       if (!req.tenant) return res.status(400).json({ error: "Tenant not found" });
-      const client = await storage.getClientById(req.params.id);
-      if (!client || client.tenantId !== req.tenant.id) {
-        return res.status(404).json({ error: "Client not found" });
-      }
-      if (client.paymentStatus === "active") {
-        return res.status(409).json({ error: "Payment setup is already complete for this client." });
-      }
-      if (!client.stripeCheckoutUrl) {
-        return res.status(409).json({ error: "This client does not have a payment link to resend." });
-      }
-      if (!client.email) {
-        return res.status(400).json({ error: "Client has no email address" });
-      }
-      if (!client.agreedRatePence || client.agreedRatePence <= 0) {
-        return res.status(409).json({ error: "Set the client's agreed session rate before resending the payment link." });
-      }
+      const delivery = await db.transaction(async (tx) => {
+        await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${req.tenant!.id}:${req.params.id}:payment-link-creation`}))`);
+        const client = await tx.select().from(clients).where(and(
+          eq(clients.id, req.params.id),
+          eq(clients.tenantId, req.tenant!.id),
+        )).limit(1).then(rows => rows[0]);
+        if (!client || client.tenantId !== req.tenant!.id) {
+          return { status: 404, error: "Client not found" } as const;
+        }
+        if (client.paymentStatus === "active") {
+          return { status: 409, error: "Payment setup is already complete for this client." } as const;
+        }
+        if (client.paymentStatus !== "setup_pending") {
+          return { status: 409, error: "This client's payment setup is not awaiting payment." } as const;
+        }
+        if (!client.stripeCheckoutUrl) {
+          return { status: 409, error: "This client does not have a payment link to resend." } as const;
+        }
+        if (!client.email) return { status: 400, error: "Client has no email address" } as const;
+        if (!client.agreedRatePence || client.agreedRatePence <= 0) {
+          return { status: 409, error: "Set the client's agreed session rate before resending the payment link." } as const;
+        }
 
-      const amountPounds = (client.agreedRatePence / 100).toFixed(2);
+        let url = client.stripeCheckoutUrl;
+        let replacedInactiveLink = false;
+        if (client.stripePaymentLinkId) {
+          const stripe = getStripeInstance(req.tenant!.stripeSecretKey);
+          if (!stripe) {
+            return { status: 503, error: "Stripe is unavailable, so the stored payment link could not be verified." } as const;
+          }
+          let storedLink;
+          try {
+            storedLink = await stripe.paymentLinks.retrieve(client.stripePaymentLinkId);
+          } catch (error: any) {
+            console.error("Payment link resend verification failed:", error?.message);
+            return { status: 502, error: "Stripe could not verify the stored payment link. No email was sent." } as const;
+          }
+          if (storedLink.active === false) {
+            let completedPayment = false;
+            let openCheckout = false;
+            try {
+              const sessions = stripe.checkout.sessions.list({
+                payment_link: client.stripePaymentLinkId,
+                limit: 100,
+              });
+              for await (const session of sessions) {
+                if (session.status === "complete" && session.payment_status === "paid") {
+                  completedPayment = true;
+                  break;
+                }
+                if (session.status === "open") openCheckout = true;
+              }
+            } catch (error: any) {
+              console.error("Inactive payment link checkout verification failed:", error?.message);
+              return {
+                status: 502,
+                error: "Stripe could not confirm whether this inactive link has already been paid. No replacement was created.",
+              } as const;
+            }
+            if (completedPayment) {
+              return {
+                status: 409,
+                error: "Stripe shows a completed payment for this link. Check the payment in Stripe before sending another request.",
+              } as const;
+            }
+            if (openCheckout) {
+              return {
+                status: 409,
+                error: "Stripe still has an open checkout for this inactive link. Check Stripe or wait for that checkout to expire before replacing it.",
+              } as const;
+            }
+
+            const appBase = process.env.APP_BASE_URL || `${req.protocol}://${req.get("host")}`;
+            const replacement = await createPaymentLink({
+              clientId: client.id,
+              clientDisplayId: client.displayId,
+              amountPence: client.agreedRatePence,
+              successUrl: `${appBase}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+              tenantId: req.tenant!.id,
+              tenantStripeKey: req.tenant!.stripeSecretKey,
+              practiceName: req.tenant!.name,
+              childName: req.tenant!.intakeClientSummaryEnabled === true
+                ? childNameFromClientNotes(client.notes)
+                : undefined,
+              idempotencyKey: `inactive-payment-recovery-${client.id}-${client.stripePaymentLinkId}-${client.agreedRatePence}`,
+            });
+            if (!replacement) {
+              return { status: 502, error: "Stripe could not create a replacement payment link." } as const;
+            }
+            const saved = await tx.update(clients).set({
+              stripeCheckoutUrl: replacement.url,
+              stripePaymentLinkId: replacement.paymentLinkId,
+              paymentStatus: "setup_pending",
+              updatedAt: new Date(),
+            }).where(and(
+              eq(clients.id, client.id),
+              eq(clients.tenantId, req.tenant!.id),
+              eq(clients.stripeCheckoutUrl, client.stripeCheckoutUrl),
+              eq(clients.stripePaymentLinkId, client.stripePaymentLinkId),
+              eq(clients.paymentStatus, "setup_pending"),
+            )).returning({ id: clients.id });
+            if (!saved.length) {
+              try {
+                const cleanupLink = await stripe.paymentLinks.retrieve(replacement.paymentLinkId);
+                if (cleanupLink.active !== false) {
+                  await stripe.paymentLinks.update(replacement.paymentLinkId, { active: false });
+                }
+              } catch (cleanupError: any) {
+                console.error("Failed to deactivate an unpersisted replacement payment link:", cleanupError?.message);
+              }
+              return { status: 409, error: "The payment link changed while it was being checked. Refresh and try again." } as const;
+            }
+            url = replacement.url;
+            replacedInactiveLink = true;
+          }
+        }
+        return {
+          status: 200,
+          email: client.email,
+          amountPence: client.agreedRatePence,
+          url,
+          replacedInactiveLink,
+        } as const;
+      });
+      if ("error" in delivery) return res.status(delivery.status).json({ error: delivery.error });
+
+      const amountPounds = (delivery.amountPence / 100).toFixed(2);
       const tenantContext = {
         id: req.tenant.id,
         name: req.tenant.name,
         fromEmail: req.tenant.fromEmail,
         primaryColor: req.tenant.primaryColor,
       };
-      const emailOptions = await generatePaymentLinkEmail(client.stripeCheckoutUrl, amountPounds, tenantContext);
-      const emailResult = await sendEmail({ ...emailOptions, to: client.email });
+      const emailOptions = await generatePaymentLinkEmail(delivery.url, amountPounds, tenantContext);
+      const emailResult = await sendEmail({ ...emailOptions, to: delivery.email });
       if (!emailResult.success) {
         return res.status(502).json({
           error: "The payment link is still available, but the email could not be sent. Copy the link and send it manually.",
+          url: delivery.url,
+          replacedInactiveLink: delivery.replacedInactiveLink,
         });
       }
 
-      return res.json({ success: true, url: client.stripeCheckoutUrl });
+      return res.json({
+        success: true,
+        url: delivery.url,
+        replacedInactiveLink: delivery.replacedInactiveLink,
+      });
     } catch (error) {
       console.error("Payment link resend error:", error);
       return res.status(500).json({ error: "The payment link email could not be resent." });

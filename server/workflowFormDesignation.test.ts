@@ -1,8 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { designatedIntakeCompletionBlocker, validateWorkflowFormDesignations } from "./workflowFormDesignation";
+import { designatedIntakeCompletionBlocker, shouldValidateIntakeCompletion, validateWorkflowFormDesignations } from "./workflowFormDesignation";
 
 const intake = { id: "intake", tenantId: "tenant-a", title: "Verified intake" };
 const registration = { id: "registration", tenantId: "tenant-a", title: "Verified registration" };
+
+describe("intake completion on admin edits", () => {
+  it("does not recheck an opted-in Forms Completed client when notes or an unchanged status are saved", () => {
+    expect(shouldValidateIntakeCompletion(undefined, "Forms Completed", true)).toBe(false);
+    expect(shouldValidateIntakeCompletion("Forms Completed", "Forms Completed", true)).toBe(false);
+    // Existing legacy record: submission exists, but no matching delivery.
+    expect(designatedIntakeCompletionBlocker(intake, true, true, undefined)?.blocker?.state).toBe("not_delivered");
+  });
+
+  it("still rejects an actual opted-in transition without a completed delivery", () => {
+    expect(shouldValidateIntakeCompletion("Forms Completed", "Forms Sent", true)).toBe(true);
+    expect(designatedIntakeCompletionBlocker(intake, true, true, undefined)?.blocker?.state).toBe("not_delivered");
+    expect(designatedIntakeCompletionBlocker(intake, false, true, "completed")?.blocker?.state).toBe("not_submitted");
+  });
+
+  it("preserves the opted-out status validation path", () => {
+    expect(shouldValidateIntakeCompletion("Forms Completed", "Forms Completed", false)).toBe(true);
+    expect(shouldValidateIntakeCompletion(undefined, "Forms Completed", false)).toBe(false);
+    expect(shouldValidateIntakeCompletion("Forms Completed", "Forms Sent", false)).toBe(true);
+  });
+});
 
 describe("workflow form designations", () => {
   it("keeps legacy tenants explicitly in setup instead of guessing", () => {

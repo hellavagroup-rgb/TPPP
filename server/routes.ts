@@ -21,14 +21,14 @@ import { sendEmail, buildFromAddress, generateFormInviteEmail, generatePasswordR
 import { forceReseedDatabase } from "./seed";
 import { seedDemoData } from "./seedDemo";
 import { parseIntakeEmailBody } from "./intakeParser";
-import { buildIntakeClientSummary } from "./intakeClientSummary";
+import { buildConversionNameNotes } from "./intakeClientSummary";
 import { findUniqueOrphanedIntakeMessageId } from "./intakeMessageLinking";
 import { syncAllActiveConnections } from "./gmailSync";
 import { requireTenant } from './middleware/tenant';
 import { requireSuperAdmin } from './middleware/superAdmin';
 import { db } from "./db";
 import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, formDeliveries, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs, intakeMessages, gmailConnections, paymentCharges, clientClinicianOptions, bookingSnapshots } from "@shared/schema";
-import { designatedIntakeCompletionBlocker } from "./workflowFormDesignation";
+import { designatedIntakeCompletionBlocker, shouldValidateIntakeCompletion } from "./workflowFormDesignation";
 import { isStripeConfigured, getStripeInstance, createPaymentLink, chargeOffSession, constructWebhookEvent, childNameFromClientNotes } from "./stripe";
 import { encryptSecret, decryptSecret, isEncryptionConfigured } from "./encryption";
 import { getAuthUrl, exchangeCodeForTokens, syncConnection, buildRedirectUri } from "./gmailSync";
@@ -1364,7 +1364,11 @@ export async function registerRoutes(
         }
         req.body.status = transition.status;
       }
-      if (req.body.status === "Forms Completed") {
+      if (shouldValidateIntakeCompletion(
+        req.body.status,
+        oldStatus,
+        req.tenant?.intakeClientSummaryEnabled === true,
+      )) {
         const intakeId = req.tenant?.intakeFormTemplateId;
         if (!intakeId) return res.status(409).json({ error: "Designated intake form requires setup" });
         const template = await storage.getFormTemplateById(intakeId);
@@ -4816,19 +4820,14 @@ export async function registerRoutes(
       // Build a concise summary in notes — full structured data is accessible via the linked intake message
       const notesLines: string[] = [];
       const nameForNote = rawFullName || [firstName, lastName].filter(Boolean).join(" ");
-      if (req.tenant.intakeClientSummaryEnabled) {
-        notesLines.push(...buildIntakeClientSummary({
-          fields: parsed,
-          fallbackClientName: nameForNote || undefined,
-          email: extractedEmail,
-        }));
-      } else {
-        if (isReferrerEmail && message.fromAddress) {
-          notesLines.push(`Referred by: ${message.fromAddress}`);
-        }
-        if (nameForNote) notesLines.push(`Client name: ${nameForNote}`);
-        if (dobRaw) notesLines.push(`Date of birth: ${dobRaw}`);
-      }
+      notesLines.push(...buildConversionNameNotes({
+        fields: parsed,
+        fallbackClientName: nameForNote || undefined,
+        email: extractedEmail,
+        referrerEmail: isReferrerEmail ? message.fromAddress : undefined,
+        dateOfBirth: dobRaw,
+        intakeClientSummaryEnabled: req.tenant.intakeClientSummaryEnabled === true,
+      }));
       // Fall back to raw body only when parser produced no structured fields at all
       if (notesLines.length === 0 && !parsed && message.body) {
         notesLines.push("--- Original enquiry (unparsed) ---");

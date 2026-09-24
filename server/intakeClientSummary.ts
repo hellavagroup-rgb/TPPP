@@ -18,7 +18,7 @@ export function buildIntakeClientSummary(input: {
   fallbackClientName?: string;
   email?: string;
 }): string[] {
-  const adultName = pickExact(
+  const explicitlyNamedAdult = pickExact(
     input.fields,
     "Your name",
     "Parent name",
@@ -26,7 +26,7 @@ export function buildIntakeClientSummary(input: {
     "Parent/guardian name",
     "Adult name",
     "Client name",
-  ) || input.fallbackClientName;
+  );
   const childName = pickExact(
     input.fields,
     "Child's name",
@@ -36,10 +36,33 @@ export function buildIntakeClientSummary(input: {
     "Young person name",
     "Name of young person",
   );
+  // The parser's generic extracted name can refer to the child, not the adult.
+  const adultName = explicitlyNamedAdult || (childName ? undefined : input.fallbackClientName);
 
   return [
-    adultName ? `Client name: ${adultName}` : null,
+    childName ? `Client name: ${childName}` : adultName ? `Client name: ${adultName}` : null,
+    childName && adultName ? `Parent/guardian contact: ${adultName}` : null,
     input.email ? `Email address: ${input.email}` : null,
-    childName ? `Child's name: ${childName}` : null,
+    // Without an adult contact line, retain explicit child context for downstream
+    // integrations; a generic "Client name" alone cannot establish their age.
+    childName && !adultName ? `Child's name: ${childName}` : null,
+  ].filter((line): line is string => Boolean(line));
+}
+
+export function buildConversionNameNotes(input: {
+  fields: Record<string, string> | null;
+  fallbackClientName?: string;
+  email?: string;
+  referrerEmail?: string;
+  dateOfBirth?: string;
+  intakeClientSummaryEnabled: boolean;
+}): string[] {
+  if (input.intakeClientSummaryEnabled) {
+    return buildIntakeClientSummary(input);
+  }
+  return [
+    input.referrerEmail ? `Referred by: ${input.referrerEmail}` : null,
+    input.fallbackClientName ? `Client name: ${input.fallbackClientName}` : null,
+    input.dateOfBirth ? `Date of birth: ${input.dateOfBirth}` : null,
   ].filter((line): line is string => Boolean(line));
 }

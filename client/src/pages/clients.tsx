@@ -6,6 +6,7 @@ import {
   registrationProgressCopy,
 } from "@/lib/clientWorkflowColumns";
 import { formatDateUK, formatAssignedSlot } from "@/lib/dateUtils";
+import { correctSummaryClientName, editClientStatusPatch, getSummaryClientName } from "@shared/clientIdentitySummary";
 import { AllocationCardDetails, type AllocationVisibilityData } from "@/components/AllocationVisibility";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -192,6 +193,7 @@ export default function Clients() {
   const nonEngagementEnabled = tenant?.nonEngagementEnabled !== false;
   // CY&A feature flags (all default false — existing tenants unaffected)
   const contactPreferenceEnabled = tenant?.contactPreferenceEnabled === true;
+  const intakeClientSummaryEnabled = tenant?.intakeClientSummaryEnabled === true;
   const multiClinicianAllocationEnabled = tenant?.multiClinicianAllocationEnabled === true;
   const allocationVisibilityEnabled = tenant?.allocationVisibilityEnabled === true;
   const zoomLinkEmailEnabled = tenant?.zoomLinkEmailEnabled === true;
@@ -650,6 +652,7 @@ export default function Clients() {
   const [isEditClientOpen, setIsEditClientOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<ClientType | null>(null);
   const [editClientRateStr, setEditClientRateStr] = useState("");
+  const [editClientSummaryName, setEditClientSummaryName] = useState("");
   const [editClientEmailWarning, setEditClientEmailWarning] = useState<{ displayId: string; id: string }[]>([]);
   // Tracks the email value the in-flight onBlur check was issued for (edit dialog).
   const editClientEmailCheckRef = useRef<string>("");
@@ -1338,6 +1341,7 @@ export default function Clients() {
 
   const handleOpenEditClient = (client: ClientType) => {
     setEditingClient(client);
+    setEditClientSummaryName(getSummaryClientName(client.notes));
     setEditClientRateStr(client.agreedRatePence != null ? String(client.agreedRatePence / 100) : "");
     setEditClientEmailWarning([]);
     editClientEmailCheckRef.current = "";
@@ -1367,6 +1371,12 @@ export default function Clients() {
   const handleSaveEditClient = async () => {
     if (!editingClient) return;
     try {
+      const originalName = getSummaryClientName(editingClient.notes);
+      const nameChanged = intakeClientSummaryEnabled && editClientSummaryName.trim() !== originalName;
+      if (nameChanged && !editClientSummaryName.trim()) {
+        toast({ title: "Client name is required", description: "Enter a name or leave the existing summary unchanged.", variant: "destructive" });
+        return;
+      }
       await new Promise<void>((resolve, reject) => {
         const updates: Record<string, unknown> = {
             email: editClientData.email,
@@ -1374,8 +1384,10 @@ export default function Clients() {
             insurer: editClientData.insurer,
             referralSource: editClientData.referralSource,
             presentingIssues: editClientData.presentingIssues,
-            notes: editClientData.notes || null,
-            status: editClientData.status,
+            notes: (nameChanged
+              ? correctSummaryClientName(editClientData.notes, editClientSummaryName)
+              : editClientData.notes) || null,
+            ...editClientStatusPatch(editClientData.status, editingClient.status, intakeClientSummaryEnabled),
           };
           if (contactPreferenceEnabled && editClientData.contactPreference !== null) {
             updates.contactPreference = editClientData.contactPreference;
@@ -3295,6 +3307,21 @@ export default function Clients() {
                 rows={3}
               />
             </div>
+
+            {intakeClientSummaryEnabled && (
+              <div className="grid gap-2">
+                <Label htmlFor="edit-client-summary-name">Client name (summary)</Label>
+                <Input
+                  id="edit-client-summary-name"
+                  value={editClientSummaryName}
+                  onChange={e => setEditClientSummaryName(e.target.value)}
+                  placeholder="Name of the person receiving care"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Corrects the name in the client notes only. The original enquiry and workflow status are unchanged.
+                </p>
+              </div>
+            )}
 
             {contactPreferenceEnabled && (
               <div className="grid gap-2">

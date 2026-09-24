@@ -4,6 +4,16 @@ export type WorkflowTemplate = {
   title: string;
 };
 
+/** Opted-in clients need a new transition, not a repeated status value, to recheck delivery. */
+export function shouldValidateIntakeCompletion(
+  requestedStatus: unknown,
+  currentStatus: string,
+  intakeClientSummaryEnabled: boolean,
+): boolean {
+  return requestedStatus === "Forms Completed"
+    && (!intakeClientSummaryEnabled || currentStatus !== "Forms Completed");
+}
+
 export function validateWorkflowFormDesignations(input: {
   tenantId: string;
   intakeFormTemplateId: string | null;

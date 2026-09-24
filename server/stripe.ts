@@ -30,7 +30,11 @@ export function paymentLinkCreationIdempotencyKey(baseKey: string): string {
 }
 
 export function childNameFromClientNotes(notes: string | null | undefined): string | undefined {
-  const childName = notes?.match(/^Child(?:'|’)?s name:\s*(.+)$/im)?.[1]?.trim();
+  const legacyChildName = notes?.match(/^Child(?:'|’)?s name:\s*(.+)$/im)?.[1]?.trim();
+  const namedClientWithGuardian = notes && /^Parent\/guardian contact:\s*\S/im.test(notes)
+    ? notes.match(/^Client name:\s*(.+)$/im)?.[1]?.trim()
+    : undefined;
+  const childName = namedClientWithGuardian || legacyChildName;
   return childName ? childName.slice(0, 500) : undefined;
 }
 

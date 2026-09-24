@@ -32,7 +32,7 @@ export function creationFormSelectionError(
     : null;
 }
 
-type TenantContext = { id: string; name: string; fromEmail?: string | null; primaryColor?: string | null };
+type TenantContext = { id: string; name: string; fromEmail?: string | null; primaryColor?: string | null; intakeDeliveryDiagnosticsEnabled?: boolean | null };
 type ClientRecord = { id: string; tenantId: string | null; email: string; displayId: string; status: string; formsSentAt: Date | null };
 type FormRecord = { id: string; tenantId: string | null; title: string };
 type DeliveryRecord = {
@@ -56,11 +56,11 @@ export interface FormDeliveryDependencies {
   getForm(id: string): Promise<FormRecord | undefined>;
   prepare(clientId: string, formIds: string[], tenantId: string): Promise<DeliveryRecord[]>;
   list(clientId: string, tenantId: string): Promise<DeliveryRecord[]>;
-  claim(id: string, tenantId: string, leaseToken: string, staleBefore: Date): Promise<DeliveryRecord | undefined>;
-  finish(id: string, tenantId: string, leaseToken: string, status: "sent" | "failed", error?: string): Promise<DeliveryRecord | undefined>;
+  claim(id: string, tenantId: string, leaseToken: string, staleBefore: Date, resend?: boolean): Promise<DeliveryRecord | undefined>;
+  finish(id: string, tenantId: string, leaseToken: string, status: "sent" | "failed", error?: string, providerMessageId?: string, diagnostics?: boolean, outcome?: "rejected" | "unknown"): Promise<DeliveryRecord | undefined>;
   updateClient(id: string, updates: { status: "Forms Sent"; formsSentAt: Date }): Promise<unknown>;
   buildEmail(form: FormRecord, url: string, tenant: TenantContext): Promise<any>;
-  sendEmail(options: any): Promise<{ success: boolean }>;
+  sendEmail(options: any): Promise<{ success: boolean; providerMessageId?: string; outcome?: "accepted" | "rejected" | "unknown" }>;
   activity(action: string, form: FormRecord, client: ClientRecord, details?: Record<string, unknown>): Promise<void>;
   uuid(): string;
   now(): Date;
@@ -68,12 +68,12 @@ export interface FormDeliveryDependencies {
 
 export interface FormDeliveryBatchResult {
   success: boolean;
-  outcomes: { formId: string; status: DeliveryState; retried: boolean; error?: "delivery_failed" }[];
+  outcomes: { formId: string; status: DeliveryState; retried: boolean; skipped?: boolean; error?: "delivery_failed" }[];
   message: string;
 }
 
 export async function executeFormDeliveryBatch(
-  input: { tenant: TenantContext; clientId: string; formIds: string[]; baseUrl: string },
+  input: { tenant: TenantContext; clientId: string; formIds: string[]; baseUrl: string; resend?: boolean },
   deps: FormDeliveryDependencies,
 ): Promise<FormDeliveryBatchResult> {
   const formIds = Array.from(new Set(input.formIds.filter(Boolean)));
@@ -82,6 +82,7 @@ export async function executeFormDeliveryBatch(
   const client = await deps.getClient(input.clientId);
   if (!client) throw new FormDeliveryRequestError(404, "Client not found");
   if (!belongsToTenant(client.tenantId, input.tenant.id)) throw new FormDeliveryRequestError(403, "Access denied");
+  if (input.resend && !input.tenant.intakeDeliveryDiagnosticsEnabled) throw new FormDeliveryRequestError(404, "Resend is not available");
 
   const forms = await Promise.all(formIds.map(deps.getForm));
   if (forms.some((form) => !form)) throw new FormDeliveryRequestError(404, "Form not found");
@@ -93,15 +94,19 @@ export async function executeFormDeliveryBatch(
   const outcomes: FormDeliveryBatchResult["outcomes"] = [];
   for (const form of forms as FormRecord[]) {
     const delivery = deliveries.find((item) => item.formTemplateId === form.id)!;
-    if (delivery.status === "sent" || delivery.status === "completed") {
-      outcomes.push({ formId: form.id, status: delivery.status, retried: false });
+    if (delivery.status === "completed" || (delivery.status === "sent" && !input.resend)) {
+      outcomes.push({ formId: form.id, status: delivery.status, retried: false,
+        ...(input.tenant.intakeDeliveryDiagnosticsEnabled ? { skipped: true } : {}) });
       continue;
     }
+    if (input.resend && delivery.status !== "sent" && delivery.status !== "sending") {
+      throw new FormDeliveryRequestError(409, "Only a previously accepted invitation can be resent. Use Send to retry a queued or failed invitation.");
+    }
     const leaseToken = deps.uuid();
-    const claimed = await deps.claim(delivery.id, input.tenant.id, leaseToken, deps.now());
+    const claimed = await deps.claim(delivery.id, input.tenant.id, leaseToken, deps.now(), input.resend);
     if (!claimed) {
       const current = (await deps.list(client.id, input.tenant.id)).find((item) => item.id === delivery.id);
-      outcomes.push({ formId: form.id, status: current?.status || "sending", retried: false });
+      outcomes.push({ formId: form.id, status: current?.status || "sending", retried: false, skipped: true });
       continue;
     }
     const retried = claimed.attemptCount > 1;
@@ -110,11 +115,12 @@ export async function executeFormDeliveryBatch(
     const email = await deps.buildEmail(form, `${input.baseUrl}/fill/${client.id}/${form.id}`, input.tenant);
     const sent = await deps.sendEmail({ ...email, to: client.email, idempotencyKey: claimed.idempotencyKey });
     if (sent.success) {
-      const finished = await deps.finish(delivery.id, input.tenant.id, leaseToken, "sent");
+      const finished = await deps.finish(delivery.id, input.tenant.id, leaseToken, "sent", undefined, sent.providerMessageId, !!input.tenant.intakeDeliveryDiagnosticsEnabled);
       if (finished) await deps.activity("activity_form_sent", form, client);
       outcomes.push({ formId: form.id, status: finished?.status || "sending", retried });
     } else {
-      const finished = await deps.finish(delivery.id, input.tenant.id, leaseToken, "failed", "delivery_failed");
+      const finished = await deps.finish(delivery.id, input.tenant.id, leaseToken, "failed", "delivery_failed", undefined,
+        !!input.tenant.intakeDeliveryDiagnosticsEnabled, sent.outcome === "rejected" ? "rejected" : "unknown");
       if (finished) await deps.activity("activity_form_delivery_failed", form, client, { error: "delivery_failed" });
       outcomes.push({ formId: form.id, status: finished?.status || "sending", error: "delivery_failed", retried });
     }
@@ -136,6 +142,8 @@ export async function executeFormDeliveryBatch(
   return {
     success: !failed && allDelivered,
     outcomes,
-    message: failed ? "Some forms could not be sent" : allDelivered ? "Forms sent successfully" : "Forms are still being sent",
+    message: failed ? "Some forms could not be sent" : input.tenant.intakeDeliveryDiagnosticsEnabled && outcomes.every(o => o.skipped)
+      ? "No new email was sent. This invitation is already sent, completed, or being sent."
+      : allDelivered ? "Forms sent successfully" : "Forms are still being sent",
   };
 }

@@ -140,6 +140,7 @@ interface TenantSummary {
   multiClinicianAllocationEnabled: boolean;
   autoAllocationEmailEnabled: boolean;
   registrationFormEnabled: boolean;
+  intakeDeliveryDiagnosticsEnabled: boolean;
   intakeFormTemplateId: string | null;
   registrationFormTemplateId: string | null;
   bookingConfirmedEmailEnabled: boolean;
@@ -465,6 +466,7 @@ const FEATURE_FLAGS: { key: keyof TenantDetail; label: string; description: stri
   { key: "multiClinicianAllocationEnabled", label: "Multi-Clinician Allocation", description: "Enables offering multiple clinician/slot options to a client", group: "cya" },
   { key: "autoAllocationEmailEnabled", label: "Auto Allocation Email", description: "Automatically triggers the options email on allocation", group: "cya" },
   { key: "registrationFormEnabled", label: "Registration Form", description: "Enables the registration form + T&C step before booking is confirmed", group: "cya" },
+  { key: "intakeDeliveryDiagnosticsEnabled", label: "Intake email diagnostics and resend", description: "Shows provider delivery evidence and allows a deliberate resend of unfinished intake forms", group: "cya" },
   { key: "bookingConfirmedEmailEnabled", label: "Booking Confirmed Email", description: "Automatically sends booking confirmation email on confirmation", group: "cya" },
   { key: "paymentReconciliationEnabled", label: "Stripe Payment Reconciliation", description: "Let staff verify and recover registration payments from Stripe; enable only for the intended practice", group: "cya" },
   { key: "zoomLinkEmailEnabled", label: "Zoom Link Emails", description: "Requires clinicians to have Zoom links for online appointments and sends the link after booking confirmation", group: "cya" },

@@ -473,6 +473,22 @@ export default function Clients() {
   const [clientToSendForms, setClientToSendForms] = useState<ClientType | null>(null);
   const [selectedFormIds, setSelectedForms] = useState<string[]>([]);
   const [formDeliveryStates, setFormDeliveryStates] = useState<Record<string, string>>({});
+  const [intakeDiagnostics, setIntakeDiagnostics] = useState<{
+    status: string; recipient: string; sender: string; legacySentAt: string | null; completedAt: string | null;
+    attempts: { sentAt: string; outcome: string; providerMessageId: string | null; providerEvent: string | null }[];
+  } | null>(null);
+  const [sendingIntake, setSendingIntake] = useState(false);
+  const [diagnosticsError, setDiagnosticsError] = useState(false);
+  const loadIntakeDiagnostics = async (clientId: string) => {
+    if (tenant?.intakeDeliveryDiagnosticsEnabled !== true) return;
+    try {
+      const response = await apiRequest("GET", `/api/clients/${clientId}/intake-delivery-diagnostics`);
+      setIntakeDiagnostics(await response.json());
+      setDiagnosticsError(false);
+    } catch {
+      setDiagnosticsError(true);
+    }
+  };
   const [previewForm, setPreviewForm] = useState<FormTemplate | null>(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [showAllClinicians, setShowAllClinicians] = useState(false);
@@ -1447,7 +1463,10 @@ export default function Clients() {
       setClientToSendForms(client);
       setSelectedForms(intakeTemplateId ? [intakeTemplateId] : []);
       setFormDeliveryStates({});
+      setIntakeDiagnostics(null);
+      setDiagnosticsError(false);
       setIsSendFormsOpen(true);
+      void loadIntakeDiagnostics(client.id);
       try {
         const response = await fetch(`/api/clients/${client.id}/form-deliveries`, { credentials: "include" });
         if (!response.ok) throw new Error("Unable to recover form delivery state");
@@ -1479,15 +1498,30 @@ export default function Clients() {
     }
   };
 
-  const handleSendForms = async () => {
+  const handleSendForms = async (resend = false) => {
       if (clientToSendForms && intakeTemplateId) {
+          if (sendingIntake) return;
+          if (resend && !window.confirm("Send a new intake invitation? This creates a separate email attempt. Check the recipient address and delivery history first.")) return;
+          setSendingIntake(true);
           try {
-            const response = await apiRequest("POST", "/api/form-deliveries/send", {
+            const response = await apiRequest("POST", resend ? "/api/form-deliveries/resend" : "/api/form-deliveries/send", {
               clientId: clientToSendForms.id,
               formIds: [intakeTemplateId],
             });
             const result = await response.json();
             invalidateOperationalData(queryClient);
+            if (tenant?.intakeDeliveryDiagnosticsEnabled === true) {
+              setFormDeliveryStates(Object.fromEntries(result.outcomes.map((outcome: any) => [outcome.formId, outcome.status])));
+              await loadIntakeDiagnostics(clientToSendForms.id);
+              toast({
+                title: result.outcomes?.[0]?.skipped ? "No new email sent" : result.success ? "Provider accepted invitation" : "Invitation not sent",
+                description: result.outcomes?.[0]?.skipped ? result.message : result.success
+                  ? "Provider acceptance does not confirm mailbox delivery. Check the delivery history."
+                  : result.message,
+                variant: result.success ? undefined : "destructive",
+              });
+              return;
+            }
             if (!result.success) {
               setFormDeliveryStates(Object.fromEntries(result.outcomes.map((outcome: any) => [outcome.formId, outcome.status])));
               toast({ title: "Some forms were not sent", description: "Failed forms remain selected so you can retry them.", variant: "destructive" });
@@ -1505,6 +1539,8 @@ export default function Clients() {
               description: "Failed to send forms.",
               variant: "destructive"
             });
+          } finally {
+            setSendingIntake(false);
           }
       } else {
            toast({
@@ -2745,10 +2781,44 @@ export default function Clients() {
                         </Button>
                     </div>
                 ) : <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">No designated intake form is available. Configure one in Super Admin.</div>}
+                {tenant?.intakeDeliveryDiagnosticsEnabled === true && clientToSendForms && (
+                  <div className="rounded border p-3 text-xs space-y-2" data-testid="intake-delivery-diagnostics">
+                    <p className="font-medium">Invitation delivery history</p>
+                    {diagnosticsError && <p>Delivery history could not be checked. Do not resend until you verify the existing attempt.</p>}
+                    {intakeDiagnostics && <>
+                      <p>Recipient: {intakeDiagnostics.recipient}</p>
+                      <p>Sender: {intakeDiagnostics.sender}</p>
+                      {intakeDiagnostics.status === "pending" && <p>Queued for sending; no provider acceptance recorded yet.</p>}
+                      {intakeDiagnostics.status === "failed" && intakeDiagnostics.attempts.length === 0 && <p>Send failed; no provider acceptance recorded.</p>}
+                      {intakeDiagnostics.attempts.map((attempt, index) => (
+                        <p key={index}>
+                          Attempt {index + 1} ({new Date(attempt.sentAt).toLocaleString()}):{" "}
+                          {attempt.outcome === "rejected" ? "Provider rejected the send" :
+                            attempt.outcome === "unknown" ? "Send outcome unverified; retry uses the same provider key" :
+                            attempt.providerEvent === "delivered" || attempt.providerEvent === "opened" || attempt.providerEvent === "clicked"
+                              ? "Provider reports delivered (inbox placement not confirmed)" :
+                            attempt.providerEvent === "bounced" || attempt.providerEvent === "failed" || attempt.providerEvent === "suppressed" || attempt.providerEvent === "complained"
+                              ? `Provider reports ${attempt.providerEvent}` :
+                            attempt.providerEvent === "queued" || attempt.providerEvent === "scheduled" || attempt.providerEvent === "delivery_delayed"
+                              ? `Provider reports ${attempt.providerEvent}` :
+                            "Provider accepted; mailbox delivery unverified"}
+                          {attempt.providerMessageId && <> · Provider ID: {attempt.providerMessageId}</>}
+                        </p>
+                      ))}
+                      {intakeDiagnostics.legacySentAt && <p>Earlier invitation accepted by provider; message ID and mailbox delivery unavailable.</p>}
+                      {intakeDiagnostics.completedAt && <p>Form completed. No further invitation is needed.</p>}
+                      {intakeDiagnostics.status === "sending" && <p>Invitation is currently being sent; wait before trying again.</p>}
+                      <p>Check the address, sender configuration, spam/quarantine and the provider event history using the message ID. Acceptance alone does not verify inbox delivery.</p>
+                    </>}
+                  </div>
+                )}
             </div>
             <DialogFooter>
                 <Button variant="outline" onClick={() => setIsSendFormsOpen(false)}>Cancel</Button>
-                <Button onClick={handleSendForms} disabled={!intakeReady}>
+                {tenant?.intakeDeliveryDiagnosticsEnabled === true && intakeDiagnostics?.status === "sent" && !diagnosticsError && (
+                  <Button variant="outline" disabled={sendingIntake} onClick={() => void handleSendForms(true)}>Resend new invitation</Button>
+                )}
+                <Button onClick={() => void handleSendForms()} disabled={!intakeReady || sendingIntake}>
                     <Mail className="h-4 w-4 mr-2" /> {intakeTemplateId && formDeliveryStates[intakeTemplateId] === "failed" ? "Retry intake form" : "Send intake form"}
                 </Button>
             </DialogFooter>

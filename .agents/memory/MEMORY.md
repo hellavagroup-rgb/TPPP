@@ -26,3 +26,4 @@
 - [Payment return pages are read-only observers](payment-return-observer.md) — a Stripe redirect never confirms a booking; only verified webhooks may advance durable state.
 - [Public pages must ignore staff-session 401 redirects](public-pages-auth-loss.md) — a public API 401 must not send form, registration, option, or payment visitors to staff login.
 - [Tenant-owned Stripe reconciliation](tenant-stripe-reconciliation.md) — recovery must query the tenant's Stripe account, not a global-key fallback, before changing payment or booking state.
+- [Tenant-scoped email evidence](tenant-scoped-email-evidence.md) — inspect provider events only through a tenant-owned, stored message ID; never infer mailbox delivery from acceptance.

@@ -17,7 +17,7 @@ import {
 } from "@shared/schema";
 import { classifyPaymentReturn, type PaymentReturnResult } from "./paymentReturn";
 import { z } from "zod";
-import { sendEmail, buildFromAddress, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateFormCompletedNotificationEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail, generateClinicianWelcomeEmail, generateAdminInviteEmail, generateAllocationOptionsEmail, generateBookingConfirmedEmail, generateZoomLinkEmail, getFormCompletionPageContent, GENERIC_PRACTICE_NAME } from "./email";
+import { sendEmail, getEmailDeliveryEvent, buildFromAddress, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateFormCompletedNotificationEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail, generateClinicianWelcomeEmail, generateAdminInviteEmail, generateAllocationOptionsEmail, generateBookingConfirmedEmail, generateZoomLinkEmail, getFormCompletionPageContent, GENERIC_PRACTICE_NAME } from "./email";
 import { forceReseedDatabase } from "./seed";
 import { seedDemoData } from "./seedDemo";
 import { parseIntakeEmailBody } from "./intakeParser";
@@ -3717,6 +3717,43 @@ export async function registerRoutes(
     res.json(await storage.getFormDeliveries(client.id, req.tenant.id));
   });
 
+  app.get("/api/clients/:clientId/intake-delivery-diagnostics", requireAdmin, async (req, res) => {
+    if (!req.tenant?.intakeDeliveryDiagnosticsEnabled) return res.status(404).json({ error: "Not available" });
+    const client = await storage.getClientById(req.params.clientId);
+    if (!client || client.tenantId !== req.tenant.id) return res.status(404).json({ error: "Client not found" });
+    const delivery = (await storage.getFormDeliveries(client.id, req.tenant.id))
+      .find(item => item.formTemplateId === req.tenant!.intakeFormTemplateId);
+    if (!delivery) return res.json({ status: "pending", attempts: [], recipient: client.email, sender: buildFromAddress(req.tenant) });
+    const attempts = await storage.getFormDeliveryAttempts(delivery.id, req.tenant.id);
+    const safeAttempts = [];
+    for (const attempt of attempts) {
+      let event = attempt.providerEvent;
+      if (attempt.providerMessageId) {
+        try {
+          const latest = await getEmailDeliveryEvent(attempt.providerMessageId);
+          if (latest) {
+            event = latest;
+            if (latest !== attempt.providerEvent) {
+              await storage.updateFormDeliveryAttemptEvent(attempt.id, req.tenant.id, latest);
+            }
+          }
+        } catch {
+          // Provider lookup unavailable: retain only previously observed evidence.
+        }
+      }
+      safeAttempts.push({
+        sentAt: attempt.createdAt, outcome: attempt.outcome,
+        providerMessageId: attempt.providerMessageId, providerEvent: event,
+      });
+    }
+    res.json({
+      status: delivery.status, attempts: safeAttempts,
+      recipient: client.email, sender: buildFromAddress(req.tenant),
+      legacySentAt: attempts.length === 0 ? delivery.sentAt : null,
+      completedAt: delivery.completedAt,
+    });
+  });
+
   // One batch operation is used by the new UI and the legacy single-form
   // endpoint. Delivery records are created before provider calls so retries
   // retain the exact same provider idempotency key.
@@ -3736,15 +3773,16 @@ export async function registerRoutes(
       const host = req.headers.host || 'localhost:5000';
       const baseUrl = `${protocol}://${host}`;
       const result = await executeFormDeliveryBatch({
-        tenant: { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor },
-        clientId, formIds: [designatedIntakeId], baseUrl,
+        tenant: { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor,
+          intakeDeliveryDiagnosticsEnabled: req.tenant.intakeDeliveryDiagnosticsEnabled },
+        clientId, formIds: [designatedIntakeId], baseUrl, resend: req.path === "/api/form-deliveries/resend",
       }, {
         getClient: (id) => storage.getClientById(id),
         getForm: (id) => storage.getFormTemplateById(id),
         prepare: (id, ids, tenantId) => storage.prepareFormDeliveries(id, ids, tenantId),
         list: (id, tenantId) => storage.getFormDeliveries(id, tenantId),
-        claim: (id, tenantId, lease, stale) => storage.claimFormDelivery(id, tenantId, lease, stale),
-        finish: (id, tenantId, lease, status, error) => storage.finishFormDeliveryClaim(id, tenantId, lease, status, error),
+        claim: (id, tenantId, lease, stale, resend) => storage.claimFormDelivery(id, tenantId, lease, stale, resend),
+        finish: (id, tenantId, lease, status, error, providerMessageId, diagnostics, outcome) => storage.finishFormDeliveryClaim(id, tenantId, lease, status, error, providerMessageId, diagnostics, outcome),
         updateClient: (id, updates) => storage.updateClient(id, updates),
         buildEmail: (form, url, tenant) => generateFormInviteEmail(form.title, url, tenant),
         sendEmail,
@@ -3762,6 +3800,7 @@ export async function registerRoutes(
     }
   };
   app.post("/api/form-deliveries/send", requireAdmin, sendFormDeliveryBatch);
+  app.post("/api/form-deliveries/resend", requireAdmin, sendFormDeliveryBatch);
   app.post("/api/email/send-form", requireAdmin, sendFormDeliveryBatch);
 
   // Send task reminder email
@@ -6607,6 +6646,7 @@ export async function registerRoutes(
         multiClinicianAllocationEnabled: z.boolean().optional(),
         autoAllocationEmailEnabled: z.boolean().optional(),
         registrationFormEnabled: z.boolean().optional(),
+        intakeDeliveryDiagnosticsEnabled: z.boolean().optional(),
         paymentReconciliationEnabled: z.boolean().optional(),
         bookingConfirmedEmailEnabled: z.boolean().optional(),
         zoomLinkEmailEnabled: z.boolean().optional(),

@@ -113,7 +113,7 @@ async function getStoredTemplate(templateKey: string, tenantId?: string | null):
 
 export type EmailSendOutcome = "accepted" | "rejected" | "unknown";
 
-export async function sendEmail(options: EmailOptions): Promise<{ success: boolean; outcome: EmailSendOutcome; error?: string }> {
+export async function sendEmail(options: EmailOptions): Promise<{ success: boolean; outcome: EmailSendOutcome; error?: string; providerMessageId?: string }> {
   try {
     const from = options.from || buildFromAddress();
     const { data, error } = await getResend().emails.send(
@@ -133,11 +133,18 @@ export async function sendEmail(options: EmailOptions): Promise<{ success: boole
     }
 
     console.log('Email sent successfully:', data?.id);
-    return { success: true, outcome: "accepted" };
+    return { success: true, outcome: "accepted", providerMessageId: data?.id };
   } catch (err) {
     console.error('Email send exception:', err);
     return { success: false, outcome: "unknown", error: err instanceof Error ? err.message : 'Unknown error' };
   }
+}
+
+// Return only delivery metadata, never provider-hosted message content or addresses.
+export async function getEmailDeliveryEvent(messageId: string): Promise<string | null> {
+  const { data, error } = await getResend().emails.get(messageId);
+  if (error || !data || data.id !== messageId) return null;
+  return data.last_event;
 }
 
 // ============ EMAIL TEMPLATES ============

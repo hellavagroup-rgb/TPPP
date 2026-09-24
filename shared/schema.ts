@@ -41,6 +41,7 @@ export const tenants = pgTable("tenants", {
   allocationVisibilityEnabled: boolean("allocation_visibility_enabled").default(false),
   autoAllocationEmailEnabled: boolean("auto_allocation_email_enabled").default(false),
   registrationFormEnabled: boolean("registration_form_enabled").default(false),
+  intakeDeliveryDiagnosticsEnabled: boolean("intake_delivery_diagnostics_enabled").default(false),
   paymentReconciliationEnabled: boolean("payment_reconciliation_enabled").default(false),
   // The one tenant-owned template used for every automated intake delivery.
   // Null is an explicit setup-required state for legacy and newly-created tenants.
@@ -383,6 +384,8 @@ export const formDeliveries = pgTable("form_deliveries", {
   completedAt: timestamp("completed_at"),
   failedAt: timestamp("failed_at"),
   lastError: text("last_error"),
+  providerMessageId: text("provider_message_id"),
+  providerEvent: text("provider_event"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
@@ -391,6 +394,19 @@ export const formDeliveries = pgTable("form_deliveries", {
 ]);
 
 export type FormDelivery = typeof formDeliveries.$inferSelect;
+
+export const formDeliveryAttempts = pgTable("form_delivery_attempts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").references(() => tenants.id).notNull(),
+  deliveryId: varchar("delivery_id").references(() => formDeliveries.id, { onDelete: "cascade" }).notNull(),
+  idempotencyKey: text("idempotency_key").notNull(),
+  providerMessageId: text("provider_message_id"),
+  providerEvent: text("provider_event"),
+  outcome: text("outcome").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("form_delivery_attempt_key_unique").on(table.tenantId, table.idempotencyKey),
+]);
 
 // ============ TASKS ============
 export const tasks = pgTable("tasks", {

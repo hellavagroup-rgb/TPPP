@@ -1,5 +1,5 @@
 import { 
-  users, clients, clinicians, timeSlots, formTemplates, formSubmissions, formDeliveries, clientCreationRequests, tasks, auditLogs, emailTemplates, inviteTokens, passwordResetTokens, nonEngagementCategories, customInsurers, paymentCharges, intakeMessages, tenants, clientClinicianOptions, bookingSnapshots,
+  users, clients, clinicians, timeSlots, formTemplates, formSubmissions, formDeliveries, formDeliveryAttempts, clientCreationRequests, tasks, auditLogs, emailTemplates, inviteTokens, passwordResetTokens, nonEngagementCategories, customInsurers, paymentCharges, intakeMessages, tenants, clientClinicianOptions, bookingSnapshots,
   type User, type InsertUser, type SafeUser,
   type Tenant,
   type Client, type InsertClient, type FormDelivery,
@@ -1540,13 +1540,22 @@ export class DatabaseStorage implements IStorage {
     return delivery || undefined;
   }
 
-  async claimFormDelivery(id: string, tenantId: string, leaseToken: string, staleBefore: Date): Promise<FormDelivery | undefined> {
+  async claimFormDelivery(id: string, tenantId: string, leaseToken: string, staleBefore: Date, resend = false): Promise<FormDelivery | undefined> {
     const now = new Date();
-    const [delivery] = await db.update(formDeliveries).set({
+    return db.transaction(async (tx) => {
+    const [previous] = resend ? await tx.select().from(formDeliveries).where(and(
+      eq(formDeliveries.id, id), eq(formDeliveries.tenantId, tenantId),
+    )).for("update") : [];
+    const [delivery] = await tx.update(formDeliveries).set({
       status: "sending",
       leaseToken,
       leaseExpiresAt: new Date(now.getTime() + 5 * 60_000),
       attemptCount: sql`${formDeliveries.attemptCount} + 1`,
+      ...(resend ? {
+        idempotencyKey: sql`CASE WHEN ${formDeliveries.status} = 'sent' THEN ${`form-delivery-${tenantId}-${id}-${leaseToken}`} ELSE ${formDeliveries.idempotencyKey} END`,
+        providerMessageId: sql`CASE WHEN ${formDeliveries.status} = 'sent' THEN NULL ELSE ${formDeliveries.providerMessageId} END`,
+        providerEvent: sql`CASE WHEN ${formDeliveries.status} = 'sent' THEN NULL ELSE ${formDeliveries.providerEvent} END`,
+      } : {}),
       updatedAt: now,
     }).where(and(
       eq(formDeliveries.id, id),
@@ -1554,19 +1563,32 @@ export class DatabaseStorage implements IStorage {
       or(
         eq(formDeliveries.status, "pending"),
         eq(formDeliveries.status, "failed"),
+        ...(resend ? [eq(formDeliveries.status, "sent")] : []),
         and(eq(formDeliveries.status, "sending"), lt(formDeliveries.leaseExpiresAt, staleBefore)),
       ),
     )).returning();
+    if (delivery && previous?.status === "sent" && previous.idempotencyKey !== delivery.idempotencyKey) {
+      // Keep the prior accepted invitation visible, including pre-diagnostics
+      // records which never had a provider message ID.
+      await tx.insert(formDeliveryAttempts).values({
+        tenantId, deliveryId: id, idempotencyKey: previous.idempotencyKey,
+        providerMessageId: previous.providerMessageId, providerEvent: previous.providerEvent,
+        outcome: "accepted", createdAt: previous.sentAt || now,
+      }).onConflictDoNothing();
+    }
     return delivery || undefined;
+    });
   }
 
-  async finishFormDeliveryClaim(id: string, tenantId: string, leaseToken: string, status: "sent" | "failed", error?: string): Promise<FormDelivery | undefined> {
+  async finishFormDeliveryClaim(id: string, tenantId: string, leaseToken: string, status: "sent" | "failed", error?: string, providerMessageId?: string, diagnostics = false, outcome: "rejected" | "unknown" = "unknown"): Promise<FormDelivery | undefined> {
     const now = new Date();
-    const [delivery] = await db.update(formDeliveries).set({
+    return db.transaction(async (tx) => {
+    const [delivery] = await tx.update(formDeliveries).set({
       status,
       sentAt: status === "sent" ? now : undefined,
       failedAt: status === "failed" ? now : undefined,
       lastError: status === "failed" ? (error || "delivery_failed") : null,
+      ...(diagnostics ? { providerMessageId: providerMessageId || null, providerEvent: null } : {}),
       leaseToken: null,
       leaseExpiresAt: null,
       updatedAt: now,
@@ -1576,7 +1598,29 @@ export class DatabaseStorage implements IStorage {
       eq(formDeliveries.status, "sending"),
       eq(formDeliveries.leaseToken, leaseToken),
     )).returning();
+    if (delivery && diagnostics) {
+      await tx.insert(formDeliveryAttempts).values({
+        tenantId, deliveryId: id, idempotencyKey: delivery.idempotencyKey,
+        providerMessageId: providerMessageId || null, outcome: status === "sent" ? "accepted" : outcome,
+      }).onConflictDoUpdate({
+        target: [formDeliveryAttempts.tenantId, formDeliveryAttempts.idempotencyKey],
+        set: { providerMessageId: providerMessageId || null, outcome: status === "sent" ? "accepted" : outcome },
+      });
+    }
     return delivery || undefined;
+    });
+  }
+
+  async getFormDeliveryAttempts(deliveryId: string, tenantId: string) {
+    return db.select().from(formDeliveryAttempts).where(and(
+      eq(formDeliveryAttempts.deliveryId, deliveryId), eq(formDeliveryAttempts.tenantId, tenantId),
+    )).orderBy(formDeliveryAttempts.createdAt);
+  }
+
+  async updateFormDeliveryAttemptEvent(id: string, tenantId: string, event: string) {
+    await db.update(formDeliveryAttempts).set({ providerEvent: event }).where(and(
+      eq(formDeliveryAttempts.id, id), eq(formDeliveryAttempts.tenantId, tenantId),
+    ));
   }
 
   async submitDraft(submissionId: string, responses: any, tenantId?: string | null): Promise<FormSubmission | undefined> {

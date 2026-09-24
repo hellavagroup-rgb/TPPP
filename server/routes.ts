@@ -57,6 +57,8 @@ import {
 import { isValidZoomLink, onlineBookingNeedsZoomLink, shouldResetZoomDelivery } from "@shared/bookingZoom";
 import { zoomDeliveryIdempotencyKey } from "./bookingZoomWorkflow";
 import { confirmBooking, confirmBookingInTransaction } from "./bookingConfirmation";
+import { inspectRegistrationPayment, reconcileRegistrationPayment } from "./paymentReconciliation";
+import Stripe from "stripe";
 import {
   hasActiveClientAllocation,
   normalizeStoredClientStatus,
@@ -2904,12 +2906,21 @@ export async function registerRoutes(
         && client.paymentType === "self_pay"
         && client.stripeCheckoutUrl
         && client.stripePaymentLinkId) {
-        const stripe = getStripeInstance(registrationTenantStripeKey);
+        const stripe = tenant.paymentReconciliationEnabled
+          ? (registrationTenantStripeKey
+            ? new Stripe(registrationTenantStripeKey, { apiVersion: "2026-05-27.dahlia" })
+            : null)
+          : getStripeInstance(registrationTenantStripeKey);
         try {
           const storedLink = stripe
             ? await stripe.paymentLinks.retrieve(client.stripePaymentLinkId)
             : null;
           if (storedLink && storedLink.active === false) {
+            if (tenant.paymentReconciliationEnabled === true) {
+              return res.status(409).json({
+                error: "This payment link is inactive. Staff must check its Stripe payment status before any replacement is considered.",
+              });
+            }
             const replacementAttemptKey = crypto.randomUUID();
             const resetRows = await db.update(clients).set({
               stripeCheckoutUrl: null,
@@ -5071,6 +5082,45 @@ export async function registerRoutes(
   });
 
   // ============ STRIPE / PAYMENTS ============
+  const finishReconciledBooking = async (
+    tenant: typeof tenants.$inferSelect,
+    details: { client: typeof clients.$inferSelect; snapshot: typeof bookingSnapshots.$inferSelect; intentId: string },
+  ) => {
+    const { client, snapshot, intentId } = details;
+    const tenantContext = { id: tenant.id, name: tenant.name, fromEmail: tenant.fromEmail, primaryColor: tenant.primaryColor };
+    const clinician = snapshot.clinicianId
+      ? await db.select().from(clinicians).where(and(eq(clinicians.id, snapshot.clinicianId), eq(clinicians.tenantId, tenant.id))).limit(1).then(r => r[0])
+      : undefined;
+    const clinicianUser = clinician?.userId
+      ? await db.select({ name: users.name }).from(users).where(eq(users.id, clinician.userId)).limit(1).then(r => r[0])
+      : undefined;
+    await sendOnlineZoomFollowUp({
+      enabled: tenant.zoomLinkEmailEnabled === true,
+      clientId: client.id,
+      clientEmail: client.email,
+      clinicianName: clinicianUser?.name || snapshot.clinicianName,
+      zoomLink: clinician?.zoomLink,
+      locationType: snapshot.locationType,
+      tenant: tenantContext,
+      idempotencyKey: `stripe-zoom-follow-up-${client.id}-${intentId}`,
+      notifyAdminsOnFailure: true,
+    });
+    // Keep activity once-only even when staff and Stripe retry concurrently.
+    await db.transaction(async tx => {
+      await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${tenant.id}:${client.id}:booking-activity`}))`);
+      const existing = await tx.select({ id: auditLogs.id }).from(auditLogs).where(and(
+        eq(auditLogs.tenantId, tenant.id), eq(auditLogs.resourceId, client.id),
+        eq(auditLogs.action, "activity_booking_confirmed"),
+      )).limit(1);
+      if (!existing.length) {
+        await tx.insert(auditLogs).values({
+          userId: null, tenantId: tenant.id, action: "activity_booking_confirmed",
+          resourceType: "client", resourceId: client.id, ipAddress: null,
+          details: { actorName: "Client", clientDisplayId: client.displayId || "Client" },
+        });
+      }
+    });
+  };
 
   // Check if Stripe is configured
   app.get("/api/stripe/status", requireAuth, async (req, res) => {
@@ -5222,10 +5272,61 @@ export async function registerRoutes(
     }
   });
 
+  // Verify the tenant-owned Stripe account without changing state.
+  app.get("/api/clients/:id/payment-reconciliation", requireAdmin, async (req, res) => {
+    if (!req.tenant?.paymentReconciliationEnabled) return res.status(404).json({ error: "Not available" });
+    try {
+      const [client] = await db.select({ id: clients.id, status: clients.status, registrationPaymentAttemptKey: clients.registrationPaymentAttemptKey }).from(clients).where(and(
+        eq(clients.id, req.params.id), eq(clients.tenantId, req.tenant.id),
+      )).limit(1);
+      if (!client) return res.status(404).json({ error: "Client not found" });
+      if (!client.registrationPaymentAttemptKey || !["RegistrationPending", "Scheduled", "BookingConfirmed"].includes(client.status)) {
+        return res.status(404).json({ error: "No registration payment to reconcile" });
+      }
+      res.set("Cache-Control", "no-store");
+      res.json(await inspectRegistrationPayment(req.tenant, client.id));
+    } catch (error) {
+      console.error("Payment inspection failed:", error);
+      res.status(503).json({ error: "Payment status could not be checked" });
+    }
+  });
+
+  app.post("/api/clients/:id/payment-reconciliation", requireAdmin, async (req, res) => {
+    if (!req.tenant?.paymentReconciliationEnabled) return res.status(404).json({ error: "Not available" });
+    try {
+      const [client] = await db.select({ id: clients.id, status: clients.status, registrationPaymentAttemptKey: clients.registrationPaymentAttemptKey }).from(clients).where(and(
+        eq(clients.id, req.params.id), eq(clients.tenantId, req.tenant.id),
+      )).limit(1);
+      if (!client) return res.status(404).json({ error: "Client not found" });
+      if (!client.registrationPaymentAttemptKey || !["RegistrationPending", "Scheduled", "BookingConfirmed"].includes(client.status)) {
+        return res.status(404).json({ error: "No registration payment to reconcile" });
+      }
+      const result = await reconcileRegistrationPayment(req.tenant, client.id, undefined,
+        details => finishReconciledBooking(req.tenant!, details));
+      res.set("Cache-Control", "no-store");
+      res.status(result.state === "uncertain" ? 503 : result.state === "paid_unrecorded" ? 409 : 200).json(result);
+    } catch (error) {
+      console.error("Payment reconciliation failed:", error);
+      res.status(503).json({ error: "Payment could not be reconciled" });
+    }
+  });
+
   // Reuse an active stored link; recover an inactive unpaid link before resending.
   app.post("/api/clients/:id/resend-payment-link", requireAdmin, async (req, res) => {
     try {
       if (!req.tenant) return res.status(400).json({ error: "Tenant not found" });
+      const [registrationClient] = req.tenant.paymentReconciliationEnabled === true
+        ? await db.select({ status: clients.status, registrationPaymentAttemptKey: clients.registrationPaymentAttemptKey })
+          .from(clients).where(and(eq(clients.id, req.params.id), eq(clients.tenantId, req.tenant.id))).limit(1)
+        : [];
+      const isRegistrationLink = !!registrationClient?.registrationPaymentAttemptKey &&
+        ["RegistrationPending", "Scheduled", "BookingConfirmed"].includes(registrationClient.status);
+      if (isRegistrationLink) {
+        const check = await inspectRegistrationPayment(req.tenant, req.params.id);
+        if (check.state === "paid_unrecorded" || check.state === "open" || check.state === "uncertain") {
+          return res.status(409).json({ error: "Check this client's Stripe payment status before resending. No email was sent." });
+        }
+      }
       const delivery = await db.transaction(async (tx) => {
         await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${`${req.tenant!.id}:${req.params.id}:payment-link-creation`}))`);
         const client = await tx.select().from(clients).where(and(
@@ -5252,7 +5353,11 @@ export async function registerRoutes(
         let url = client.stripeCheckoutUrl;
         let replacedInactiveLink = false;
         if (client.stripePaymentLinkId) {
-          const stripe = getStripeInstance(req.tenant!.stripeSecretKey);
+          const stripe = isRegistrationLink
+            ? (req.tenant!.stripeSecretKey
+              ? new Stripe(req.tenant!.stripeSecretKey, { apiVersion: "2026-05-27.dahlia" })
+              : null)
+            : getStripeInstance(req.tenant!.stripeSecretKey);
           if (!stripe) {
             return { status: 503, error: "Stripe is unavailable, so the stored payment link could not be verified." } as const;
           }
@@ -5264,6 +5369,9 @@ export async function registerRoutes(
             return { status: 502, error: "Stripe could not verify the stored payment link. No email was sent." } as const;
           }
           if (storedLink.active === false) {
+            if (isRegistrationLink) {
+              return { status: 409, error: "The current link is inactive. Review its Stripe check before deciding how to proceed; no replacement or email was created." } as const;
+            }
             let completedPayment = false;
             let openCheckout = false;
             try {
@@ -5634,7 +5742,11 @@ export async function registerRoutes(
     let tenantStripeKey: string | null = null;
 
     try {
-      const candidateTenants = await db.select().from(tenants).where(isNotNull(tenants.stripeWebhookSecret));
+      const candidateTenants = await db.select({
+        id: tenants.id,
+        stripeWebhookSecret: tenants.stripeWebhookSecret,
+        stripeSecretKey: tenants.stripeSecretKey,
+      }).from(tenants).where(isNotNull(tenants.stripeWebhookSecret));
       for (const t of candidateTenants) {
         let secret: string;
         try {
@@ -5683,6 +5795,39 @@ export async function registerRoutes(
         const session = event.data.object as any;
         const clientId = session.metadata?.clientId;
         if (!clientId) return res.json({ received: true });
+        // For opted-in practices use the same independently verified provider path
+        // as staff reconciliation. A signed event alone does not establish a paid,
+        // current, correctly attributed checkout.
+        if (metaTenantId) {
+          const webhookTenant = await storage.getTenantById(metaTenantId);
+          const linkedClient = webhookTenant?.paymentReconciliationEnabled === true
+            ? await db.select({ id: clients.id, status: clients.status, registrationPaymentAttemptKey: clients.registrationPaymentAttemptKey, stripePaymentLinkId: clients.stripePaymentLinkId })
+              .from(clients).where(and(eq(clients.id, clientId), eq(clients.tenantId, webhookTenant.id))).limit(1).then(rows => rows[0])
+            : undefined;
+          const eventLinkId = typeof session.payment_link === "string" ? session.payment_link : session.payment_link?.id;
+          if (webhookTenant?.paymentReconciliationEnabled === true &&
+              linkedClient?.registrationPaymentAttemptKey &&
+              ["RegistrationPending", "Scheduled", "BookingConfirmed"].includes(linkedClient.status) &&
+              linkedClient.stripePaymentLinkId === eventLinkId &&
+              session.metadata?.tenantId === webhookTenant.id &&
+              session.metadata?.registrationAttemptKey === linkedClient.registrationPaymentAttemptKey) {
+            let verifiedTenantKey: string | null = null;
+            try {
+              verifiedTenantKey = webhookTenant.stripeSecretKey
+                ? decryptSecret(webhookTenant.stripeSecretKey)
+                : null;
+            } catch (error) {
+              console.error("Webhook: tenant Stripe key could not be decrypted", error);
+              return res.status(503).json({ error: "Stripe key unavailable; retry webhook" });
+            }
+            const outcome = await reconcileRegistrationPayment(
+              { ...webhookTenant, stripeSecretKey: verifiedTenantKey }, clientId, session.id,
+              details => finishReconciledBooking(webhookTenant, details),
+            );
+            if (outcome.state !== "recorded") return res.status(503).json({ error: "Payment has not been independently verified and finalized; retry webhook" });
+            return res.json({ received: true });
+          }
+        }
 
         // Idempotency: skip if we've already processed a succeeded charge for this session
         const existingCharge = session.payment_intent
@@ -6463,6 +6608,7 @@ export async function registerRoutes(
         multiClinicianAllocationEnabled: z.boolean().optional(),
         autoAllocationEmailEnabled: z.boolean().optional(),
         registrationFormEnabled: z.boolean().optional(),
+        paymentReconciliationEnabled: z.boolean().optional(),
         bookingConfirmedEmailEnabled: z.boolean().optional(),
         zoomLinkEmailEnabled: z.boolean().optional(),
         writeuppChecklistEnabled: z.boolean().optional(),

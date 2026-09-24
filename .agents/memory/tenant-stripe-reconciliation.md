@@ -1,0 +1,10 @@
+---
+name: Tenant-owned Stripe reconciliation
+description: Provider authority and tenant boundary for recovering missed registration payments.
+---
+
+Payment recovery is not an administrative assertion of payment. Require independent provider confirmation against the practice's own Stripe account and current client payment attempt, amount and currency before persisting payment evidence or confirming a booking. A missing provider response is uncertainty, not an unpaid result.
+
+**Why:** A shared global Stripe key can silently override a tenant key in legacy helpers, and a signed webhook may be delivered while app persistence or schema access fails. Neither the local pending state nor a checkout redirect proves payment.
+
+**How to apply:** Keep recovery behind explicit tenant opt-in. Fail closed on missing tenant credentials, mismatched ownership or amount, and provider errors. Keep repeated staff and webhook recovery idempotent; never create a new payment request as a side effect of reconciliation.

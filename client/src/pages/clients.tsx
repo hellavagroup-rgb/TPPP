@@ -196,6 +196,23 @@ export default function Clients() {
   const allocationVisibilityEnabled = tenant?.allocationVisibilityEnabled === true;
   const zoomLinkEmailEnabled = tenant?.zoomLinkEmailEnabled === true;
   const writeuppChecklistEnabled = tenant?.writeuppChecklistEnabled === true;
+  const paymentReconciliationEnabled = tenant?.paymentReconciliationEnabled === true;
+  const [paymentInspection, setPaymentInspection] = useState<{ clientId: string; state: string; detail: string; blocker?: string } | null>(null);
+  const [checkingPayment, setCheckingPayment] = useState(false);
+  const checkPayment = async (clientId: string, reconcile = false) => {
+    setCheckingPayment(true);
+    try {
+      const response = await apiRequest(reconcile ? "POST" : "GET", `/api/clients/${clientId}/payment-reconciliation`);
+      const result = await response.json();
+      if (!result.state) throw new Error(result.error || "Stripe verification failed");
+      setPaymentInspection({ clientId, ...result });
+      if (reconcile) await queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+    } catch (error) {
+      setPaymentInspection({ clientId, state: "uncertain", detail: (error as Error).message });
+    } finally {
+      setCheckingPayment(false);
+    }
+  };
   const workflowFeatures = {
     multiClinicianAllocationEnabled,
     registrationFormEnabled: tenant?.registrationFormEnabled === true,
@@ -1188,6 +1205,28 @@ export default function Clients() {
               {paymentCopy[0]}
             </p>
             <p className="text-[10px] text-muted-foreground">{paymentCopy[1]}</p>
+          </div>
+        )}
+        {paymentReconciliationEnabled && client.paymentType === "self_pay" && client.stripePaymentLinkId && (
+          <div className="rounded border border-amber-200 bg-white p-2 text-[10px]" data-testid={`payment-reconciliation-${client.id}`}>
+            <p className="font-medium">Booking check: {client.status === "RegistrationPending" ? "waiting for verified payment and booking confirmation" : client.status}</p>
+            <p>Stripe payment and the external practice appointment are separate. Check Stripe before resending a payment request.</p>
+            <Button size="sm" variant="outline" className="h-6 mt-1 px-2 text-[10px]" disabled={checkingPayment}
+              onClick={() => checkPayment(client.id)}>Check Stripe payment</Button>
+            {paymentInspection?.clientId === client.id && (
+              <div className="mt-1" role="status">
+                <p className="font-semibold">{paymentInspection.state === "paid_unrecorded" ? "Paid in Stripe — app needs recovery"
+                  : paymentInspection.state === "recorded" ? "Payment and booking recorded"
+                  : paymentInspection.state === "open" ? "Checkout open"
+                  : paymentInspection.state === "awaiting" ? "Awaiting payment" : "Unable to verify"}</p>
+                <p>{paymentInspection.detail}</p>
+                {paymentInspection.blocker && <p className="text-red-700">{paymentInspection.blocker}</p>}
+                {paymentInspection.state === "paid_unrecorded" && (
+                  <Button size="sm" variant="outline" className="h-6 mt-1 px-2 text-[10px]" disabled={checkingPayment}
+                    onClick={() => checkPayment(client.id, true)}>Reconcile verified payment</Button>
+                )}
+              </div>
+            )}
           </div>
         )}
         <div className="flex flex-wrap gap-1">

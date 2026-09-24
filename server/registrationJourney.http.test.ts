@@ -27,6 +27,11 @@ const h = vi.hoisted(() => {
     checkoutSessions: [] as any[],
     checkoutError: null as any,
     preventCheckoutSave: false,
+    charges: [] as any[],
+    intent: null as any,
+    stripeLinkMetadata: null as any,
+    customerUpdates: [] as any[],
+    rateChangeBeforeTransaction: null as number | null,
   };
   let transactionTail: Promise<void> = Promise.resolve();
 
@@ -37,7 +42,7 @@ const h = vi.hoisted(() => {
 
   const rowsFor = (table: any) => {
     switch (tableName(table)) {
-      case "clients": return state.client?.id ? [state.client] : [];
+      case "clients": return state.client?.id && state.client.tenantId === state.tenant.id ? [state.client] : [];
       case "tenants": return state.tenant?.id ? [state.tenant] : [];
       case "time_slots": return state.slot?.id ? [state.slot] : [];
       case "clinicians": return state.clinician?.id ? [state.clinician] : [];
@@ -49,6 +54,8 @@ const h = vi.hoisted(() => {
         && state.registrationTemplate.tenantId === state.tenant?.id ? [state.registrationTemplate] : [];
       case "form_submissions": return state.submissions;
       case "booking_snapshots": return state.bookingSnapshots;
+      case "payment_charges": return state.charges;
+      case "audit_logs": return state.activities;
       default: return [];
     }
   };
@@ -68,8 +75,10 @@ const h = vi.hoisted(() => {
 
   const db: any = {
     execute: vi.fn(async () => []),
-    select: () => ({
-      from: (table: any) => chain(() => rowsFor(table)),
+    select: (selection?: any) => ({
+      from: (table: any) => chain(() => selection?.sentAt && tableName(table) === "clients"
+        ? [{ sentAt: state.client.zoomLinkSentAt || null }]
+        : rowsFor(table)),
     }),
     insert: (table: any) => ({
       values: (values: any | any[]) => {
@@ -90,9 +99,21 @@ const h = vi.hoisted(() => {
             id: `booking-snapshot-${state.bookingSnapshots.length + index + 1}`, ...value,
           }));
           state.bookingSnapshots.push(...inserted);
+        } else if (tableName(table) === "payment_charges") {
+          const charge = Array.isArray(values) ? values[0] : values;
+          if (!state.charges.some(c => c.stripePaymentIntentId === charge.stripePaymentIntentId)) {
+            state.charges.push({ id: `charge-${state.charges.length + 1}`, ...charge });
+          }
+          inserted = state.charges;
+        } else if (tableName(table) === "audit_logs") {
+          inserted = (Array.isArray(values) ? values : [values]).map(value => ({
+            id: `activity-${state.activities.length + 1}`, ...value,
+          }));
+          state.activities.push(...inserted);
         }
         const result: any = {
           returning: () => Promise.resolve(inserted),
+          onConflictDoNothing: () => Promise.resolve(inserted),
           then: (resolve: any, reject: any) => Promise.resolve(inserted).then(resolve, reject),
         };
         return result;
@@ -122,6 +143,10 @@ const h = vi.hoisted(() => {
           }
           return state.options;
         }
+        if (name === "payment_charges") {
+          for (const charge of state.charges) Object.assign(charge, patch);
+          return state.charges;
+        }
         if (name !== "clients") return [];
 
         if (patch.registrationEmailClaimId && state.client.registrationEmailSendingAt
@@ -142,13 +167,18 @@ const h = vi.hoisted(() => {
       }),
     }),
     transaction: async (callback: any) => {
+      if (state.rateChangeBeforeTransaction !== null) {
+        state.client.agreedRatePence = state.rateChangeBeforeTransaction;
+        state.rateChangeBeforeTransaction = null;
+      }
       const previous = transactionTail;
       let release!: () => void;
       transactionTail = new Promise<void>(resolve => { release = resolve; });
       await previous;
       const backup = structuredClone({
         client: state.client, slot: state.slot, options: state.options,
-        snapshots: state.bookingSnapshots, submissions: state.submissions,
+        snapshots: state.bookingSnapshots, submissions: state.submissions, charges: state.charges,
+        activities: state.activities,
       });
       try {
         return await callback(db);
@@ -158,6 +188,8 @@ const h = vi.hoisted(() => {
         state.options = backup.options;
         state.bookingSnapshots = backup.snapshots;
         state.submissions = backup.submissions;
+        state.charges = backup.charges;
+        state.activities = backup.activities;
         throw error;
       } finally {
         release();
@@ -273,6 +305,8 @@ vi.mock("./stripe", () => ({
         })),
       },
     },
+    paymentIntents: { retrieve: vi.fn(async () => h.state.intent) },
+    customers: { update: vi.fn(async () => ({})) },
   })),
   createPaymentLink: vi.fn(async (input: any) => {
     h.state.paymentLinks.push(input);
@@ -280,6 +314,31 @@ vi.mock("./stripe", () => ({
   }),
   chargeOffSession: vi.fn(),
   constructWebhookEvent: vi.fn(),
+}));
+vi.mock("stripe", () => ({
+  default: class MockStripe {
+    paymentLinks = {
+      retrieve: vi.fn(async () => ({
+        active: h.state.stripeLinkActive,
+        metadata: h.state.stripeLinkMetadata || {
+          tenantId: h.state.tenant.id, clientId: h.state.client.id,
+          registrationAttemptKey: h.state.client.registrationPaymentAttemptKey,
+        },
+      })),
+      update: vi.fn(async () => ({ active: false })),
+    };
+    checkout = { sessions: { list: vi.fn(() => ({
+      async *[Symbol.asyncIterator]() {
+        if (h.state.checkoutError) throw h.state.checkoutError;
+        for (const session of h.state.checkoutSessions) yield session;
+      },
+    })) } };
+    paymentIntents = { retrieve: vi.fn(async () => h.state.intent) };
+    customers = { update: vi.fn(async (id: string, payload: any) => {
+      h.state.customerUpdates.push({ id, payload });
+      return {};
+    }) };
+  },
 }));
 vi.mock("./encryption", () => ({
   encryptSecret: vi.fn((value: string) => value),
@@ -395,6 +454,11 @@ function resetState(overrides: { client?: any; tenant?: any } = {}) {
   h.state.checkoutSessions = [];
   h.state.checkoutError = null;
   h.state.preventCheckoutSave = false;
+  h.state.charges = [];
+  h.state.intent = null;
+  h.state.stripeLinkMetadata = null;
+  h.state.customerUpdates = [];
+  h.state.rateChangeBeforeTransaction = null;
   vi.clearAllMocks();
 }
 
@@ -402,7 +466,7 @@ beforeEach(async () => {
   resetState();
   process.env.APP_BASE_URL = "https://app.test";
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ verify: (req: any, _res, body) => { req.rawBody = body; } }));
   server = createServer(app);
   await registerRoutes(server, app);
   await new Promise<void>(resolve => server!.listen(0, "127.0.0.1", resolve));
@@ -416,6 +480,262 @@ afterEach(async () => {
 });
 
 describe("registration journey HTTP routes", () => {
+  function readyForReconciliation() {
+    resetState({
+      tenant: { paymentsEnabled: true, paymentReconciliationEnabled: true },
+      client: {
+        status: "RegistrationPending", paymentType: "self_pay", paymentStatus: "setup_pending",
+        registrationPaymentAttemptKey: ATTEMPT_KEY, stripePaymentLinkId: "plink_current",
+        stripeCheckoutUrl: "https://pay.test/current",
+      },
+    });
+    const metadata = { tenantId: "tenant-a", clientId: "client-a", registrationAttemptKey: ATTEMPT_KEY };
+    h.state.checkoutSessions = [{
+      id: "cs_paid", status: "complete", payment_status: "paid",
+      payment_link: "plink_current", payment_intent: "pi_paid", customer: "cus_1",
+      amount_total: 12000, currency: "gbp", metadata,
+    }];
+    h.state.intent = {
+      id: "pi_paid", status: "succeeded", amount_received: 12000, currency: "gbp",
+      payment_method: "pm_1", metadata,
+    };
+  }
+
+  it("diagnoses and reconciles a verified paid checkout once without charging or creating a link", async () => {
+    readyForReconciliation();
+    const before = await request("/api/clients/client-a/payment-reconciliation");
+    expect(before.body).toMatchObject({ state: "paid_unrecorded" });
+    expect(h.state.client.paymentStatus).toBe("setup_pending");
+    const [first, second] = await Promise.all([
+      request("/api/clients/client-a/payment-reconciliation", { method: "POST" }),
+      request("/api/clients/client-a/payment-reconciliation", { method: "POST" }),
+    ]);
+    expect(first.body.state).toBe("recorded");
+    expect(second.body.state).toBe("recorded");
+    expect(h.state.client.paymentStatus).toBe("active");
+    expect(h.state.client.status).toBe("BookingConfirmed");
+    expect(h.state.bookingSnapshots).toHaveLength(1);
+    expect(h.state.charges).toHaveLength(1);
+    expect(h.state.emails).toHaveLength(1);
+    expect(h.state.customerUpdates).toContainEqual({
+      id: "cus_1", payload: { metadata: { clientId: "client-a", displayId: "A-001" } },
+    });
+    expect(h.state.paymentLinks).toHaveLength(0);
+  });
+
+  it("does not alter records when checkout is open, unpaid, or provider verification fails", async () => {
+    readyForReconciliation();
+    h.state.checkoutSessions[0].status = "open";
+    h.state.checkoutSessions[0].payment_status = "unpaid";
+    expect((await request("/api/clients/client-a/payment-reconciliation", { method: "POST" })).body.state).toBe("open");
+    h.state.checkoutSessions = [];
+    expect((await request("/api/clients/client-a/payment-reconciliation", { method: "POST" })).body.state).toBe("awaiting");
+    h.state.checkoutError = new Error("provider unavailable");
+    expect((await request("/api/clients/client-a/payment-reconciliation", { method: "POST" })).body.state).toBe("uncertain");
+    expect(h.state.charges).toHaveLength(0);
+    expect(h.state.bookingSnapshots).toHaveLength(0);
+    expect(h.state.paymentLinks).toHaveLength(0);
+  });
+
+  it("promotes a previously pending ledger row only after Stripe confirms the payment", async () => {
+    readyForReconciliation();
+    h.state.charges = [{
+      id: "charge-existing", clientId: "client-a", tenantId: "tenant-a",
+      stripePaymentIntentId: "pi_paid", amountPence: 12000, status: "pending",
+    }];
+    const response = await request("/api/clients/client-a/payment-reconciliation", { method: "POST" });
+    expect(response.body.state).toBe("recorded");
+    expect(h.state.charges).toHaveLength(1);
+    expect(h.state.charges[0].status).toBe("succeeded");
+  });
+
+  it("rejects a rate change between provider verification and the payment lock", async () => {
+    readyForReconciliation();
+    h.state.rateChangeBeforeTransaction = 14000;
+    const response = await request("/api/clients/client-a/payment-reconciliation", { method: "POST" });
+    expect(response.status).toBe(409);
+    expect(response.body.state).toBe("paid_unrecorded");
+    expect(h.state.charges).toHaveLength(0);
+    expect(h.state.client.paymentStatus).toBe("setup_pending");
+    expect(h.state.bookingSnapshots).toHaveLength(0);
+  });
+
+  it("keeps booking activity and online Zoom follow-up once-only on reconciliation retries", async () => {
+    readyForReconciliation();
+    h.state.tenant.zoomLinkEmailEnabled = true;
+    h.state.clinician.zoomLink = "https://zoom.us/j/12345678901";
+    const first = await request("/api/clients/client-a/payment-reconciliation", { method: "POST" });
+    const retry = await request("/api/clients/client-a/payment-reconciliation", { method: "POST" });
+    expect(first.body.state).toBe("recorded");
+    expect(retry.body.state).toBe("recorded");
+    expect(h.state.emails).toHaveLength(2);
+    expect(h.state.activities.filter(a => a.action === "activity_booking_confirmed")).toHaveLength(1);
+    expect(h.state.client.zoomLinkSentAt).toBeInstanceOf(Date);
+  });
+
+  it("rejects mismatched tenant, client, attempt and amount without changing payment", async () => {
+    readyForReconciliation();
+    for (const override of [
+      { tenantId: "other" }, { clientId: "other" }, { registrationAttemptKey: "other" },
+    ]) {
+      Object.assign(h.state.checkoutSessions[0].metadata, override);
+      expect((await request("/api/clients/client-a/payment-reconciliation", { method: "POST" })).body.state).toBe("uncertain");
+      Object.assign(h.state.checkoutSessions[0].metadata, {
+        tenantId: "tenant-a", clientId: "client-a", registrationAttemptKey: ATTEMPT_KEY,
+      });
+    }
+    h.state.checkoutSessions[0].amount_total = 500;
+    expect((await request("/api/clients/client-a/payment-reconciliation", { method: "POST" })).body.state).toBe("uncertain");
+    expect(h.state.charges).toHaveLength(0);
+    expect(h.state.client.status).toBe("RegistrationPending");
+    h.state.client.tenantId = "other";
+    expect((await request("/api/clients/client-a/payment-reconciliation")).status).toBe(404);
+  });
+
+  it("keeps reconciliation disabled for an unopted practice", async () => {
+    readyForReconciliation();
+    h.state.tenant.paymentReconciliationEnabled = false;
+    expect((await request("/api/clients/client-a/payment-reconciliation")).status).toBe(404);
+    expect((await request("/api/clients/client-a/payment-reconciliation", { method: "POST" })).status).toBe(404);
+    expect(h.state.charges).toHaveLength(0);
+  });
+
+  it("preserves ordinary checkout and resend after the tenant opts into registration recovery", async () => {
+    readyForReconciliation();
+    Object.assign(h.state.client, {
+      status: "AwaitingConfirmation", registrationPaymentAttemptKey: null,
+      stripePaymentLinkId: "plink_regular",
+    });
+    h.state.checkoutSessions[0] = {
+      ...h.state.checkoutSessions[0], payment_link: "plink_regular",
+      metadata: { clientId: "client-a", tenantId: "tenant-a" },
+    };
+    const { constructWebhookEvent } = await import("./stripe");
+    vi.mocked(constructWebhookEvent).mockReturnValue({
+      id: "evt_regular", type: "checkout.session.completed",
+      data: { object: h.state.checkoutSessions[0] },
+    } as any);
+    const webhook = await request("/api/stripe/webhook", {
+      method: "POST", headers: { "stripe-signature": "test-signature" },
+      body: JSON.stringify({ id: "evt_regular" }),
+    });
+    expect(webhook.status).toBe(200);
+    expect(h.state.client.paymentStatus).toBe("active");
+    expect(h.storage.createPaymentCharge).toHaveBeenCalledTimes(1);
+    expect(h.state.bookingSnapshots).toHaveLength(0);
+
+    h.state.client.paymentStatus = "setup_pending";
+    const resend = await request("/api/clients/client-a/resend-payment-link", { method: "POST" });
+    expect(resend.status).toBe(200);
+    expect(h.state.emails).toHaveLength(1);
+    expect(h.state.paymentLinks).toHaveLength(0);
+  });
+
+  it("replays an opted-in webhook through provider verification without duplicate charges", async () => {
+    readyForReconciliation();
+    const { constructWebhookEvent } = await import("./stripe");
+    vi.mocked(constructWebhookEvent).mockReturnValue({
+      id: "evt_paid", type: "checkout.session.completed",
+      data: { object: h.state.checkoutSessions[0] },
+    } as any);
+    const send = () => request("/api/stripe/webhook", {
+      method: "POST", headers: { "stripe-signature": "test-signature" },
+      body: JSON.stringify({ id: "evt_paid" }),
+    });
+    expect((await send()).status).toBe(200);
+    expect((await send()).status).toBe(200);
+    expect(h.state.bookingSnapshots).toHaveLength(1);
+    expect(h.state.charges).toHaveLength(1);
+    expect(h.state.emails).toHaveLength(1);
+  });
+
+  it("does not acknowledge an opted-in webhook when Stripe is temporarily unreachable", async () => {
+    readyForReconciliation();
+    const { constructWebhookEvent } = await import("./stripe");
+    vi.mocked(constructWebhookEvent).mockReturnValue({
+      id: "evt_retry", type: "checkout.session.completed",
+      data: { object: h.state.checkoutSessions[0] },
+    } as any);
+    h.state.checkoutError = new Error("temporary network error");
+    const response = await request("/api/stripe/webhook", {
+      method: "POST", headers: { "stripe-signature": "test-signature" },
+      body: JSON.stringify({ id: "evt_retry" }),
+    });
+    expect(response.status).toBe(503);
+    expect(h.state.charges).toHaveLength(0);
+    expect(h.state.bookingSnapshots).toHaveLength(0);
+  });
+
+  it("retries an opted-in webhook until Stripe lists its completed session", async () => {
+    readyForReconciliation();
+    const { constructWebhookEvent } = await import("./stripe");
+    const session = h.state.checkoutSessions[0];
+    vi.mocked(constructWebhookEvent).mockReturnValue({
+      id: "evt_delayed", type: "checkout.session.completed",
+      data: { object: session },
+    } as any);
+    h.state.checkoutSessions = [];
+    const response = await request("/api/stripe/webhook", {
+      method: "POST", headers: { "stripe-signature": "test-signature" },
+      body: JSON.stringify({ id: "evt_delayed" }),
+    });
+    expect(response.status).toBe(503);
+    expect(h.state.charges).toHaveLength(0);
+    h.state.checkoutSessions = [session];
+    expect((await request("/api/stripe/webhook", {
+      method: "POST", headers: { "stripe-signature": "test-signature" },
+      body: JSON.stringify({ id: "evt_delayed" }),
+    })).status).toBe(200);
+    expect(h.state.charges).toHaveLength(1);
+  });
+
+  it("does not finalize an opted-in webhook with mismatched client metadata", async () => {
+    readyForReconciliation();
+    const { constructWebhookEvent } = await import("./stripe");
+    vi.mocked(constructWebhookEvent).mockReturnValue({
+      id: "evt_mismatch", type: "checkout.session.completed",
+      data: { object: { ...h.state.checkoutSessions[0], metadata: { clientId: "client-a" } } },
+    } as any);
+    h.state.checkoutSessions[0].metadata.clientId = "another-client";
+    const response = await request("/api/stripe/webhook", {
+      method: "POST", headers: { "stripe-signature": "test-signature" },
+      body: JSON.stringify({ id: "evt_mismatch" }),
+    });
+    expect(response.status).toBe(200);
+    expect(h.state.client.paymentStatus).toBe("setup_pending");
+    expect(h.state.charges).toHaveLength(0);
+  });
+
+  it("leaves the existing unopted webhook path working", async () => {
+    readyForReconciliation();
+    h.state.tenant.paymentReconciliationEnabled = false;
+    const { constructWebhookEvent } = await import("./stripe");
+    vi.mocked(constructWebhookEvent).mockReturnValue({
+      id: "evt_legacy", type: "checkout.session.completed",
+      data: { object: h.state.checkoutSessions[0] },
+    } as any);
+    const response = await request("/api/stripe/webhook", {
+      method: "POST", headers: { "stripe-signature": "test-signature" },
+      body: JSON.stringify({ id: "evt_legacy" }),
+    });
+    expect(response.status).toBe(200);
+    expect(h.state.client.status).toBe("BookingConfirmed");
+    expect(h.state.bookingSnapshots).toHaveLength(1);
+  });
+
+  it("blocks automatic replacement of an inactive paid link for opted-in tenants", async () => {
+    readyForReconciliation();
+    h.state.client.registrationToken = "registration-token";
+    h.state.client.registrationTokenExpiresAt = new Date(Date.now() + 60_000);
+    h.state.stripeLinkActive = false;
+    const response = await request("/api/public/register/client-a/registration-token", {
+      method: "POST", body: JSON.stringify({ paymentType: "self_pay" }),
+    });
+    expect(response.status).toBe(409);
+    expect(h.state.client.stripePaymentLinkId).toBe("plink_current");
+    expect(h.state.paymentLinks).toHaveLength(0);
+  });
+
   function configureIntakeCompletion(contactPreference: "email" | "phone") {
     h.state.tenant.intakeFormTemplateId = "intake-form-a";
     h.state.registrationTemplate = {

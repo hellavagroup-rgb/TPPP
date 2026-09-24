@@ -38,6 +38,7 @@ export const tenants = pgTable("tenants", {
   contactPreferenceEnabled: boolean("contact_preference_enabled").default(false),
   intakeClientSummaryEnabled: boolean("intake_client_summary_enabled").default(false),
   multiClinicianAllocationEnabled: boolean("multi_clinician_allocation_enabled").default(false),
+  allocationVisibilityEnabled: boolean("allocation_visibility_enabled").default(false),
   autoAllocationEmailEnabled: boolean("auto_allocation_email_enabled").default(false),
   registrationFormEnabled: boolean("registration_form_enabled").default(false),
   // The one tenant-owned template used for every automated intake delivery.
@@ -574,6 +575,7 @@ export const clientClinicianOptions = pgTable("client_clinician_options", {
   status: text("status", { enum: ["pending", "selected", "declined", "unavailable"] }).notNull().default("pending"),
   selectionToken: text("selection_token").notNull().unique(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  sentAt: timestamp("sent_at"),
   tenantId: varchar("tenant_id").references(() => tenants.id).notNull(),
 });
 

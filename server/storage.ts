@@ -503,8 +503,8 @@ export class DatabaseStorage implements IStorage {
         bookingSnapshot: bookingSnapshots,
       })
       .from(clients)
-      .leftJoin(timeSlots, eq(clients.assignedSlotId, timeSlots.id))
-      .leftJoin(bookingSnapshots, eq(clients.id, bookingSnapshots.clientId))
+      .leftJoin(timeSlots, and(eq(clients.assignedSlotId, timeSlots.id), eq(clients.tenantId, timeSlots.tenantId)))
+      .leftJoin(bookingSnapshots, and(eq(clients.id, bookingSnapshots.clientId), eq(clients.tenantId, bookingSnapshots.tenantId)))
       .where(baseWhere)
       .orderBy(desc(clients.intakeDate));
 

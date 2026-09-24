@@ -6,6 +6,8 @@ import fs from "fs";
 import multer from "multer";
 import ExcelJS from "exceljs";
 import { ClientAllocationUpdateError, ManualAssignmentError, SlotRetirementConflictError, storage } from "./storage";
+import { getAllocationVisibility } from "./allocationVisibility";
+import { withTenantAllocationVisibility } from "@shared/allocationVisibility";
 import { setupAuth, requireAuth, requireAdmin, requireClinician, hashPassword, auditLog, destroySessionsForUser } from "./auth";
 import passport from "passport";
 import { 
@@ -1152,8 +1154,10 @@ export async function registerRoutes(
         storage.getClientsWithFailedPayments(req.tenant?.id),
       ]);
       const failedMap = new Map(failedPayments.map(fp => [fp.clientId, fp.failureReason]));
+      const visibility = req.tenant?.allocationVisibilityEnabled && req.tenant.id
+        ? await getAllocationVisibility(clientList, req.tenant.id) : null;
       const clients = clientList.map(c => ({
-        ...c,
+        ...withTenantAllocationVisibility(c, req.tenant?.id ?? "", !!visibility, visibility),
         hasFailedPayment: failedMap.has(c.id),
         latestFailureReason: failedMap.get(c.id) ?? null,
         paymentSetupRecoveryHref: c.registrationPaymentFailedAt
@@ -1893,6 +1897,14 @@ export async function registerRoutes(
           if (!sendResult.success) {
             throw new Error(sendResult.error || "Email provider rejected the allocation email");
           }
+          try {
+            await db.update(clientClinicianOptions).set({ sentAt: new Date() })
+              .where(and(eq(clientClinicianOptions.tenantId, req.tenant!.id),
+                inArray(clientClinicianOptions.selectionToken, options.map(option => option.selectionToken))));
+          } catch (timestampError) {
+            // Delivery already succeeded; do not mark delivered options unavailable.
+            console.error("Could not record allocation delivery time:", timestampError);
+          }
           console.log(`Allocation options email sent to client ${req.params.clientId}`);
         } catch (emailErr) {
           console.error('Failed to send allocation options email:', emailErr);
@@ -2000,6 +2012,14 @@ export async function registerRoutes(
       const sendResult = await sendEmail({ ...allocationEmail, to: client.email });
       if (!sendResult.success) {
         return res.status(502).json({ error: "The allocation email could not be resent" });
+      }
+      try {
+        await db.update(clientClinicianOptions).set({ sentAt: new Date() })
+          .where(and(eq(clientClinicianOptions.clientId, client.id),
+            eq(clientClinicianOptions.tenantId, req.tenant.id),
+            eq(clientClinicianOptions.status, "pending")));
+      } catch (timestampError) {
+        console.error("Could not record allocation resend time:", timestampError);
       }
 
       console.log(`Allocation options email resent to client ${req.params.clientId}`);

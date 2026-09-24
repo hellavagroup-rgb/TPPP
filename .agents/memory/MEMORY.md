@@ -16,6 +16,7 @@
 - [Recoverable Stripe resource setup](recoverable-stripe-resource-setup.md) — persist one attempt key before Stripe calls and reuse it for every resource created during crash recovery.
 - [Delivery status must follow provider acceptance](delivery-status-after-provider-acceptance.md) — never show an email-driven milestone until the provider accepts the send.
 - [Allocation offers are replaceable generations](allocation-offer-generations.md) — a new offer must replace prior option rows; never append and then email every historical row.
+- [Offer delivery evidence](offer-delivery-evidence.md) — historical option creation is not proof of email delivery; label missing send time honestly.
 - [Slot ownership starts at option selection](allocation-slot-ownership.md) — OptionSelected and RegistrationPending already reserve a slot and must release it when rolled back.
 - [Registration consent evidence](registration-consent-evidence.md) — use one form answer for consent; store its exact terms snapshot, answer, version, and server timestamp together.
 - [Designated intake and registration forms](designated-workflow-forms.md) — each tenant has one intake form and, when registration is enabled, one registration form.

@@ -6,6 +6,7 @@ import {
   registrationProgressCopy,
 } from "@/lib/clientWorkflowColumns";
 import { formatDateUK, formatAssignedSlot } from "@/lib/dateUtils";
+import { AllocationCardDetails, type AllocationVisibilityData } from "@/components/AllocationVisibility";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -119,6 +120,7 @@ function mutationErrorMessage(error: Error, fallback: string): string {
 }
 
 type ClinicianWithAvailability = Clinician & { name: string; availability: TimeSlot[] };
+type BoardClient = ClientType & { allocationVisibility?: AllocationVisibilityData | null };
 
 function isSlotPending(slot: TimeSlot): boolean {
   const today = new Date();
@@ -191,6 +193,7 @@ export default function Clients() {
   // CY&A feature flags (all default false — existing tenants unaffected)
   const contactPreferenceEnabled = tenant?.contactPreferenceEnabled === true;
   const multiClinicianAllocationEnabled = tenant?.multiClinicianAllocationEnabled === true;
+  const allocationVisibilityEnabled = tenant?.allocationVisibilityEnabled === true;
   const zoomLinkEmailEnabled = tenant?.zoomLinkEmailEnabled === true;
   const writeuppChecklistEnabled = tenant?.writeuppChecklistEnabled === true;
   const workflowFeatures = {
@@ -213,7 +216,7 @@ export default function Clients() {
   const [showPendingZoomLinksOnly, setShowPendingZoomLinksOnly] = useState(false);
 
   // Fetch data from API - include archived when that toggle is enabled
-  const { data: clients = [] } = useQuery<ClientType[]>({
+  const { data: clients = [] } = useQuery<BoardClient[]>({
     queryKey: ["/api/clients", showArchivedState],
     queryFn: async () => {
       const res = await fetch(`/api/clients?includeArchived=${showArchivedState}`, { credentials: "include" });
@@ -2207,7 +2210,7 @@ export default function Clients() {
                             {clinicians.find(c => c.id === client.assignedClinicianId)?.name.split(",")[0]}
                           </div>
                         )}
-                        {client.assignedSlot && (
+                        {!allocationVisibilityEnabled && client.assignedSlot && (
                           <div className="space-y-0.5">
                             <p className="text-[10px] text-muted-foreground font-mono">{formatAssignedSlot(client.assignedSlot)}</p>
                             {(client as any).slotLocationType === "in_person" ? (
@@ -2217,7 +2220,7 @@ export default function Clients() {
                             ) : null}
                           </div>
                         )}
-                        {client.notes && (
+                        {!allocationVisibilityEnabled && client.notes && (
                           <p className="text-[10px] text-muted-foreground mt-1 italic line-clamp-2" data-testid={`notes-${client.id}`}>"{client.notes}"</p>
                         )}
                         {(client as any).allocationReason && (
@@ -2289,6 +2292,8 @@ export default function Clients() {
                         )}
                       </>
                     )}
+                    <AllocationCardDetails enabled={allocationVisibilityEnabled} status={client.status}
+                      data={client.allocationVisibility ?? null} clientId={client.id} notes={client.notes} />
                     {workflowProgress(client)}
                   </CardContent>
                 </Card>
@@ -2401,7 +2406,7 @@ export default function Clients() {
                               {clinicians.find(c => c.id === client.assignedClinicianId)?.name.split(",")[0]}
                             </div>
                           )}
-                          {client.assignedSlot && (
+                          {!allocationVisibilityEnabled && client.assignedSlot && (
                             <div className="space-y-0.5">
                               <p className="text-[10px] text-muted-foreground font-mono">{formatAssignedSlot(client.assignedSlot)}</p>
                               {(client as any).slotLocationType === "in_person" ? (
@@ -2411,7 +2416,7 @@ export default function Clients() {
                               ) : null}
                             </div>
                           )}
-                          {client.notes && (
+                          {!allocationVisibilityEnabled && client.notes && (
                             <p className="text-[10px] text-muted-foreground mt-1 italic line-clamp-2" data-testid={`notes-${client.id}`}>"{client.notes}"</p>
                           )}
                           {paymentStatusBadge(client) && (
@@ -2477,6 +2482,8 @@ export default function Clients() {
                           )}
                         </>
                       )}
+                      <AllocationCardDetails enabled={allocationVisibilityEnabled} status={client.status}
+                        data={client.allocationVisibility ?? null} clientId={client.id} notes={client.notes} />
                       {workflowProgress(client)}
                     </CardContent>
                   </Card>

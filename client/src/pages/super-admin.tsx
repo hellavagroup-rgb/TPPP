@@ -145,6 +145,7 @@ interface TenantSummary {
   registrationFormTemplateId: string | null;
   bookingConfirmedEmailEnabled: boolean;
   paymentReconciliationEnabled: boolean;
+  confirmationRecoveryEnabled: boolean;
   zoomLinkEmailEnabled: boolean;
   writeuppChecklistEnabled: boolean;
   oneOffSlotsEnabled: boolean;
@@ -469,6 +470,7 @@ const FEATURE_FLAGS: { key: keyof TenantDetail; label: string; description: stri
   { key: "intakeDeliveryDiagnosticsEnabled", label: "Intake email diagnostics and resend", description: "Shows provider delivery evidence and allows a deliberate resend of unfinished intake forms", group: "cya" },
   { key: "bookingConfirmedEmailEnabled", label: "Booking Confirmed Email", description: "Automatically sends booking confirmation email on confirmation", group: "cya" },
   { key: "paymentReconciliationEnabled", label: "Stripe Payment Reconciliation", description: "Let staff verify and recover registration payments from Stripe; enable only for the intended practice", group: "cya" },
+  { key: "confirmationRecoveryEnabled", label: "Confirmation Recovery", description: "Explain confirmation blockers and allow safe allocation repair for this practice", group: "cya" },
   { key: "zoomLinkEmailEnabled", label: "Zoom Link Emails", description: "Requires clinicians to have Zoom links for online appointments and sends the link after booking confirmation", group: "cya" },
   { key: "writeuppChecklistEnabled", label: "WriteUpp Checklist", description: "Shows WriteUpp checklist fields on confirmed client records", group: "cya" },
   // Availability flags

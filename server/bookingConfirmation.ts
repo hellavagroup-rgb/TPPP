@@ -1,5 +1,7 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne } from "drizzle-orm";
 import { db } from "./db";
+import { confirmationBlocker, confirmationBlockerCopy } from "@shared/confirmationRecovery";
+import { ACTIVE_ALLOCATION_STATUSES } from "@shared/clientWorkflow";
 import {
   bookingSnapshots,
   clients,
@@ -79,14 +81,42 @@ export async function confirmBookingInTransaction(tx: any, input: BookingConfirm
       throw new Error("A clinician and appointment slot are required to confirm this booking");
     }
 
-    const [tenant] = await tx.select({ bookingConfirmedEmailEnabled: tenants.bookingConfirmedEmailEnabled })
+    const [tenant] = await tx.select({
+      bookingConfirmedEmailEnabled: tenants.bookingConfirmedEmailEnabled,
+      confirmationRecoveryEnabled: tenants.confirmationRecoveryEnabled,
+      paymentsEnabled: tenants.paymentsEnabled,
+      registrationFormEnabled: tenants.registrationFormEnabled,
+    })
       .from(tenants).where(eq(tenants.id, input.tenantId)).limit(1);
+    if (input.source === "manual" || input.source === "reassignment") {
+      if (tenant?.confirmationRecoveryEnabled) {
+        const blocker = confirmationBlocker(client, {
+          paymentsEnabled: tenant.paymentsEnabled === true,
+          registrationEnabled: tenant.registrationFormEnabled === true,
+          allocationValid: !!client.assignedSlotId && !!client.assignedClinicianId,
+        });
+        if (blocker) throw new Error(confirmationBlockerCopy[blocker]);
+      }
+    }
     const status = confirmationStatus(tenant?.bookingConfirmedEmailEnabled === true);
     const [slot] = await tx.select().from(timeSlots).where(and(
       eq(timeSlots.id, client.assignedSlotId),
       eq(timeSlots.tenantId, input.tenantId),
     )).limit(1);
     if (!slot) throw new Error("The appointment slot could not be found");
+    if (slot.clinicianId !== client.assignedClinicianId || slot.retiredAt ||
+        (tenant?.confirmationRecoveryEnabled && (input.source === "manual" || input.source === "reassignment") && !slot.isBooked)) {
+      throw new Error("The assigned slot is no longer reserved for this clinician");
+    }
+    if (tenant?.confirmationRecoveryEnabled && (input.source === "manual" || input.source === "reassignment")) {
+      const [conflict] = await tx.select({ conflictingClientId: clients.id }).from(clients).where(and(
+        eq(clients.tenantId, input.tenantId),
+        eq(clients.assignedSlotId, slot.id),
+        ne(clients.id, client.id),
+        inArray(clients.status, [...ACTIVE_ALLOCATION_STATUSES]),
+      )).limit(1);
+      if (conflict) throw new Error("Another active client is assigned to this appointment slot");
+    }
     const [clinician] = await tx.select({
       id: clinicians.id,
       userId: clinicians.userId,

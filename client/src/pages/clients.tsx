@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Client, ClientStatus, FormTemplate } from "@/lib/mockData";
+import { confirmationBlocker, confirmationBlockerCopy } from "@shared/confirmationRecovery";
 import {
   isAwaitingConfirmationStatus,
   isMatchedAllocationStatus,
@@ -199,6 +200,7 @@ export default function Clients() {
   const zoomLinkEmailEnabled = tenant?.zoomLinkEmailEnabled === true;
   const writeuppChecklistEnabled = tenant?.writeuppChecklistEnabled === true;
   const paymentReconciliationEnabled = tenant?.paymentReconciliationEnabled === true;
+  const confirmationRecoveryEnabled = tenant?.confirmationRecoveryEnabled === true;
   const { data: webhookFailures = [], isError: webhookFailuresUnavailable } = useQuery<Array<{
     eventId: string; eventType: string; reason: string; attempts: number;
     lastFailedAt: string; clientId: string | null; displayId: string | null;
@@ -1239,7 +1241,8 @@ export default function Clients() {
             <p className="text-[10px] text-muted-foreground">{paymentCopy[1]}</p>
           </div>
         )}
-        {paymentReconciliationEnabled && client.paymentType === "self_pay" && client.stripePaymentLinkId && (
+        {paymentReconciliationEnabled && client.paymentType === "self_pay" && client.stripePaymentLinkId && client.registrationPaymentAttemptKey
+          && ["RegistrationPending", "Scheduled", "BookingConfirmed"].includes(client.status) && (
           <div className="rounded border border-amber-200 bg-white p-2 text-[10px]" data-testid={`payment-reconciliation-${client.id}`}>
             <p className="font-medium">Booking check: {client.status === "RegistrationPending" ? "waiting for verified payment and booking confirmation" : client.status}</p>
             <p>Stripe payment and the external practice appointment are separate. Check Stripe before resending a payment request.</p>
@@ -2436,6 +2439,13 @@ export default function Clients() {
                 const apptConfirmed = (client as any).writeuppAppointmentConfirmed === true;
                 const dataTransferred = (client as any).writeuppDataTransferred === true;
                 const bothTicked = apptConfirmed && dataTransferred;
+                const assignedSlot = clinicians.find(c => c.id === client.assignedClinicianId)?.availability
+                  ?.find((slot: { id: string }) => slot.id === client.assignedSlotId);
+                const blocker = confirmationRecoveryEnabled ? confirmationBlocker(client, {
+                  paymentsEnabled: tenant?.paymentsEnabled === true,
+                  registrationEnabled: tenant?.registrationFormEnabled === true,
+                  allocationValid: !!assignedSlot && assignedSlot.isBooked === true && !assignedSlot.retiredAt,
+                }) : null;
                 return (
                   <Card key={client.id} className="bg-white shadow-sm hover:shadow-md transition-shadow cursor-pointer overflow-hidden" data-testid={`kanban-card-${client.id}`}>
                     <CardContent className="p-3">
@@ -2542,9 +2552,19 @@ export default function Clients() {
                             <div className="mt-1">{paymentStatusBadge(client)}</div>
                           )}
                           {contactPreferenceBadge(client)}
-                          <Button
+                          {confirmationRecoveryEnabled && blocker && (
+                            <div className="mt-2 text-[10px] text-amber-800" role="status" data-testid={`confirmation-blocker-${client.id}`}>
+                              {confirmationBlockerCopy[blocker]}
+                              {(blocker === "allocation_missing" || blocker === "allocation_invalid") && isAdmin && (
+                                <Button variant="outline" size="sm" className="mt-1 w-full text-xs"
+                                  onClick={() => handleOpenEditStatus(client)}>Repair allocation</Button>
+                              )}
+                            </div>
+                          )}
+                          {(!confirmationRecoveryEnabled || !blocker) && <Button
                             size="sm"
                             className="w-full gap-1 text-xs mt-2 bg-green-600 hover:bg-green-700"
+                            disabled={updateClientMutation.isPending}
                             onClick={() => {
                               updateClientMutation.mutate({
                                 id: client.id,
@@ -2553,7 +2573,7 @@ export default function Clients() {
                             }}
                           >
                             <CheckCircle2 className="h-3 w-3" /> Mark as Confirmed
-                          </Button>
+                          </Button>}
                         </>
                       ) : (
                         <>
@@ -2563,6 +2583,18 @@ export default function Clients() {
                           {paymentStatusBadge(client) && <div className="mt-1">{paymentStatusBadge(client)}</div>}
                           {client.status === "RegistrationPending" && !client.registrationFormSubmissionId && (
                             <p className="text-[10px] text-violet-600 mt-2 flex items-center gap-1"><Clock className="h-3 w-3" /> Awaiting registration</p>
+                          )}
+                          {confirmationRecoveryEnabled && blocker && (
+                            <div className="text-[10px] text-amber-800 mt-2" role="status" data-testid={`confirmation-blocker-${client.id}`}>
+                              <p>{confirmationBlockerCopy[blocker]}</p>
+                              {client.status === "RegistrationPending" && (!client.assignedClinicianId || !client.assignedSlotId) && (
+                                <>
+                                  <p>{confirmationBlockerCopy.allocation_missing} Keep the current registration and payment evidence.</p>
+                                  {isAdmin && <Button variant="outline" size="sm" className="mt-1 w-full text-xs"
+                                    onClick={() => handleOpenEditStatus(client)}>Repair allocation</Button>}
+                                </>
+                              )}
+                            </div>
                           )}
                           {client.status === "BookingConfirmed" && (
                             <>
@@ -3537,7 +3569,9 @@ export default function Clients() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {getAdminStatusOptions(editStatusClient.status, workflowFeatures).map(option => (
+                    {getAdminStatusOptions(editStatusClient.status, workflowFeatures)
+                      .filter(option => !confirmationRecoveryEnabled || editStatusClient.status !== "RegistrationPending" || option.value === "RegistrationPending")
+                      .map(option => (
                       <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
                     ))}
                   </SelectContent>
@@ -3549,7 +3583,8 @@ export default function Clients() {
                 </p>
               </div>
 
-              {(editStatusData.status === "Assigned" || editStatusData.status === "AwaitingConfirmation" || editStatusData.status === "Scheduled") && (
+              {(editStatusData.status === "Assigned" || editStatusData.status === "AwaitingConfirmation" || editStatusData.status === "Scheduled"
+                || (confirmationRecoveryEnabled && editStatusData.status === "RegistrationPending")) && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <Label>Reassign to Different Slot (optional)</Label>
@@ -3633,7 +3668,8 @@ export default function Clients() {
             <Button variant="outline" onClick={() => setIsEditStatusOpen(false)}>Cancel</Button>
             <Button 
               onClick={handleSaveEditStatus}
-              disabled={reassignClientMutation.isPending}
+              disabled={reassignClientMutation.isPending || (confirmationRecoveryEnabled && editStatusClient?.status === "RegistrationPending"
+                && !editStatusClient.assignedSlotId && !editStatusData.slotId)}
             >
               {reassignClientMutation.isPending ? "Saving..." : "Save Changes"}
             </Button>

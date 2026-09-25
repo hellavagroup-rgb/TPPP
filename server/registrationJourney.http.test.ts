@@ -82,7 +82,9 @@ const h = vi.hoisted(() => {
   const db: any = {
     execute: vi.fn(async () => []),
     select: (selection?: any) => ({
-      from: (table: any) => chain(() => selection?.sentAt && tableName(table) === "clients"
+      from: (table: any) => chain(() => selection?.conflictingClientId && tableName(table) === "clients"
+        ? []
+        : selection?.sentAt && tableName(table) === "clients"
         ? [{ sentAt: state.client.zoomLinkSentAt || null }]
         : selection?.displayId && tableName(table) === "clients" && state.webhookLookupIsForeign
           ? []
@@ -193,7 +195,7 @@ const h = vi.hoisted(() => {
           && state.client.registrationEmailSendingAt > new Date(Date.now() - 5 * 60 * 1000)) return [];
         if (patch.status === "RegistrationPending" && state.client.status !== "OptionSelected") return [];
         if (["BookingConfirmed", "Scheduled"].includes(patch.status)
-          && !["OptionsSent", "RegistrationPending", "BookingConfirmed", "Scheduled"].includes(state.client.status)) return [];
+          && !["OptionsSent", "RegistrationPending", "AwaitingConfirmation", "BookingConfirmed", "Scheduled"].includes(state.client.status)) return [];
         if (patch.stripeCheckoutUrl
           && ((state.client.stripeCheckoutUrl && state.stripeLinkActive) || state.preventCheckoutSave)) return [];
         const resolvedPatch = { ...patch };
@@ -298,7 +300,7 @@ const h = vi.hoisted(() => {
 });
 
 vi.mock("./db", () => ({ db: h.db }));
-vi.mock("./storage", () => ({ storage: h.storage }));
+vi.mock("./storage", () => ({ storage: h.storage, ClientAllocationUpdateError: class ClientAllocationUpdateError extends Error {} }));
 vi.mock("./auth", () => {
   const pass = (req: any, res: any, next: any) => {
     req.user = { id: "admin-1", name: "Admin", role: "admin", tenantId: req.tenant?.id };
@@ -524,6 +526,84 @@ afterEach(async () => {
 });
 
 describe("registration journey HTTP routes", () => {
+  it("blocks unverified manual confirmation for the opted-in practice without creating a booking", async () => {
+    resetState({
+      tenant: { confirmationRecoveryEnabled: true, paymentsEnabled: true },
+      client: { status: "AwaitingConfirmation", paymentType: "self_pay", paymentStatus: "active" },
+    });
+    h.state.slot.isBooked = true;
+    const response = await request("/api/clients/client-a", {
+      method: "PATCH", body: JSON.stringify({ status: "Scheduled" }),
+    });
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe("payment_unverified");
+    expect(h.state.client.status).toBe("AwaitingConfirmation");
+    expect(h.state.bookingSnapshots).toHaveLength(0);
+  });
+
+  it("requires a valid allocation for opted-in confirmation and keeps the other practice's legacy path", async () => {
+    resetState({
+      tenant: { confirmationRecoveryEnabled: true, paymentsEnabled: false },
+      client: { status: "AwaitingConfirmation", paymentType: "insurer", assignedSlotId: null, assignedClinicianId: null },
+    });
+    const missing = await request("/api/clients/client-a", {
+      method: "PATCH", body: JSON.stringify({ status: "Scheduled" }),
+    });
+    expect(missing.status).toBe(409);
+    expect(h.state.bookingSnapshots).toHaveLength(0);
+
+    h.state.client.assignedSlotId = "slot-a";
+    h.state.client.assignedClinicianId = "clinician-a";
+    h.state.slot.isBooked = true;
+    const confirmed = await request("/api/clients/client-a", {
+      method: "PATCH", body: JSON.stringify({ status: "Scheduled" }),
+    });
+    expect(confirmed.status).toBe(200);
+    expect(h.state.bookingSnapshots).toHaveLength(1);
+    expect(h.state.client.status).toBe("BookingConfirmed");
+    const repeat = await request("/api/clients/client-a", {
+      method: "PATCH", body: JSON.stringify({ status: "Scheduled" }),
+    });
+    expect(repeat.status).toBe(409);
+    expect(h.state.bookingSnapshots).toHaveLength(1);
+
+    resetState({
+      tenant: { confirmationRecoveryEnabled: false, paymentsEnabled: true },
+      client: { status: "AwaitingConfirmation", paymentType: "self_pay", paymentStatus: "active" },
+    });
+    const legacy = await request("/api/clients/client-a", {
+      method: "PATCH", body: JSON.stringify({ status: "Scheduled" }),
+    });
+    expect(legacy.status).toBe(200);
+    expect(h.state.bookingSnapshots).toHaveLength(1);
+  });
+
+  it("rejects confirmation on registration-pending records even with a paid badge", async () => {
+    resetState({
+      tenant: { confirmationRecoveryEnabled: true, paymentsEnabled: true },
+      client: { status: "RegistrationPending", registrationFormSubmissionId: "submission",
+        paymentType: "self_pay", paymentStatus: "active" },
+    });
+    const response = await request("/api/clients/client-a", {
+      method: "PATCH", body: JSON.stringify({ status: "Scheduled" }),
+    });
+    expect(response.status).toBe(409);
+    expect(h.state.bookingSnapshots).toHaveLength(0);
+  });
+
+  it("does not let an administrator write payment evidence through the general edit route", async () => {
+    resetState({
+      tenant: { confirmationRecoveryEnabled: true, paymentsEnabled: true },
+      client: { status: "AwaitingConfirmation", paymentType: "self_pay", paymentStatus: "setup_pending" },
+    });
+    const response = await request("/api/clients/client-a", {
+      method: "PATCH", body: JSON.stringify({ paymentStatus: "active", stripePaymentLinkId: "plink_fake" }),
+    });
+    expect(response.status).toBe(200);
+    expect(h.state.client.paymentStatus).toBe("setup_pending");
+    expect(h.state.client.stripePaymentLinkId).toBeNull();
+  });
+
   function readyForReconciliation() {
     resetState({
       tenant: { paymentsEnabled: true, paymentReconciliationEnabled: true },

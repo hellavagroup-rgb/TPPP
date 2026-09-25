@@ -33,6 +33,7 @@ export interface TimeSlot {
   startTime: string;
   endTime: string;
   isBooked: boolean;
+  retiredAt?: string | null;
 }
 
 export interface Clinician {

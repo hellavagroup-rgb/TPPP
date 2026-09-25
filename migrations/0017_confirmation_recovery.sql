@@ -1,0 +1,1 @@
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS confirmation_recovery_enabled boolean DEFAULT false;

@@ -58,6 +58,7 @@ import {
 import { isValidZoomLink, onlineBookingNeedsZoomLink, shouldResetZoomDelivery } from "@shared/bookingZoom";
 import { zoomDeliveryIdempotencyKey } from "./bookingZoomWorkflow";
 import { confirmBooking, confirmBookingInTransaction } from "./bookingConfirmation";
+import { confirmationBlocker, confirmationBlockerCopy } from "@shared/confirmationRecovery";
 import { inspectRegistrationPayment, reconcileRegistrationPayment } from "./paymentReconciliation";
 import { listStripeWebhookFailures, recordStripeWebhookFailure, resolveStripeWebhookFailure } from "./stripeWebhookFailures";
 import Stripe from "stripe";
@@ -1419,6 +1420,13 @@ export async function registerRoutes(
       ]) {
         delete updateData[protectedField];
       }
+      if (req.tenant?.confirmationRecoveryEnabled) {
+        // Payment and booking evidence may only be written by the provider flows.
+        for (const field of ["paymentStatus", "stripeCheckoutUrl", "stripePaymentLinkId",
+          "stripeCustomerId", "stripePaymentMethodId", "confirmedAt", "bookingConfirmationSentAt"]) {
+          delete updateData[field];
+        }
+      }
       // CY&A: auto-set needsAdminCall when contactPreference changes to/from phone
       if ("contactPreference" in updateData) {
         updateData.needsAdminCall = updateData.contactPreference === "phone";
@@ -1443,6 +1451,29 @@ export async function registerRoutes(
       
       const isConfirmation = ["Scheduled", "BookingConfirmed"].includes(req.body.status)
         && req.body.status !== oldStatus;
+      if (isConfirmation && req.tenant?.confirmationRecoveryEnabled) {
+        const [assignedSlot, assignedClinician] = await Promise.all([
+          currentClient.assignedSlotId
+            ? db.select().from(timeSlots).where(and(
+                eq(timeSlots.id, currentClient.assignedSlotId),
+                eq(timeSlots.tenantId, req.tenant.id),
+              )).limit(1).then(rows => rows[0])
+            : Promise.resolve(undefined),
+          currentClient.assignedClinicianId
+            ? db.select({ id: clinicians.id }).from(clinicians).where(and(
+                eq(clinicians.id, currentClient.assignedClinicianId),
+                eq(clinicians.tenantId, req.tenant.id),
+              )).limit(1).then(rows => rows[0])
+            : Promise.resolve(undefined),
+        ]);
+        const blocker = confirmationBlocker(currentClient, {
+          paymentsEnabled: req.tenant.paymentsEnabled === true,
+          registrationEnabled: req.tenant.registrationFormEnabled === true,
+          allocationValid: !!assignedClinician && !!assignedSlot && assignedSlot.clinicianId === assignedClinician.id
+            && assignedSlot.isBooked && !assignedSlot.retiredAt,
+        });
+        if (blocker) return res.status(409).json({ code: blocker, error: confirmationBlockerCopy[blocker] });
+      }
       const slotToDelete = (isConfirmation && currentClient?.assignedSlotId)
         ? currentClient.assignedSlotId
         : null;
@@ -2152,8 +2183,21 @@ export async function registerRoutes(
           code: transition.code,
         });
       }
+      if (req.tenant?.confirmationRecoveryEnabled && clientToReassign.status === "RegistrationPending"
+        && !clientToReassign.assignedSlotId && transition.status !== "RegistrationPending") {
+        return res.status(409).json({ error: "Keep the registration status when repairing its missing allocation." });
+      }
 
       const finalReassignment = ["Scheduled", "BookingConfirmed"].includes(transition.status);
+      if (req.tenant?.confirmationRecoveryEnabled && finalReassignment) {
+        // Repair is a separate action; never combine assignment and confirmation.
+        const blocker = confirmationBlocker(clientToReassign, {
+          paymentsEnabled: req.tenant.paymentsEnabled === true,
+          registrationEnabled: req.tenant.registrationFormEnabled === true,
+          allocationValid: !!clientToReassign.assignedClinicianId && !!clientToReassign.assignedSlotId && !slotId,
+        });
+        if (blocker) return res.status(409).json({ code: blocker, error: confirmationBlockerCopy[blocker] });
+      }
       const reassignmentResult = await storage.reassignClient(
         req.params.clientId,
         clinicianId || clientToReassign.assignedClinicianId || null,
@@ -2193,6 +2237,11 @@ export async function registerRoutes(
             ? await getClinicianActivityName(clinicianId, req.tenant!.id)
             : await getClinicianActivityName(clientToReassign.assignedClinicianId, req.tenant!.id),
           slotDescription: slot ? formatActivitySlot(slot) : "",
+          ...(req.tenant?.confirmationRecoveryEnabled && slotId ? {
+            previousSlotDescription: clientToReassign.assignedSlot,
+            previousSlotId: clientToReassign.assignedSlotId,
+            previousClinicianId: clientToReassign.assignedClinicianId,
+          } : {}),
         },
       );
       if (
@@ -6684,6 +6733,7 @@ export async function registerRoutes(
         registrationFormEnabled: z.boolean().optional(),
         intakeDeliveryDiagnosticsEnabled: z.boolean().optional(),
         paymentReconciliationEnabled: z.boolean().optional(),
+        confirmationRecoveryEnabled: z.boolean().optional(),
         bookingConfirmedEmailEnabled: z.boolean().optional(),
         zoomLinkEmailEnabled: z.boolean().optional(),
         writeuppChecklistEnabled: z.boolean().optional(),

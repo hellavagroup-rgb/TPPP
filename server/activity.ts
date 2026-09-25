@@ -33,6 +33,8 @@ export const RECENT_ACTIVITY_ACTIONS = [
   "activity_appointment_options_declined",
   "activity_registration_submitted",
   "activity_booking_confirmed",
+  "activity_booking_completed",
+  "activity_booking_reopened",
   "activity_zoom_link_sent",
   "activity_zoom_link_delivery_failed",
   "activity_slot_added",
@@ -68,6 +70,8 @@ export const RECENT_ACTIVITY_CATEGORY_ACTIONS = {
     "activity_appointment_options_declined",
     "activity_registration_submitted",
     "activity_booking_confirmed",
+    "activity_booking_completed",
+    "activity_booking_reopened",
     "activity_zoom_link_sent",
     "activity_zoom_link_delivery_failed",
   ],
@@ -241,6 +245,10 @@ export function toRecentActivityItem(log: AuditLog): RecentActivityItem {
       return { id: log.id, eventType: "client", title: "Client registration submitted", description: `${clientDisplayId} submitted their registration.`, actorName, timestamp: log.timestamp };
     case "activity_booking_confirmed":
       return { id: log.id, eventType: "client", title: "Booking confirmed", description: `${clientDisplayId}'s appointment is confirmed.`, actorName, timestamp: log.timestamp };
+    case "activity_booking_completed":
+      return { id: log.id, eventType: "client", title: "Booking completed", description: `${clientDisplayId}'s confirmed booking was completed.`, actorName, timestamp: log.timestamp };
+    case "activity_booking_reopened":
+      return { id: log.id, eventType: "client", title: "Booking reopened", description: `${clientDisplayId}'s completed booking was reopened.`, actorName, timestamp: log.timestamp };
     case "activity_zoom_link_sent":
       return { id: log.id, eventType: "client", title: "Zoom link sent", description: `${clientDisplayId}'s clinician Zoom link was sent.`, actorName, timestamp: log.timestamp };
     case "activity_zoom_link_delivery_failed":

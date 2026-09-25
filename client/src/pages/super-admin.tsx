@@ -148,6 +148,7 @@ interface TenantSummary {
   confirmationRecoveryEnabled: boolean;
   zoomLinkEmailEnabled: boolean;
   writeuppChecklistEnabled: boolean;
+  completedBookingsEnabled: boolean;
   oneOffSlotsEnabled: boolean;
   clinicianProfileConfig: { showTier?: boolean; showTherapyMode?: boolean } | null;
   createdAt: string;
@@ -473,6 +474,7 @@ const FEATURE_FLAGS: { key: keyof TenantDetail; label: string; description: stri
   { key: "confirmationRecoveryEnabled", label: "Confirmation Recovery", description: "Explain confirmation blockers and allow safe allocation repair for this practice", group: "cya" },
   { key: "zoomLinkEmailEnabled", label: "Zoom Link Emails", description: "Requires clinicians to have Zoom links for online appointments and sends the link after booking confirmation", group: "cya" },
   { key: "writeuppChecklistEnabled", label: "WriteUpp Checklist", description: "Shows WriteUpp checklist fields on confirmed client records", group: "cya" },
+  { key: "completedBookingsEnabled", label: "Completed Bookings", description: "Move verified bookings to a separate Completed view without archiving", group: "cya" },
   // Availability flags
   { key: "oneOffSlotsEnabled", label: "One-off Slots", description: "Allows clinicians to have availability slots on a specific calendar date rather than a recurring day of the week", group: "general" },
 ];

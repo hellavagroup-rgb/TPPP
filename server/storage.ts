@@ -1014,6 +1014,9 @@ export class DatabaseStorage implements IStorage {
         if (client.tenantId !== tenantId) {
           throw new ManualAssignmentError("access_denied", "Access denied");
         }
+        if (client.completedAt) {
+          throw new ManualAssignmentError("client_already_assigned", "Reopen this completed booking before assigning a new slot.");
+        }
         if (client.assignedSlotId || client.assignedClinicianId || client.assignedSlot) {
           if (client.assignedSlotId === slotId) {
             throw new ManualAssignmentError(
@@ -1140,6 +1143,11 @@ export class DatabaseStorage implements IStorage {
         eq(clients.tenantId, tenantId),
       )).for("update");
       if (!existingClient) return undefined;
+      // This lock also serializes against completion: a stale status-edit request
+      // must not replace a completed booking without an explicit reopen.
+      if (existingClient.completedAt) {
+        throw new Error("Reopen this completed booking before editing its status or allocation.");
+      }
 
       const oldClinicianId = existingClient.assignedClinicianId;
       const oldSlotIdToRelease = existingClient.assignedSlotId;

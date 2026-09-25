@@ -187,6 +187,7 @@ type AssignmentState = {
     tenantId: string;
     displayId: string;
     status: string;
+    completedAt?: Date | null;
     assignedSlotId: string | null;
     assignedSlot: string | null;
     assignedClinicianId: string | null;
@@ -316,6 +317,16 @@ describe("DatabaseStorage.assignClinicianToClient", () => {
         startTime: "09:00",
       },
     };
+  });
+
+  it("cannot allocate another slot to a completed booking until it is reopened", async () => {
+    state.client.completedAt = new Date("2026-04-12");
+    assignmentTransactions(state);
+    const before = structuredClone(state);
+    await expect(new DatabaseStorage().assignClinicianToClient(
+      "client-1", "clinician-1", "slot-1", "tenant-1",
+    )).rejects.toThrow("Reopen this completed booking");
+    expect(state).toEqual(before);
   });
 
   it("claims the slot, increments workload, and assigns the client atomically", async () => {
@@ -672,6 +683,27 @@ describe("DatabaseStorage.reassignClient", () => {
         isBooked: false, type: "Recurring", day: "Tuesday", date: null, startTime: "10:00",
       },
     };
+  });
+
+  it("rejects status edits on completed bookings until the booking is explicitly reopened", async () => {
+    state.client.status = "BookingConfirmed";
+    state.client.completedAt = new Date("2026-04-12");
+    reassignmentTransactions(state);
+    const before = structuredClone(state);
+    const storage = new DatabaseStorage();
+
+    await expect(storage.reassignClient(
+      "client-1", "clinician-old", "slot-old", "Assigned", "tenant-1",
+    )).rejects.toThrow("Reopen this completed booking");
+    expect(state).toEqual(before);
+
+    // The dedicated reopen route clears completedAt and writes its audit event.
+    state.client.completedAt = null;
+    const result = await storage.reassignClient(
+      "client-1", "clinician-old", "slot-old", "Assigned", "tenant-1",
+    );
+    expect(result?.client.status).toBe("Assigned");
+    expect(state.client.completedAt).toBeNull();
   });
 
   it.each(["client", "oldClinician", "newClinician", "newSlot"] as const)(

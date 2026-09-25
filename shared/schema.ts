@@ -57,6 +57,7 @@ export const tenants = pgTable("tenants", {
   bookingConfirmedEmailEnabled: boolean("booking_confirmed_email_enabled").default(false),
   zoomLinkEmailEnabled: boolean("zoom_link_email_enabled").default(false),
   writeuppChecklistEnabled: boolean("writeup_checklist_enabled").default(false),
+  completedBookingsEnabled: boolean("completed_bookings_enabled").default(false),
   oneOffSlotsEnabled: boolean("one_off_slots_enabled").default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -198,6 +199,7 @@ export const clients = pgTable("clients", {
   archivedAt: timestamp("archived_at"),
   archiveReason: text("archive_reason"),
   archiveCategory: text("archive_category"),
+  completedAt: timestamp("completed_at"),
   // Workflow Stage Timestamps
   formsSentAt: timestamp("forms_sent_at"), // When forms were sent to client
   formsCompletedAt: timestamp("forms_completed_at"), // When client completed forms

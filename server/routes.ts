@@ -16,6 +16,7 @@ import {
   type InsertFormTemplate
 } from "@shared/schema";
 import { classifyPaymentReturn, type PaymentReturnResult } from "./paymentReturn";
+import { bookingCompletionDecision } from "@shared/bookingCompletion";
 import { z } from "zod";
 import { sendEmail, getEmailDeliveryEvent, buildFromAddress, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateFormCompletedNotificationEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail, generateClinicianWelcomeEmail, generateAdminInviteEmail, generateAllocationOptionsEmail, generateBookingConfirmedEmail, generateZoomLinkEmail, getFormCompletionPageContent, GENERIC_PRACTICE_NAME } from "./email";
 import { alertIntakeBounce, isIntakeBounce } from "./intakeBounceAlerts";
@@ -1343,6 +1344,12 @@ export async function registerRoutes(
       if (currentClient.tenantId !== req.tenant?.id) {
         return res.status(403).json({ error: "Access denied" });
       }
+      if (currentClient.completedAt && "status" in req.body && req.body.status !== currentClient.status) {
+        return res.status(409).json({ error: "Reopen this completed booking before changing its status." });
+      }
+      if (currentClient.completedAt && ("writeuppAppointmentConfirmed" in req.body || "writeuppDataTransferred" in req.body)) {
+        return res.status(409).json({ error: "Reopen this completed booking before changing its checklist." });
+      }
       const oldStatus = normalizeStoredClientStatus(currentClient.status) ?? currentClient.status;
       if ("status" in req.body) {
         const transition = validateAdminStatusTransition(oldStatus, req.body.status, {
@@ -1411,6 +1418,7 @@ export async function registerRoutes(
       // Add workflow timestamps based on status change
       const updateData = { ...req.body };
       for (const protectedField of [
+        "completedAt", "isArchived", "archivedAt", "archiveReason", "archiveCategory",
         "registrationFormSubmissionId",
         "registrationPaymentAttemptKey",
         "termsAcceptedAt",
@@ -1420,7 +1428,7 @@ export async function registerRoutes(
       ]) {
         delete updateData[protectedField];
       }
-      if (req.tenant?.confirmationRecoveryEnabled) {
+      if (req.tenant?.confirmationRecoveryEnabled || req.tenant?.completedBookingsEnabled) {
         // Payment and booking evidence may only be written by the provider flows.
         for (const field of ["paymentStatus", "stripeCheckoutUrl", "stripePaymentLinkId",
           "stripeCustomerId", "stripePaymentMethodId", "confirmedAt", "bookingConfirmationSentAt"]) {
@@ -1892,6 +1900,10 @@ export async function registerRoutes(
       }));
 
       await db.transaction(async (tx) => {
+        const [current] = await tx.select({ completedAt: clients.completedAt }).from(clients).where(and(
+          eq(clients.id, req.params.clientId), eq(clients.tenantId, req.tenant!.id),
+        )).for("update");
+        if (!current || current.completedAt) throw new Error("Reopen this completed booking before offering new slots.");
         await tx.update(clientClinicianOptions).set({ status: "unavailable" }).where(and(
           eq(clientClinicianOptions.clientId, req.params.clientId),
           eq(clientClinicianOptions.tenantId, req.tenant!.id),
@@ -1975,6 +1987,9 @@ export async function registerRoutes(
       res.json(updated);
     } catch (error) {
       console.error("Failed to allocate options:", error);
+      if (error instanceof Error && error.message === "Reopen this completed booking before offering new slots.") {
+        return res.status(409).json({ error: error.message });
+      }
       res.status(500).json({ error: "Failed to allocate options" });
     }
   });
@@ -2173,6 +2188,7 @@ export async function registerRoutes(
       const clientToReassign = await storage.getClientById(req.params.clientId);
       if (!clientToReassign) return res.status(404).json({ error: "Client not found" });
       if (clientToReassign.tenantId !== req.tenant?.id) return res.status(403).json({ error: "Access denied" });
+      if (clientToReassign.completedAt) return res.status(409).json({ error: "Reopen this completed booking before editing its status or allocation." });
       const transition = validateAdminStatusTransition(clientToReassign.status, status, {
         multiClinicianAllocationEnabled: req.tenant?.multiClinicianAllocationEnabled === true,
         registrationFormEnabled: req.tenant?.registrationFormEnabled === true,
@@ -2297,6 +2313,9 @@ export async function registerRoutes(
       res.json(updated);
     } catch (error: any) {
       console.error("Failed to reassign client:", error);
+      if (error?.message === "Reopen this completed booking before editing its status or allocation.") {
+        return res.status(409).json({ error: error.message });
+      }
       // Return validation errors as 400
       if (error instanceof ManualAssignmentError && error.reason === "access_denied") {
         return res.status(403).json({ error: "Access denied" });
@@ -2308,12 +2327,77 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/clients/:id/complete", requireAdmin, async (req, res) => {
+    if (req.tenant?.completedBookingsEnabled !== true) {
+      return res.status(403).json({ error: "Booking completion is not enabled for this practice." });
+    }
+    try {
+      const outcome = await db.transaction(async (tx) => {
+        const [client] = await tx.select().from(clients).where(and(
+          eq(clients.id, req.params.id), eq(clients.tenantId, req.tenant!.id),
+        )).for("update");
+        if (!client) return { code: 404, error: "Client not found" };
+        if (client.completedAt) return { code: 200, client };
+        const [snapshot] = await tx.select({ id: bookingSnapshots.id }).from(bookingSnapshots).where(and(
+          eq(bookingSnapshots.clientId, client.id),
+          eq(bookingSnapshots.tenantId, req.tenant!.id),
+        )).limit(1);
+        const decision = bookingCompletionDecision(client, {
+          tenantId: req.tenant!.id,
+          enabled: req.tenant!.completedBookingsEnabled === true,
+          hasSnapshot: !!snapshot,
+          checklistEnabled: req.tenant!.writeuppChecklistEnabled === true,
+        });
+        if (decision.kind !== "ready") return { code: 409, error: decision.reason || "Booking completion is unavailable." };
+        const [updated] = await tx.update(clients).set({ completedAt: new Date(), updatedAt: new Date() })
+          .where(and(eq(clients.id, client.id), eq(clients.tenantId, req.tenant!.id)))
+          .returning();
+        await tx.insert(auditLogs).values({
+          tenantId: req.tenant!.id, userId: req.user?.id ?? null,
+          action: "activity_booking_completed", resourceType: "client", resourceId: client.id,
+          ipAddress: req.ip || null,
+          details: { actorName: req.user?.name || "Practice user", clientDisplayId: client.displayId },
+        });
+        return { code: 200, client: updated };
+      });
+      if ("error" in outcome) return res.status(outcome.code).json({ error: outcome.error });
+      res.json(outcome.client);
+    } catch (error) {
+      console.error("Booking completion failed", error);
+      res.status(500).json({ error: "Failed to complete booking" });
+    }
+  });
+
+  app.post("/api/clients/:id/reopen-completion", requireAdmin, async (req, res) => {
+    if (req.tenant?.completedBookingsEnabled !== true) return res.status(403).json({ error: "Booking completion is not enabled." });
+    try {
+      const [updated] = await db.transaction(async (tx) => {
+        const rows = await tx.update(clients).set({ completedAt: null, updatedAt: new Date() })
+          .where(and(eq(clients.id, req.params.id), eq(clients.tenantId, req.tenant!.id),
+            drizzleSql`${clients.completedAt} IS NOT NULL`, eq(clients.isArchived, false)))
+          .returning();
+        if (rows[0]) await tx.insert(auditLogs).values({
+          tenantId: req.tenant!.id, userId: req.user?.id ?? null,
+          action: "activity_booking_reopened", resourceType: "client", resourceId: rows[0].id,
+          ipAddress: req.ip || null,
+          details: { actorName: req.user?.name || "Practice user", clientDisplayId: rows[0].displayId },
+        });
+        return rows;
+      });
+      if (!updated) return res.status(409).json({ error: "No completed booking to reopen for this practice." });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to reopen booking" });
+    }
+  });
+
   app.post("/api/clients/:id/archive", requireAdmin, auditLog("archive", "client"), async (req, res) => {
     try {
       const { reason, category } = req.body || {};
       const clientToArchive = await storage.getClientById(req.params.id);
       if (!clientToArchive) return res.status(404).json({ error: "Client not found" });
       if (clientToArchive.tenantId !== req.tenant?.id) return res.status(403).json({ error: "Access denied" });
+      if (clientToArchive.completedAt) return res.status(409).json({ error: "Reopen the completed booking before archiving." });
       const archived = await storage.archiveClient(req.params.id, reason, category);
       if (!archived) {
         return res.status(404).json({ error: "Client not found" });
@@ -6737,6 +6821,7 @@ export async function registerRoutes(
         bookingConfirmedEmailEnabled: z.boolean().optional(),
         zoomLinkEmailEnabled: z.boolean().optional(),
         writeuppChecklistEnabled: z.boolean().optional(),
+        completedBookingsEnabled: z.boolean().optional(),
         oneOffSlotsEnabled: z.boolean().optional(),
         clinicianProfileConfig: z.object({
           showTier: z.boolean().optional(),

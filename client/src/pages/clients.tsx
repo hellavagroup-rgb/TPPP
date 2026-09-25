@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Client, ClientStatus, FormTemplate } from "@/lib/mockData";
 import { confirmationBlocker, confirmationBlockerCopy } from "@shared/confirmationRecovery";
+import { bookingCompletionBlocker } from "@shared/bookingCompletion";
 import {
   isAwaitingConfirmationStatus,
   isMatchedAllocationStatus,
@@ -122,7 +123,7 @@ function mutationErrorMessage(error: Error, fallback: string): string {
 }
 
 type ClinicianWithAvailability = Clinician & { name: string; availability: TimeSlot[] };
-type BoardClient = ClientType & { allocationVisibility?: AllocationVisibilityData | null };
+type BoardClient = ClientType & { allocationVisibility?: AllocationVisibilityData | null; bookingSnapshot?: { id: string } | null };
 
 function isSlotPending(slot: TimeSlot): boolean {
   const today = new Date();
@@ -199,6 +200,7 @@ export default function Clients() {
   const allocationVisibilityEnabled = tenant?.allocationVisibilityEnabled === true;
   const zoomLinkEmailEnabled = tenant?.zoomLinkEmailEnabled === true;
   const writeuppChecklistEnabled = tenant?.writeuppChecklistEnabled === true;
+  const completedBookingsEnabled = tenant?.completedBookingsEnabled === true;
   const paymentReconciliationEnabled = tenant?.paymentReconciliationEnabled === true;
   const confirmationRecoveryEnabled = tenant?.confirmationRecoveryEnabled === true;
   const { data: webhookFailures = [], isError: webhookFailuresUnavailable } = useQuery<Array<{
@@ -247,6 +249,9 @@ export default function Clients() {
   // View toggle states - defined early for query dependency
   const [showConfirmedState, setShowConfirmedState] = useState(false);
   const [showArchivedState, setShowArchivedState] = useState(false);
+  const [showCompletedState, setShowCompletedState] = useState(false);
+  const [clientForPaymentReview, setClientForPaymentReview] = useState<BoardClient | null>(null);
+  const [reviewedPaymentType, setReviewedPaymentType] = useState<"self_pay" | "insurer" | "">("");
   const [showPendingZoomLinksOnly, setShowPendingZoomLinksOnly] = useState(false);
 
   // Fetch data from API - include archived when that toggle is enabled
@@ -607,6 +612,46 @@ export default function Clients() {
     onError: () => {
       toast({ title: "Error", description: "Failed to archive/didn't engage client.", variant: "destructive" });
     },
+  });
+
+  const completeBookingMutation = useMutation({
+    mutationFn: async (clientId: string) => {
+      const response = await apiRequest("POST", `/api/clients/${clientId}/complete`, {});
+      return response.json();
+    },
+    onSuccess: () => {
+      invalidateOperationalData(queryClient);
+      toast({ title: "Booking Completed", description: "The booking is now in Completed, not Archive/Didn't Engage." });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Cannot complete booking", description: mutationErrorMessage(error, "Check the booking, checklist and payment evidence."), variant: "destructive" });
+    },
+  });
+
+  const reviewPaymentTypeMutation = useMutation({
+    mutationFn: async ({ clientId, paymentType }: { clientId: string; paymentType: "self_pay" | "insurer" }) => {
+      const response = await apiRequest("PATCH", `/api/clients/${clientId}`, { paymentType });
+      return response.json();
+    },
+    onSuccess: () => {
+      invalidateOperationalData(queryClient);
+      setClientForPaymentReview(null);
+      setReviewedPaymentType("");
+      toast({ title: "Payment type recorded", description: "Review the completion checks again before completing." });
+    },
+    onError: (error: Error) => toast({ title: "Review not saved", description: mutationErrorMessage(error, "Could not save payment type."), variant: "destructive" }),
+  });
+
+  const reopenBookingMutation = useMutation({
+    mutationFn: async (clientId: string) => {
+      const response = await apiRequest("POST", `/api/clients/${clientId}/reopen-completion`, {});
+      return response.json();
+    },
+    onSuccess: () => {
+      invalidateOperationalData(queryClient);
+      toast({ title: "Booking Reopened", description: "The client is back in the awaiting-confirmation queue." });
+    },
+    onError: (error: Error) => toast({ title: "Cannot reopen booking", description: error.message, variant: "destructive" }),
   });
 
   const handleOpenArchiveDialog = (client: ClientType) => {
@@ -1312,7 +1357,7 @@ export default function Clients() {
 
   // Unified filtering based on toggle states and search term
   const pendingZoomLinkClients = zoomLinkEmailEnabled
-    ? clients.filter(client => isPendingZoomDelivery(client as any))
+    ? clients.filter(client => !client.isArchived && !client.completedAt && isPendingZoomDelivery(client as any))
     : [];
 
   const filteredClients = clients.filter(client => {
@@ -1322,13 +1367,14 @@ export default function Clients() {
       // Show only archived clients
       return matchesSearch && client.isArchived;
     }
+    if (showCompletedState) return matchesSearch && !client.isArchived && !!client.completedAt;
     if (showConfirmedState) {
       const isConfirmed = client.status === "Scheduled" || client.status === "BookingConfirmed";
       const matchesPendingZoomFilter = !showPendingZoomLinksOnly || isPendingZoomDelivery(client as any);
-      return matchesSearch && isConfirmed && !client.isArchived && matchesPendingZoomFilter;
+      return matchesSearch && isConfirmed && !client.isArchived && !client.completedAt && matchesPendingZoomFilter;
     }
     // Kanban view: show non-archived clients (all statuses for Kanban columns)
-    return matchesSearch && !client.isArchived;
+    return matchesSearch && !client.isArchived && !client.completedAt;
   });
 
   // Display labels for statuses (UI labels differ from database values)
@@ -1985,7 +2031,7 @@ export default function Clients() {
               checked={showConfirmedState}
               onCheckedChange={(checked) => {
                 setShowConfirmedState(checked);
-                if (checked) setShowArchivedState(false);
+                if (checked) { setShowArchivedState(false); setShowCompletedState(false); }
                 if (!checked) setShowPendingZoomLinksOnly(false);
               }}
             />
@@ -2004,11 +2050,21 @@ export default function Clients() {
               </Label>
             </div>
           )}
+          {completedBookingsEnabled && (
+            <div className="flex items-center gap-2">
+              <Switch id="show-completed" checked={showCompletedState}
+                onCheckedChange={(checked) => {
+                  setShowCompletedState(checked);
+                  if (checked) { setShowArchivedState(false); setShowConfirmedState(false); setShowPendingZoomLinksOnly(false); }
+                }} />
+              <Label htmlFor="show-completed" className="text-sm cursor-pointer">Show Completed</Label>
+            </div>
+          )}
           <div className="flex items-center gap-2">
             <Switch 
               id="show-archived"
               checked={showArchivedState}
-              onCheckedChange={(checked) => { setShowArchivedState(checked); if (checked) setShowConfirmedState(false); }}
+              onCheckedChange={(checked) => { setShowArchivedState(checked); if (checked) { setShowConfirmedState(false); setShowCompletedState(false); } }}
             />
             <Label htmlFor="show-archived" className="text-sm cursor-pointer">Show Archived/Didn't Engage</Label>
           </div>
@@ -2016,7 +2072,7 @@ export default function Clients() {
       </div>
 
       {/* Kanban Board */}
-      {!showConfirmedState && !showArchivedState ? (
+      {!showConfirmedState && !showArchivedState && !showCompletedState ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           {/* Column 1: Pending Intake */}
           <div className="bg-blue-50/50 rounded-lg p-3 min-h-[400px]">
@@ -2439,6 +2495,11 @@ export default function Clients() {
                 const apptConfirmed = (client as any).writeuppAppointmentConfirmed === true;
                 const dataTransferred = (client as any).writeuppDataTransferred === true;
                 const bothTicked = apptConfirmed && dataTransferred;
+                const completionBlocker = completedBookingsEnabled && client.status === "BookingConfirmed"
+                  ? bookingCompletionBlocker(client, {
+                    hasSnapshot: !!client.bookingSnapshot,
+                    checklistEnabled: writeuppChecklistEnabled,
+                  }) : null;
                 const assignedSlot = clinicians.find(c => c.id === client.assignedClinicianId)?.availability
                   ?.find((slot: { id: string }) => slot.id === client.assignedSlotId);
                 const blocker = confirmationRecoveryEnabled ? confirmationBlocker(client, {
@@ -2508,17 +2569,11 @@ export default function Clients() {
                             )}
                             <DropdownMenuSeparator />
                             <DropdownMenuItem
-                              className={client.status === "BookingConfirmed" && writeuppChecklistEnabled && !bothTicked ? "text-muted-foreground" : "text-destructive"}
-                              disabled={client.status === "BookingConfirmed" && writeuppChecklistEnabled && !bothTicked}
-                              onClick={() => {
-                                if (client.status === "BookingConfirmed") {
-                                  if (!writeuppChecklistEnabled || bothTicked) handleOpenArchiveDialog(client);
-                                } else {
-                                  handleOpenArchiveDialog(client);
-                                }
-                              }}
+                              className={client.status === "BookingConfirmed" && !completedBookingsEnabled && writeuppChecklistEnabled && !bothTicked ? "text-muted-foreground" : "text-destructive"}
+                              disabled={client.status === "BookingConfirmed" && !completedBookingsEnabled && writeuppChecklistEnabled && !bothTicked}
+                              onClick={() => handleOpenArchiveDialog(client)}
                             >
-                              {client.status === "BookingConfirmed" && writeuppChecklistEnabled && !bothTicked ? "Complete WriteUpp first" : "Archive/Didn't Engage"}
+                              {client.status === "BookingConfirmed" && !completedBookingsEnabled && writeuppChecklistEnabled && !bothTicked ? "Complete WriteUpp first" : "Archive/Didn't Engage"}
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
@@ -2623,12 +2678,29 @@ export default function Clients() {
                                 size="sm"
                                 variant="outline"
                                 className="w-full gap-1 text-xs mt-2 border-green-300 text-green-700 hover:bg-green-50 disabled:opacity-50"
-                                disabled={writeuppChecklistEnabled && !bothTicked}
-                                onClick={() => { if (!writeuppChecklistEnabled || bothTicked) handleOpenArchiveDialog(client); }}
+                                disabled={completeBookingMutation.isPending || (completedBookingsEnabled
+                                  ? !!completionBlocker : writeuppChecklistEnabled && !bothTicked)}
+                                onClick={() => {
+                                  if (completedBookingsEnabled) completeBookingMutation.mutate(client.id);
+                                  else if (!writeuppChecklistEnabled || bothTicked) handleOpenArchiveDialog(client);
+                                }}
                               >
                                 <CheckCircle2 className="h-3 w-3" />
-                                {writeuppChecklistEnabled && !bothTicked ? "Complete WriteUpp first" : "Move to Completed"}
+                                {completedBookingsEnabled && completionBlocker ? "Completion blocked" : writeuppChecklistEnabled && !bothTicked ? "Complete WriteUpp first" : "Move to Completed"}
                               </Button>
+                              {completedBookingsEnabled && completionBlocker && (
+                                <div className="text-[10px] text-amber-800 mt-1" role="status" data-testid={`completion-blocker-${client.id}`}>
+                                  <p>{completionBlocker}</p>
+                                  {client.paymentType !== "self_pay" && client.paymentType !== "insurer" && (
+                                    <Button size="sm" variant="outline" className="mt-1 text-xs"
+                                      onClick={() => { setClientForPaymentReview(client); setReviewedPaymentType(""); }}>Review payment type</Button>
+                                  )}
+                                  {client.paymentType === "self_pay" && client.paymentStatus !== "active" && paymentReconciliationEnabled && (
+                                    <Button size="sm" variant="outline" className="mt-1 text-xs" disabled={checkingPayment}
+                                      onClick={() => checkPayment(client.id)}>Check payment status</Button>
+                                  )}
+                                </div>
+                              )}
                             </>
                           )}
                         </>
@@ -2647,12 +2719,12 @@ export default function Clients() {
           </div>
         </div>
       ) : (
-        /* List view for Confirmed and Archived clients */
+        /* List view for Confirmed, Completed and Archived clients */
         <div className="space-y-3">
           <h3 className="font-semibold text-lg">
             {showConfirmedState
               ? (showPendingZoomLinksOnly ? "Confirmed Clients Waiting for Zoom Links" : "Confirmed Clients")
-              : "Archived/Didn't Engage"}
+              : showCompletedState ? "Completed Bookings" : "Archived/Didn't Engage"}
           </h3>
           {filteredClients.map(client => (
             <Card key={client.id} id={`client-${client.id}`} className="shadow-sm">
@@ -2661,7 +2733,7 @@ export default function Clients() {
                   <div className="flex items-center gap-3">
                     <span className="font-mono font-semibold">{client.displayId}</span>
                     <Badge variant="secondary" className={getStatusColor(client.status)}>
-                      {getStatusDisplayLabel(client.status)}
+                      {showCompletedState ? "Completed" : getStatusDisplayLabel(client.status)}
                     </Badge>
                     {client.insurer && client.insurer !== "Private" && (
                       <Badge variant="outline">{client.insurer}</Badge>
@@ -2718,9 +2790,11 @@ export default function Clients() {
                         <DropdownMenuItem onClick={() => handleViewEnquiry(client)}>
                           <Mail className="h-4 w-4 mr-2" /> View Original Enquiry
                         </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => handleOpenEditStatus(client)}>
-                          <CalendarCheck className="h-4 w-4 mr-2" /> Edit Status
-                        </DropdownMenuItem>
+                        {!showCompletedState && (
+                          <DropdownMenuItem onClick={() => handleOpenEditStatus(client)}>
+                            <CalendarCheck className="h-4 w-4 mr-2" /> Edit Status
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuItem onClick={() => handleOpenViewResponses(client)}>
                           <Eye className="h-4 w-4 mr-2" /> View Responses
                         </DropdownMenuItem>
@@ -2762,6 +2836,12 @@ export default function Clients() {
                           </>
                         )}
                         <DropdownMenuSeparator />
+                        {showCompletedState && (
+                          <DropdownMenuItem disabled={reopenBookingMutation.isPending}
+                            onClick={() => reopenBookingMutation.mutate(client.id)}>
+                            <RotateCcw className="h-4 w-4 mr-2" /> Reopen Booking
+                          </DropdownMenuItem>
+                        )}
                         {client.isArchived ? (
                           <>
                             <DropdownMenuItem onClick={() => restoreClientMutation.mutate(client.id)}>
@@ -2771,7 +2851,7 @@ export default function Clients() {
                               <Trash2 className="h-4 w-4 mr-2" /> Permanently Delete
                             </DropdownMenuItem>
                           </>
-                        ) : (
+                        ) : !showCompletedState && (
                           <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>
                             Archive/Didn't Engage
                           </DropdownMenuItem>
@@ -2787,6 +2867,13 @@ export default function Clients() {
                   <div className="mt-2">{contactPreferenceBadge(client)}</div>
                 )}
                 {workflowProgress(client)}
+                {showCompletedState && (
+                  <div className="mt-2 text-xs text-muted-foreground space-y-1">
+                    <p>Completed: {client.completedAt ? formatDateUK(client.completedAt) : "—"}</p>
+                    <p>Payment: {client.paymentType === "self_pay" ? `Self-pay (${client.paymentStatus || "unknown"})` : client.paymentType === "insurer" ? "Insurer" : "Needs review"}</p>
+                    {writeuppChecklistEnabled && <p>WriteUpp: Appointment {client.writeuppAppointmentConfirmed ? "confirmed" : "not confirmed"} · Data {client.writeuppDataTransferred ? "transferred" : "not transferred"}</p>}
+                  </div>
+                )}
                 {showArchivedState && ((client as any).archiveCategory || (client as any).archiveReason) && (
                   <div className="mt-2 p-2 bg-slate-50 rounded border border-slate-200">
                     {(client as any).archiveCategory && (
@@ -2807,7 +2894,7 @@ export default function Clients() {
             <p className="text-center py-8 text-muted-foreground">
               {showConfirmedState && showPendingZoomLinksOnly
                 ? "No confirmed clients are waiting for a Zoom link."
-                : `No ${showConfirmedState ? "confirmed" : "archived/didn't engage"} clients found.`}
+                : `No ${showConfirmedState ? "confirmed" : showCompletedState ? "completed" : "archived/didn't engage"} clients found.`}
             </p>
           )}
         </div>
@@ -3833,6 +3920,32 @@ export default function Clients() {
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!clientForPaymentReview} onOpenChange={(open) => { if (!open) setClientForPaymentReview(null); }}>
+        <DialogContent className="sm:max-w-[475px]">
+          <DialogHeader>
+            <DialogTitle>Review payment type</DialogTitle>
+            <DialogDescription>
+              Check the registration or payment records for {clientForPaymentReview?.displayId}. Do not assume an older booking is insurer-funded.
+            </DialogDescription>
+          </DialogHeader>
+          <Select value={reviewedPaymentType} onValueChange={(value) => setReviewedPaymentType(value as "self_pay" | "insurer")}>
+            <SelectTrigger data-testid="select-reviewed-payment-type"><SelectValue placeholder="Select verified payment type" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="self_pay">Verified self-pay (payment setup must be active)</SelectItem>
+              <SelectItem value="insurer">Verified insurer-funded</SelectItem>
+            </SelectContent>
+          </Select>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setClientForPaymentReview(null)}>Cancel</Button>
+            <Button disabled={!reviewedPaymentType || reviewPaymentTypeMutation.isPending}
+              onClick={() => {
+                if (clientForPaymentReview && reviewedPaymentType)
+                  reviewPaymentTypeMutation.mutate({ clientId: clientForPaymentReview.id, paymentType: reviewedPaymentType });
+              }}>Record verified type</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

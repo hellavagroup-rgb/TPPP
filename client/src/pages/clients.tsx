@@ -199,6 +199,19 @@ export default function Clients() {
   const zoomLinkEmailEnabled = tenant?.zoomLinkEmailEnabled === true;
   const writeuppChecklistEnabled = tenant?.writeuppChecklistEnabled === true;
   const paymentReconciliationEnabled = tenant?.paymentReconciliationEnabled === true;
+  const { data: webhookFailures = [], isError: webhookFailuresUnavailable } = useQuery<Array<{
+    eventId: string; eventType: string; reason: string; attempts: number;
+    lastFailedAt: string; clientId: string | null; displayId: string | null;
+  }>>({
+    queryKey: ["/api/stripe/webhook-failures"],
+    queryFn: async () => {
+      const response = await apiRequest("GET", "/api/stripe/webhook-failures");
+      if (!response.ok) throw new Error("Could not load webhook failures");
+      return response.json();
+    },
+    enabled: isAdmin,
+    refetchInterval: 60_000,
+  });
   const [paymentInspection, setPaymentInspection] = useState<{ clientId: string; state: string; detail: string; blocker?: string } | null>(null);
   const [checkingPayment, setCheckingPayment] = useState(false);
   const checkPayment = async (clientId: string, reconcile = false) => {
@@ -1716,6 +1729,25 @@ export default function Clients() {
 
   return (
     <div className="space-y-6">
+      {isAdmin && webhookFailuresUnavailable && (
+        <div role="alert" className="rounded border border-red-300 bg-red-50 p-3 text-sm">
+          Stripe delivery alerts could not be loaded. Refresh the page or contact support if this continues.
+        </div>
+      )}
+      {isAdmin && webhookFailures.length > 0 && (
+        <div className="rounded border border-amber-300 bg-amber-50 p-4 text-sm space-y-2" role="alert" data-testid="stripe-webhook-failures">
+          <p className="font-semibold">Stripe delivery needs attention</p>
+          <p>Repeated webhook failures may delay booking confirmation. Inspect the event in Stripe Dashboard and resend it after fixing the issue. Check Stripe before resending any payment request. For registrations with a current payment link, use Check Stripe payment and then Reconcile verified payment if needed.</p>
+          <ul className="space-y-1">
+            {webhookFailures.map(failure => (
+              <li key={failure.eventId}>
+                {failure.displayId || "Registration not identified"} · {failure.eventId} · {failure.reason.replaceAll("_", " ")} ({failure.attempts} attempts)
+                {failure.displayId && <Button variant="link" size="sm" onClick={() => setSearchTerm(failure.displayId!)}>Find registration</Button>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-3xl font-serif font-bold text-foreground">Client Allocation</h2>

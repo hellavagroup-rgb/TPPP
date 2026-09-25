@@ -76,7 +76,7 @@ async function inspect(tenant: Tenant, clientId: string, requestedSessionId?: st
       paid, client, stripe,
     } as const;
   } catch (error) {
-    console.error("Payment reconciliation: provider check failed", error);
+    console.error("Payment reconciliation: provider check failed");
     return { state: "uncertain", detail: "Stripe could not be checked. No payment or booking state was changed." } as const;
   }
 }
@@ -169,7 +169,7 @@ export async function reconcileRegistrationPayment(
     await afterConfirmation?.({ client, snapshot: confirmation.snapshot, intentId: paid.intentId });
     return { state: "recorded", detail: "Stripe payment and booking are recorded. Staff must still schedule the appointment in the external practice system." };
   } catch (error) {
-    console.error("Payment reconciliation: finalization incomplete", error);
+    console.error("Payment reconciliation: finalization incomplete");
     return { state: "paid_unrecorded", detail: "Stripe confirms payment, but app finalization needs attention. Retry reconciliation; do not send another payment request.", blocker: (error as Error).message };
   }
 }

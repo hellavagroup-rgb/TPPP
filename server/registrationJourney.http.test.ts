@@ -28,6 +28,8 @@ const h = vi.hoisted(() => {
     checkoutError: null as any,
     preventCheckoutSave: false,
     charges: [] as any[],
+    webhookFailures: [] as any[],
+    webhookLookupIsForeign: false,
     intent: null as any,
     stripeLinkMetadata: null as any,
     customerUpdates: [] as any[],
@@ -55,6 +57,8 @@ const h = vi.hoisted(() => {
       case "form_submissions": return state.submissions;
       case "booking_snapshots": return state.bookingSnapshots;
       case "payment_charges": return state.charges;
+      case "stripe_webhook_failures": return state.webhookFailures.filter(f =>
+        f.tenantId === state.tenant.id && !f.resolvedAt && f.attempts >= 3);
       case "audit_logs": return state.activities;
       default: return [];
     }
@@ -65,6 +69,8 @@ const h = vi.hoisted(() => {
     const execute = () => result ??= run();
     const builder: any = {
       where: () => builder,
+      leftJoin: () => builder,
+      orderBy: () => builder,
       limit: (count: number) => Promise.resolve(execute().slice(0, count)),
       returning: () => Promise.resolve(execute()),
       for: () => builder,
@@ -78,6 +84,13 @@ const h = vi.hoisted(() => {
     select: (selection?: any) => ({
       from: (table: any) => chain(() => selection?.sentAt && tableName(table) === "clients"
         ? [{ sentAt: state.client.zoomLinkSentAt || null }]
+        : selection?.displayId && tableName(table) === "clients" && state.webhookLookupIsForeign
+          ? []
+        : selection?.eventId && tableName(table) === "stripe_webhook_failures"
+          ? rowsFor(table).map(f => ({
+              ...f, clientId: f.clientId || null,
+              displayId: f.clientId === state.client.id ? state.client.displayId : null,
+            }))
         : rowsFor(table)),
     }),
     insert: (table: any) => ({
@@ -105,6 +118,25 @@ const h = vi.hoisted(() => {
             state.charges.push({ id: `charge-${state.charges.length + 1}`, ...charge });
           }
           inserted = state.charges;
+        } else if (tableName(table) === "stripe_webhook_failures") {
+          const value = Array.isArray(values) ? values[0] : values;
+          const existing = state.webhookFailures.find(f => f.eventId === value.eventId && f.tenantId === value.tenantId);
+          if (existing) {
+            existing.attempts = existing.resolvedAt ? 1 : existing.attempts + 1;
+            if (existing.resolvedAt) {
+              existing.generation++;
+              existing.alertedAt = null;
+              existing.alertClaimedAt = null;
+            }
+            existing.resolvedAt = null;
+            existing.reason = value.reason;
+            inserted = [existing];
+          } else {
+            const failure = { id: `webhook-failure-${state.webhookFailures.length}`, attempts: 1, generation: 1,
+              alertedAt: null, alertClaimedAt: null, resolvedAt: null, ...value };
+            state.webhookFailures.push(failure);
+            inserted = [failure];
+          }
         } else if (tableName(table) === "audit_logs") {
           inserted = (Array.isArray(values) ? values : [values]).map(value => ({
             id: `activity-${state.activities.length + 1}`, ...value,
@@ -114,6 +146,7 @@ const h = vi.hoisted(() => {
         const result: any = {
           returning: () => Promise.resolve(inserted),
           onConflictDoNothing: () => Promise.resolve(inserted),
+          onConflictDoUpdate: () => ({ returning: () => Promise.resolve(inserted) }),
           then: (resolve: any, reject: any) => Promise.resolve(inserted).then(resolve, reject),
         };
         return result;
@@ -146,6 +179,13 @@ const h = vi.hoisted(() => {
         if (name === "payment_charges") {
           for (const charge of state.charges) Object.assign(charge, patch);
           return state.charges;
+        }
+        if (name === "stripe_webhook_failures") {
+          const failure = state.webhookFailures.find(f => f.tenantId === state.tenant.id && !f.resolvedAt);
+          if (!failure) return [];
+          if (patch.alertClaimedAt instanceof Date && (failure.alertedAt || failure.alertClaimedAt)) return [];
+          Object.assign(failure, patch);
+          return [failure];
         }
         if (name !== "clients") return [];
 
@@ -199,6 +239,8 @@ const h = vi.hoisted(() => {
 
   const storage: any = new Proxy({
     getClientById: vi.fn(async () => state.client?.id ? { ...state.client } : undefined),
+    getAdminUsersByTenantId: vi.fn(async (tenantId: string) =>
+      tenantId === state.tenant.id ? [{ id: "admin-a", email: "admin@practice.test" }] : []),
     getClinicianById: vi.fn(async (id: string) =>
       state.clinician?.id === id ? { ...state.clinician } : undefined),
     getTenantById: vi.fn(async () => state.tenant?.id ? { ...state.tenant } : undefined),
@@ -455,6 +497,8 @@ function resetState(overrides: { client?: any; tenant?: any } = {}) {
   h.state.checkoutError = null;
   h.state.preventCheckoutSave = false;
   h.state.charges = [];
+  h.state.webhookFailures = [];
+  h.state.webhookLookupIsForeign = false;
   h.state.intent = null;
   h.state.stripeLinkMetadata = null;
   h.state.customerUpdates = [];
@@ -664,6 +708,136 @@ describe("registration journey HTTP routes", () => {
     expect(response.status).toBe(503);
     expect(h.state.charges).toHaveLength(0);
     expect(h.state.bookingSnapshots).toHaveLength(0);
+  });
+
+  it("alerts only the verified practice after three failures, once per event, then resolves on retry", async () => {
+    readyForReconciliation();
+    const { constructWebhookEvent } = await import("./stripe");
+    vi.mocked(constructWebhookEvent).mockReturnValue({
+      id: "evt_repeated", type: "checkout.session.completed",
+      data: { object: h.state.checkoutSessions[0] },
+    } as any);
+    h.state.checkoutError = new Error("provider details must not be sent");
+    const send = () => request("/api/stripe/webhook", {
+      method: "POST", headers: { "stripe-signature": "test-signature" },
+      body: JSON.stringify({ id: "evt_repeated" }),
+    });
+    expect((await send()).status).toBe(503);
+    expect((await send()).status).toBe(503);
+    expect(h.state.emails).toHaveLength(0);
+    expect((await request("/api/stripe/webhook-failures")).body).toEqual([]);
+    expect((await send()).status).toBe(503);
+    expect((await send()).status).toBe(503);
+    expect(h.state.emails).toHaveLength(1);
+    expect(h.state.emails[0].to).toBe("admin@practice.test");
+    expect(h.state.emails[0].text).toContain("A-001");
+    expect(h.state.emails[0].text).not.toContain("provider details");
+    expect(h.state.webhookFailures).toMatchObject([{
+      tenantId: "tenant-a", eventId: "evt_repeated", clientId: "client-a",
+      reason: "stripe_unavailable", attempts: 4,
+    }]);
+    expect((await request("/api/stripe/webhook-failures")).body).toMatchObject([
+      { eventId: "evt_repeated", displayId: "A-001", attempts: 4 },
+    ]);
+    h.state.checkoutError = null;
+    expect((await send()).status).toBe(200);
+    expect((await request("/api/stripe/webhook-failures")).body).toEqual([]);
+    expect(h.state.emails).toHaveLength(2); // one alert, one booking confirmation
+    h.state.checkoutError = new Error("unavailable again");
+    expect((await send()).status).toBe(503);
+    expect(h.state.webhookFailures[0].attempts).toBe(1);
+    expect(h.state.webhookFailures[0].generation).toBe(2);
+    expect(h.state.webhookFailures[0].alertedAt).toBeNull();
+    expect(h.state.emails).toHaveLength(2);
+    expect((await request("/api/stripe/webhook-failures")).body).toEqual([]);
+    expect((await send()).status).toBe(503);
+    expect((await send()).status).toBe(503);
+    expect(h.state.emails).toHaveLength(3);
+    expect(h.state.emails[0].idempotencyKey).not.toBe(h.state.emails[2].idempotencyKey);
+  });
+
+  it("does not attribute invalid signatures or another practice's registration to the current tenant", async () => {
+    readyForReconciliation();
+    const { constructWebhookEvent } = await import("./stripe");
+    vi.mocked(constructWebhookEvent).mockImplementation(() => { throw new Error("invalid signature"); });
+    const send = () => request("/api/stripe/webhook", {
+      method: "POST", headers: { "stripe-signature": "bad" },
+      body: JSON.stringify({ id: "evt_unverified", metadata: { tenantId: "tenant-a" } }),
+    });
+    for (let i = 0; i < 3; i++) expect((await send()).status).toBe(400);
+    expect(h.state.webhookFailures).toEqual([]);
+    expect(h.state.emails).toEqual([]);
+
+    vi.mocked(constructWebhookEvent).mockReturnValue({
+      id: "evt_other", type: "checkout.session.completed",
+      data: { object: { ...h.state.checkoutSessions[0], metadata: { clientId: "other-client", tenantId: "tenant-b" } } },
+    } as any);
+    h.state.tenant.paymentReconciliationEnabled = false;
+    h.state.webhookLookupIsForeign = true;
+    // Processing fails, but the foreign client reference cannot be linked to
+    // this practice, even though it appears inside a signed event.
+    for (let i = 0; i < 3; i++) {
+      vi.mocked(h.storage.getClientById).mockRejectedValueOnce(new Error("database failed"));
+      expect((await request("/api/stripe/webhook", {
+        method: "POST", headers: { "stripe-signature": "valid" },
+        body: JSON.stringify({ id: "evt_other" }),
+      })).status).toBe(500);
+    }
+    expect(h.state.webhookFailures).toMatchObject([{ tenantId: "tenant-a", clientId: null }]);
+    h.state.webhookFailures.push({ id: "foreign", tenantId: "tenant-b", eventId: "evt_foreign",
+      resolvedAt: null, lastFailedAt: new Date(), reason: "processing_error", attempts: 3 });
+    const listed = (await request("/api/stripe/webhook-failures")).body;
+    expect(listed).toHaveLength(1);
+    expect(listed[0].eventId).toBe("evt_other");
+    expect(listed[0].displayId).toBeNull();
+    expect((await request("/api/stripe/webhook-failures", { headers: { "x-tenant": "tenant-b" } })).status).toBe(403);
+    // The next delivery is intentionally acknowledged as uncorrelated; the
+    // previous processing failure must not remain in the admin list.
+    expect((await request("/api/stripe/webhook", {
+      method: "POST", headers: { "stripe-signature": "valid" },
+      body: JSON.stringify({ id: "evt_other" }),
+    })).status).toBe(200);
+    expect(h.state.webhookFailures[0].resolvedAt).toBeInstanceOf(Date);
+    expect((await request("/api/stripe/webhook-failures")).body).toEqual([]);
+  });
+
+  it("clears a previously failed event when an early checkout exit is acknowledged", async () => {
+    readyForReconciliation();
+    const { constructWebhookEvent } = await import("./stripe");
+    vi.mocked(constructWebhookEvent).mockReturnValue({
+      id: "evt_early", type: "checkout.session.completed",
+      data: { object: h.state.checkoutSessions[0] },
+    } as any);
+    h.state.checkoutError = new Error("provider unavailable");
+    const send = () => request("/api/stripe/webhook", {
+      method: "POST", headers: { "stripe-signature": "valid" },
+      body: JSON.stringify({ id: "evt_early" }),
+    });
+    for (let i = 0; i < 3; i++) expect((await send()).status).toBe(503);
+    expect((await request("/api/stripe/webhook-failures")).body).toHaveLength(1);
+    vi.mocked(constructWebhookEvent).mockReturnValue({
+      id: "evt_early", type: "checkout.session.completed",
+      data: { object: { ...h.state.checkoutSessions[0], metadata: {} } },
+    } as any);
+    expect((await send()).status).toBe(200);
+    expect((await request("/api/stripe/webhook-failures")).body).toEqual([]);
+  });
+
+  it("claims one alert for simultaneous Stripe retries", async () => {
+    readyForReconciliation();
+    const { constructWebhookEvent } = await import("./stripe");
+    vi.mocked(constructWebhookEvent).mockReturnValue({
+      id: "evt_concurrent", type: "checkout.session.completed",
+      data: { object: h.state.checkoutSessions[0] },
+    } as any);
+    h.state.checkoutError = new Error("unavailable");
+    const send = () => request("/api/stripe/webhook", {
+      method: "POST", headers: { "stripe-signature": "valid" },
+      body: JSON.stringify({ id: "evt_concurrent" }),
+    });
+    expect((await Promise.all([send(), send(), send(), send()])).map(result => result.status)).toEqual([503, 503, 503, 503]);
+    expect(h.state.webhookFailures[0].attempts).toBe(4);
+    expect(h.state.emails).toHaveLength(1);
   });
 
   it("retries an opted-in webhook until Stripe lists its completed session", async () => {

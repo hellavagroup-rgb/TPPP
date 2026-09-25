@@ -509,6 +509,25 @@ export type InsertNonEngagementCategory = z.infer<typeof insertNonEngagementCate
 export type NonEngagementCategory = typeof nonEngagementCategories.$inferSelect;
 
 // ============ PAYMENT CHARGES ============
+export const stripeWebhookFailures = pgTable("stripe_webhook_failures", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  eventId: text("event_id").notNull(),
+  eventType: text("event_type").notNull(),
+  clientId: varchar("client_id").references(() => clients.id),
+  reason: text("reason").notNull(),
+  attempts: integer("attempts").notNull().default(1),
+  generation: integer("generation").notNull().default(1),
+  firstFailedAt: timestamp("first_failed_at").notNull().defaultNow(),
+  lastFailedAt: timestamp("last_failed_at").notNull().defaultNow(),
+  alertClaimedAt: timestamp("alert_claimed_at"),
+  alertedAt: timestamp("alerted_at"),
+  resolvedAt: timestamp("resolved_at"),
+}, table => [
+  uniqueIndex("stripe_webhook_failures_tenant_event_unique").on(table.tenantId, table.eventId),
+  index("stripe_webhook_failures_tenant_open_idx").on(table.tenantId, table.resolvedAt),
+]);
+
 export const paymentCharges = pgTable("payment_charges", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   clientId: varchar("client_id").references(() => clients.id).notNull(),

@@ -58,6 +58,7 @@ import { isValidZoomLink, onlineBookingNeedsZoomLink, shouldResetZoomDelivery } 
 import { zoomDeliveryIdempotencyKey } from "./bookingZoomWorkflow";
 import { confirmBooking, confirmBookingInTransaction } from "./bookingConfirmation";
 import { inspectRegistrationPayment, reconcileRegistrationPayment } from "./paymentReconciliation";
+import { listStripeWebhookFailures, recordStripeWebhookFailure, resolveStripeWebhookFailure } from "./stripeWebhookFailures";
 import Stripe from "stripe";
 import {
   hasActiveClientAllocation,
@@ -5349,6 +5350,16 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/stripe/webhook-failures", requireAdmin, async (req, res) => {
+    if (!req.tenant) return res.status(403).json({ error: "Practice required" });
+    try {
+      res.set("Cache-Control", "no-store");
+      res.json(await listStripeWebhookFailures(req.tenant.id));
+    } catch {
+      res.status(503).json({ error: "Webhook failures could not be loaded" });
+    }
+  });
+
   // Reuse an active stored link; recover an inactive unpaid link before resending.
   app.post("/api/clients/:id/resend-payment-link", requireAdmin, async (req, res) => {
     try {
@@ -5827,12 +5838,24 @@ export async function registerRoutes(
       return res.status(400).json({ error: "Invalid webhook signature" });
     }
 
+    const noteFailure = async (reason: "stripe_unavailable" | "finalization_incomplete" | "processing_error") => {
+      try { await recordStripeWebhookFailure(metaTenantId, event, reason); }
+      catch { console.error("Webhook failure could not be recorded", { tenantId: metaTenantId, eventId: event.id }); }
+    };
+    const noteSuccess = async () => {
+      try { await resolveStripeWebhookFailure(metaTenantId, event.id); }
+      catch { console.error("Webhook recovery could not be recorded", { tenantId: metaTenantId, eventId: event.id }); }
+    };
+    const acknowledge = async () => {
+      await noteSuccess();
+      return res.json({ received: true });
+    };
     // Step 4: Process the event
     try {
       if (event.type === "checkout.session.completed") {
         const session = event.data.object as any;
         const clientId = session.metadata?.clientId;
-        if (!clientId) return res.json({ received: true });
+        if (!clientId) return acknowledge();
         // For opted-in practices use the same independently verified provider path
         // as staff reconciliation. A signed event alone does not establish a paid,
         // current, correctly attributed checkout.
@@ -5855,15 +5878,19 @@ export async function registerRoutes(
                 ? decryptSecret(webhookTenant.stripeSecretKey)
                 : null;
             } catch (error) {
-              console.error("Webhook: tenant Stripe key could not be decrypted", error);
+              console.error("Webhook: tenant Stripe key could not be decrypted", { tenantId: metaTenantId, eventId: event.id });
+              await noteFailure("stripe_unavailable");
               return res.status(503).json({ error: "Stripe key unavailable; retry webhook" });
             }
             const outcome = await reconcileRegistrationPayment(
               { ...webhookTenant, stripeSecretKey: verifiedTenantKey }, clientId, session.id,
               details => finishReconciledBooking(webhookTenant, details),
             );
-            if (outcome.state !== "recorded") return res.status(503).json({ error: "Payment has not been independently verified and finalized; retry webhook" });
-            return res.json({ received: true });
+            if (outcome.state !== "recorded") {
+              await noteFailure(outcome.state === "paid_unrecorded" ? "finalization_incomplete" : "stripe_unavailable");
+              return res.status(503).json({ error: "Payment has not been independently verified and finalized; retry webhook" });
+            }
+            return acknowledge();
           }
         }
 
@@ -5895,10 +5922,10 @@ export async function registerRoutes(
         // delivery: an existing ledger row suppresses only duplicate ledger
         // creation, never client finalization recovery.
         const clientForUpdate = await storage.getClientById(clientId);
-        if (!clientForUpdate) return res.json({ received: true });
+        if (!clientForUpdate) return acknowledge();
         if (clientForUpdate.tenantId !== metaTenantId) {
           console.error(`Webhook: tenant mismatch for client ${clientId}`);
-          return res.json({ received: true });
+          return acknowledge();
         }
 
         const client = clientForUpdate;
@@ -5924,7 +5951,7 @@ export async function registerRoutes(
         });
         if (!validRegistrationPayment) {
           console.warn(`Webhook: ignored uncorrelated registration checkout for client ${clientId}`);
-          return res.json({ received: true });
+          return acknowledge();
         }
 
           // Persist paymentStatus = active; opportunistically save payment method if retrievable
@@ -6124,9 +6151,10 @@ export async function registerRoutes(
         }
       }
 
-      res.json({ received: true });
+      await acknowledge();
     } catch (error: any) {
-      console.error("Webhook processing error:", error?.message);
+      console.error("Webhook processing error", { tenantId: metaTenantId, eventId: event.id });
+      await noteFailure("processing_error");
       res.status(500).json({ error: "Webhook processing failed" });
     }
   });

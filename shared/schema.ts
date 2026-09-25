@@ -403,6 +403,8 @@ export const formDeliveryAttempts = pgTable("form_delivery_attempts", {
   providerMessageId: text("provider_message_id"),
   providerEvent: text("provider_event"),
   outcome: text("outcome").notNull(),
+  alertClaimedAt: timestamp("alert_claimed_at"),
+  alertedAt: timestamp("alerted_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
   uniqueIndex("form_delivery_attempt_key_unique").on(table.tenantId, table.idempotencyKey),

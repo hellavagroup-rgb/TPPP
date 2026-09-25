@@ -7,6 +7,7 @@ import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { syncAllActiveConnections } from "./gmailSync";
 import { storage } from "./storage";
+import { pollIntakeBounceAlerts } from "./intakeBounceAlerts";
 
 const app = express();
 
@@ -153,4 +154,11 @@ app.use((req, res, next) => {
       log(`[gmail] background sync error: ${err}`);
     }
   }, GMAIL_POLL_INTERVAL_MS);
+
+  // Check provider metadata without waiting for someone to open a client panel.
+  // Never overlap scans; each attempt also uses an atomic alert claim.
+  pollIntakeBounceAlerts().catch(err => log(`[intake bounce] initial poll error: ${err}`));
+  setInterval(() => {
+    pollIntakeBounceAlerts().catch(err => log(`[intake bounce] poll error: ${err}`));
+  }, 5 * 60 * 1000);
 })();

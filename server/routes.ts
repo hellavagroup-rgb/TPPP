@@ -18,6 +18,7 @@ import {
 import { classifyPaymentReturn, type PaymentReturnResult } from "./paymentReturn";
 import { z } from "zod";
 import { sendEmail, getEmailDeliveryEvent, buildFromAddress, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateFormCompletedNotificationEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail, generateClinicianWelcomeEmail, generateAdminInviteEmail, generateAllocationOptionsEmail, generateBookingConfirmedEmail, generateZoomLinkEmail, getFormCompletionPageContent, GENERIC_PRACTICE_NAME } from "./email";
+import { alertIntakeBounce, isIntakeBounce } from "./intakeBounceAlerts";
 import { forceReseedDatabase } from "./seed";
 import { seedDemoData } from "./seedDemo";
 import { parseIntakeEmailBody } from "./intakeParser";
@@ -3740,6 +3741,13 @@ export async function registerRoutes(
           }
         } catch {
           // Provider lookup unavailable: retain only previously observed evidence.
+        }
+      }
+      if (isIntakeBounce(event)) {
+        try {
+          await alertIntakeBounce(attempt.id);
+        } catch (error) {
+          console.error("Intake bounce alert check failed", { attemptId: attempt.id, error });
         }
       }
       safeAttempts.push({

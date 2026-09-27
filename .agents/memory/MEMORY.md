@@ -28,3 +28,4 @@
 - [Tenant-owned Stripe reconciliation](tenant-stripe-reconciliation.md) — recovery must query the tenant's Stripe account, not a global-key fallback, before changing payment or booking state.
 - [Tenant-scoped email evidence](tenant-scoped-email-evidence.md) — inspect provider events only through a tenant-owned, stored message ID; never infer mailbox delivery from acceptance.
 - [Booking harness reservation states](booking-harness-reservation-states.md) — automated path fixtures can begin with an unreserved slot; test manual reservation checks separately.
+- [Tenant opt-ins at publish](tenant-opt-in-publish.md) — a schema-only publish does not replay migration data updates that activate specific practices.

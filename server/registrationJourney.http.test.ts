@@ -2,6 +2,7 @@ import express from "express";
 import { createServer, type Server } from "http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bookingSnapshots } from "@shared/schema";
+import { PgDialect } from "drizzle-orm/pg-core";
 
 const h = vi.hoisted(() => {
   const state = {
@@ -68,7 +69,20 @@ const h = vi.hoisted(() => {
     let result: any[] | undefined;
     const execute = () => result ??= run();
     const builder: any = {
-      where: () => builder,
+      where: (condition: any) => {
+        const originalRun = run;
+        if (condition) run = () => {
+          const rows = originalRun();
+          // Enforce the real SQL ownership predicate for snapshot reads. A foreign
+          // row with the same client ID must not satisfy an idempotent confirmation.
+          const sql = new PgDialect().sqlToQuery(condition).sql;
+          return sql.includes('"booking_snapshots"."tenant_id"')
+            ? rows.filter(row => row.tenantId === state.tenant.id)
+            : rows;
+        };
+        result = undefined;
+        return builder;
+      },
       leftJoin: () => builder,
       orderBy: () => builder,
       limit: (count: number) => Promise.resolve(execute().slice(0, count)),
@@ -110,6 +124,9 @@ const h = vi.hoisted(() => {
           }));
           state.submissions.push(...inserted);
         } else if (table === bookingSnapshots || tableName(table) === "booking_snapshots") {
+          if (state.bookingSnapshots.some(row => row.clientId === (Array.isArray(values) ? values[0] : values).clientId)) {
+            throw new Error("booking_snapshots_client_unique");
+          }
           inserted = (Array.isArray(values) ? values : [values]).map((value, index) => ({
             id: `booking-snapshot-${state.bookingSnapshots.length + index + 1}`, ...value,
           }));
@@ -190,6 +207,9 @@ const h = vi.hoisted(() => {
           return [failure];
         }
         if (name !== "clients") return [];
+        if (state.client.tenantId !== state.tenant.id) return [];
+        if ("completedAt" in patch && patch.completedAt === null
+          && (!state.client.completedAt || state.client.isArchived)) return [];
 
         if (patch.registrationEmailClaimId && state.client.registrationEmailSendingAt
           && state.client.registrationEmailSendingAt > new Date(Date.now() - 5 * 60 * 1000)) return [];
@@ -303,13 +323,19 @@ vi.mock("./db", () => ({ db: h.db }));
 vi.mock("./storage", () => ({ storage: h.storage, ClientAllocationUpdateError: class ClientAllocationUpdateError extends Error {} }));
 vi.mock("./auth", () => {
   const pass = (req: any, res: any, next: any) => {
-    req.user = { id: "admin-1", name: "Admin", role: "admin", tenantId: req.tenant?.id };
+    req.user = { id: "admin-1", name: "Admin", role: req.headers["x-role"] || "admin", tenantId: req.tenant?.id };
     next();
+  };
+  const admin = (req: any, res: any, next: any) => {
+    pass(req, res, () => {
+      if (req.user.role !== "admin") return res.status(403).json({ error: "Admin access required" });
+      next();
+    });
   };
   return {
     setupAuth: vi.fn(),
     requireAuth: pass,
-    requireAdmin: pass,
+    requireAdmin: admin,
     requireClinician: pass,
     hashPassword: vi.fn(async (value: string) => value),
     auditLog: () => pass,
@@ -526,6 +552,98 @@ afterEach(async () => {
 });
 
 describe("registration journey HTTP routes", () => {
+  it("refuses a foreign booking snapshot instead of treating it as this tenant's confirmation", async () => {
+    resetState({
+      tenant: { confirmationRecoveryEnabled: true, paymentsEnabled: false },
+      client: { status: "AwaitingConfirmation", paymentType: "insurer" },
+    });
+    h.state.slot.isBooked = true;
+    h.state.bookingSnapshots = [{
+      id: "foreign-booking", clientId: "client-a", tenantId: "tenant-b",
+      clinicianName: "Other practice", confirmedAt: new Date(),
+    }];
+    const response = await request("/api/clients/client-a", {
+      method: "PATCH", body: JSON.stringify({ status: "Scheduled" }),
+    });
+    expect(response.status).not.toBe(200);
+    expect(JSON.stringify(response.body)).not.toContain("Other practice");
+    expect(h.state.client.status).toBe("AwaitingConfirmation");
+    expect(h.state.bookingSnapshots).toEqual([expect.objectContaining({ tenantId: "tenant-b" })]);
+    expect(h.state.emails).toHaveLength(0);
+  });
+
+  it("requires an administrator for manual confirmation, without affecting the legacy practice path", async () => {
+    resetState({
+      tenant: { confirmationRecoveryEnabled: false, paymentsEnabled: false },
+      client: { status: "AwaitingConfirmation", paymentType: "insurer" },
+    });
+    h.state.slot.isBooked = true;
+    const denied = await request("/api/clients/client-a", {
+      method: "PATCH", headers: { "x-role": "clinician" },
+      body: JSON.stringify({ status: "Scheduled" }),
+    });
+    expect(denied.status).toBe(403);
+    expect(h.state.bookingSnapshots).toHaveLength(0);
+    const [first, retry] = await Promise.all([
+      request("/api/clients/client-a", { method: "PATCH", body: JSON.stringify({ status: "Scheduled" }) }),
+      request("/api/clients/client-a", { method: "PATCH", body: JSON.stringify({ status: "Scheduled" }) }),
+    ]);
+    expect([first.status, retry.status].sort()).toEqual([200, 409]);
+    expect(h.state.bookingSnapshots).toHaveLength(1);
+    expect(h.state.client.status).toBe("BookingConfirmed");
+  });
+
+  it("authorizes, tenant-scopes and serializes completion without archiving a confirmed client", async () => {
+    resetState({
+      tenant: { completedBookingsEnabled: true, writeuppChecklistEnabled: true },
+      client: {
+        status: "BookingConfirmed", confirmedAt: new Date(),
+        paymentType: "self_pay", paymentStatus: "active",
+        writeuppAppointmentConfirmed: true, writeuppDataTransferred: true,
+        isArchived: false, completedAt: null,
+      },
+    });
+    h.state.bookingSnapshots = [{ id: "booking-a", clientId: "client-a", tenantId: "tenant-a" }];
+    const path = "/api/clients/client-a/complete";
+    expect((await request(path, { method: "POST", headers: { "x-role": "clinician" } })).status).toBe(403);
+    expect((await request("/api/clients/client-a/reopen-completion", {
+      method: "POST", headers: { "x-role": "clinician" },
+    })).status).toBe(403);
+    expect(h.state.client.completedAt).toBeNull();
+
+    const [first, second] = await Promise.all([
+      request(path, { method: "POST" }), request(path, { method: "POST" }),
+    ]);
+    expect([first.status, second.status]).toEqual([200, 200]);
+    expect(first.body.completedAt).toBeTruthy();
+    expect(second.body.completedAt).toBe(first.body.completedAt);
+    expect(h.state.client.isArchived).toBe(false);
+    expect(h.state.bookingSnapshots).toHaveLength(1);
+    expect(h.state.activities.filter(a => a.action === "activity_booking_completed")).toHaveLength(1);
+
+    const reopened = await request("/api/clients/client-a/reopen-completion", { method: "POST" });
+    expect(reopened.status).toBe(200);
+    expect(reopened.body).toMatchObject({ id: "client-a", completedAt: null });
+    expect(h.state.activities.filter(a => a.action === "activity_booking_reopened")).toHaveLength(1);
+    expect((await request("/api/clients/client-a/reopen-completion", { method: "POST" })).status).toBe(409);
+  });
+
+  it("denies completion for a foreign client and for an opted-out practice", async () => {
+    resetState({
+      tenant: { completedBookingsEnabled: true },
+      client: { status: "BookingConfirmed", tenantId: "tenant-b", completedAt: null },
+    });
+    expect((await request("/api/clients/client-a/complete", { method: "POST" })).status).toBe(404);
+    expect(h.state.activities).toHaveLength(0);
+    resetState({
+      tenant: { completedBookingsEnabled: false },
+      client: { status: "BookingConfirmed", completedAt: null },
+    });
+    expect((await request("/api/clients/client-a/complete", { method: "POST" })).status).toBe(403);
+    expect((await request("/api/clients/client-a/reopen-completion", { method: "POST" })).status).toBe(403);
+    expect(h.state.client.completedAt).toBeNull();
+  });
+
   it("blocks unverified manual confirmation for the opted-in practice without creating a booking", async () => {
     resetState({
       tenant: { confirmationRecoveryEnabled: true, paymentsEnabled: true },
@@ -645,6 +763,25 @@ describe("registration journey HTTP routes", () => {
       id: "cus_1", payload: { metadata: { clientId: "client-a", displayId: "A-001" } },
     });
     expect(h.state.paymentLinks).toHaveLength(0);
+  });
+
+  it("does not record a payment or confirm a booking against a foreign snapshot", async () => {
+    readyForReconciliation();
+    h.state.bookingSnapshots = [{
+      id: "foreign-booking", clientId: "client-a", tenantId: "tenant-b",
+      clinicianName: "Other practice", confirmedAt: new Date(),
+    }];
+    const response = await request("/api/clients/client-a/payment-reconciliation", { method: "POST" });
+    expect(response.status).toBe(409);
+    expect(response.body.state).toBe("paid_unrecorded");
+    expect(JSON.stringify(response.body)).not.toContain("Other practice");
+    expect(h.state.client.status).toBe("RegistrationPending");
+    // Verified provider payment remains recorded even if booking finalization
+    // fails. Retrying must not prompt staff to send another payment request.
+    expect(h.state.client.paymentStatus).toBe("active");
+    expect(h.state.charges).toHaveLength(1);
+    expect(h.state.bookingSnapshots).toEqual([expect.objectContaining({ tenantId: "tenant-b" })]);
+    expect(h.state.emails).toHaveLength(0);
   });
 
   it("does not alter records when checkout is open, unpaid, or provider verification fails", async () => {

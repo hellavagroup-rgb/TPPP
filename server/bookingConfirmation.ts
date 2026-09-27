@@ -68,7 +68,10 @@ export async function confirmBookingInTransaction(tx: any, input: BookingConfirm
     if (!client) throw new Error("Client not found");
 
     const [existingSnapshot] = await tx.select().from(bookingSnapshots)
-      .where(eq(bookingSnapshots.clientId, client.id)).limit(1);
+      .where(and(
+        eq(bookingSnapshots.clientId, client.id),
+        eq(bookingSnapshots.tenantId, input.tenantId),
+      )).limit(1);
     if (existingSnapshot) {
       return {
         client,

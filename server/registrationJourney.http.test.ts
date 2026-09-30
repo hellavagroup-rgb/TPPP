@@ -21,6 +21,7 @@ const h = vi.hoisted(() => {
     bookingSnapshots: [] as any[],
     slotClaimFails: false,
     slotConflict: false,
+    failOptionEvidenceWrite: false,
     stripeLinkActive: true,
     deactivatedLinks: [] as string[],
     returnProviderKeys: [] as string[],
@@ -70,14 +71,42 @@ const h = vi.hoisted(() => {
     }
   };
 
-  const chain = (run: () => any[]) => {
+  const optionRowsMatching = (condition: any) => {
+    if (!condition) return state.options;
+    const { sql, params } = new PgDialect().sqlToQuery(condition);
+    const fields: Record<string, string> = {
+      id: "id",
+      clientId: "client_id",
+      tenantId: "tenant_id",
+      status: "status",
+      selectionToken: "selection_token",
+    };
+    return state.options.filter(option => Object.entries(fields).every(([property, column]) => {
+      if (!sql.includes(`"client_clinician_options"."${column}"`)) return true;
+      const escapedColumn = column.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const clause = new RegExp(`"${escapedColumn}"\\s*(=|in\\s*\\()\\s*(.*?)(?:\\s+and\\s+|\\s+or\\s+|\\)|$)`, "i")
+        .exec(sql);
+      if (!clause) return true;
+      const placeholders = [...clause[2].matchAll(/\$(\d+)/g)].map(match => params[Number(match[1]) - 1]);
+      const value = option[property];
+      return clause[1].toLowerCase() === "="
+        ? placeholders.length > 0 && value === placeholders[0]
+        : placeholders.includes(value);
+    }));
+  };
+
+  const chain = (run: () => any[], onWhere?: (condition: any) => void) => {
     let result: any[] | undefined;
     const execute = () => result ??= run();
     const builder: any = {
       where: (condition: any) => {
+        onWhere?.(condition);
         const originalRun = run;
         if (condition) run = () => {
           const rows = originalRun();
+          if (rows === state.options || (rows.length > 0 && rows.every(row => state.options.includes(row)))) {
+            return optionRowsMatching(condition).filter(row => rows.includes(row));
+          }
           // Enforce the real SQL ownership predicate for snapshot reads. A foreign
           // row with the same client ID must not satisfy an idempotent confirmation.
           const sql = new PgDialect().sqlToQuery(condition).sql;
@@ -116,14 +145,16 @@ const h = vi.hoisted(() => {
               ...f, clientId: f.clientId || null,
               displayId: f.clientId === state.client.id ? state.client.displayId : null,
             }))
-        : rowsFor(table)),
+        : tableName(table) === "client_clinician_options"
+          ? optionRowsMatching(null)
+          : rowsFor(table)),
     }),
     insert: (table: any) => ({
       values: (values: any | any[]) => {
         let inserted: any[] = [];
         if (tableName(table) === "client_clinician_options") {
           inserted = (Array.isArray(values) ? values : [values]).map((value, index) => ({
-            id: value.id || `inserted-option-${index}`,
+            id: value.id || `inserted-option-${state.options.length + index + 1}`,
             ...value,
           }));
           state.options.push(...inserted);
@@ -189,7 +220,9 @@ const h = vi.hoisted(() => {
       },
     }),
     update: (table: any) => ({
-      set: (patch: any) => chain(() => {
+      set: (patch: any) => {
+        let optionCondition: any;
+        return chain(() => {
         const name = tableName(table);
         if (name === "time_slots") {
           if (patch.isBooked && (state.slotClaimFails || state.slot.isBooked)) return [];
@@ -197,12 +230,16 @@ const h = vi.hoisted(() => {
           return [state.slot];
         }
         if (name === "client_clinician_options") {
-          for (const option of state.options) {
-            if (patch.status === "declined" || patch.status === "unavailable"
-              ? option.status === "pending"
-              : true) Object.assign(option, patch);
+          if (patch.sentAt && state.failOptionEvidenceWrite) throw new Error("sentAt evidence unavailable");
+          const matching = optionRowsMatching(optionCondition);
+          for (const option of matching) {
+            if (patch.status === "declined" || patch.status === "unavailable") {
+              if (option.status === "pending") Object.assign(option, patch);
+            } else {
+              Object.assign(option, patch);
+            }
           }
-          return state.options;
+          return matching;
         }
         if (name === "payment_charges") {
           for (const charge of state.charges) Object.assign(charge, patch);
@@ -235,7 +272,8 @@ const h = vi.hoisted(() => {
         }
         Object.assign(state.client, resolvedPatch);
         return [state.client];
-      }),
+        }, condition => { optionCondition = condition; });
+      },
     }),
     transaction: async (callback: any) => {
       if (state.rateChangeBeforeTransaction !== null) {
@@ -274,6 +312,9 @@ const h = vi.hoisted(() => {
 
   const storage: any = new Proxy({
     getClientById: vi.fn(async () => state.client?.id ? { ...state.client } : undefined),
+    getAllClients: vi.fn(async (_includeArchived: boolean, tenantId: string) =>
+      state.client?.id && state.client.tenantId === tenantId ? [{ ...state.client }] : []),
+    getClientsWithFailedPayments: vi.fn(async () => []),
     getAdminUsersByTenantId: vi.fn(async (tenantId: string) =>
       tenantId === state.tenant.id ? [{ id: "admin-a", email: "admin@practice.test" }] : []),
     getClinicianById: vi.fn(async (id: string) =>
@@ -546,6 +587,7 @@ function resetState(overrides: { client?: any; tenant?: any } = {}) {
   h.state.bookingSnapshots = [];
   h.state.slotClaimFails = false;
   h.state.slotConflict = false;
+  h.state.failOptionEvidenceWrite = false;
   h.state.stripeLinkActive = true;
   h.state.deactivatedLinks = [];
   h.state.returnProviderKeys = [];
@@ -1576,6 +1618,305 @@ describe("registration journey HTTP routes", () => {
     expect(h.state.activities.filter(a => a.action === "activity_client_options_sent")).toHaveLength(1);
   });
 
+  it.each([
+    ["registration-enabled", true],
+    ["registration-disabled", false],
+  ])("lets a client request fresh choices after declining (%s)", async (_configuration, registrationFormEnabled) => {
+    h.state.client.status = "FormsCompleted";
+    h.state.client.needsAdminCall = false;
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.tenant.autoAllocationEmailEnabled = true;
+    h.state.tenant.registrationFormEnabled = registrationFormEnabled;
+    h.state.options = [];
+
+    const firstOffer = await request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({ selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }] }),
+    });
+    expect(firstOffer.status).toBe(200);
+    const firstGeneration = h.state.options.filter(option => option.status === "pending");
+    expect(firstGeneration).toHaveLength(1);
+    const firstToken = firstGeneration[0].selectionToken;
+    const sentBeforeDecline = h.state.emails.length;
+
+    const decline = await request(`/api/public/options/${firstToken}/select`, {
+      method: "POST",
+      body: JSON.stringify({ decline: true }),
+    });
+    expect(decline.status).toBe(200);
+    expect(decline.body).toMatchObject({ declined: true });
+    expect(h.state.options.find(option => option.selectionToken === firstToken)?.status).toBe("declined");
+    expect(h.state.client.needsAdminCall).toBe(true);
+
+    const resend = await request("/api/clients/client-a/resend-allocation-options", { method: "POST" });
+    expect(resend.status).toBe(409);
+    expect(resend.body.code).toBe("OFFER_CLOSED");
+    expect(h.state.emails).toHaveLength(sentBeforeDecline);
+
+    const repeatedDecline = await request(`/api/public/options/${firstToken}/select`, {
+      method: "POST",
+      body: JSON.stringify({ decline: true }),
+    });
+    expect(repeatedDecline.status).toBe(410);
+    expect(h.state.client.needsAdminCall).toBe(true);
+
+    const replacement = await request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({ selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }] }),
+    });
+    expect(replacement.status).toBe(200);
+    expect(h.state.client.status).toBe("OptionsSent");
+    expect(h.state.client.needsAdminCall).toBe(true);
+    const currentOptions = h.state.options.filter(option => option.status === "pending");
+    expect(currentOptions).toHaveLength(1);
+    expect(currentOptions[0].selectionToken).not.toBe(firstToken);
+
+    const stalePortal = await request(`/api/public/options/${firstToken}`);
+    expect(stalePortal.status).toBe(410);
+    const staleSelection = await request(`/api/public/options/${firstToken}/select`, {
+      method: "POST",
+      body: JSON.stringify({ clinicianOptionId: firstGeneration[0].id }),
+    });
+    expect(staleSelection.status).toBe(410);
+    expect(h.state.client.status).toBe("OptionsSent");
+    expect(currentOptions[0].status).toBe("pending");
+
+    const currentPortal = await request(`/api/public/options/${currentOptions[0].selectionToken}`);
+    expect(currentPortal.status).toBe(200);
+    expect(currentPortal.body.options.map((option: any) => option.id)).toEqual([currentOptions[0].id]);
+
+    const selection = await request(`/api/public/options/${currentOptions[0].selectionToken}/select`, {
+      method: "POST",
+      body: JSON.stringify({ clinicianOptionId: currentOptions[0].id }),
+    });
+    expect(selection.status, JSON.stringify(selection.body)).toBe(200);
+    expect(["OptionSelected", "BookingConfirmed", "Scheduled"]).toContain(h.state.client.status);
+    const selectedStatus = h.state.client.status;
+    expect(h.state.client.needsAdminCall).toBe(true);
+    expect(h.state.options.find(option => option.id === currentOptions[0].id)?.status).toBe("selected");
+
+    const repeatedSelection = await request(`/api/public/options/${currentOptions[0].selectionToken}/select`, {
+      method: "POST",
+      body: JSON.stringify({ clinicianOptionId: currentOptions[0].id }),
+    });
+    expect(repeatedSelection.status).toBe(200);
+    expect(h.state.client.status).toBe(selectedStatus);
+    expect(h.state.client.needsAdminCall).toBe(true);
+  });
+
+  it("serializes concurrent declines so only the first can close the offer", async () => {
+    h.state.client.status = "OptionsSent";
+
+    const responses = await Promise.all([
+      request("/api/public/options/selection-token-a/select", {
+        method: "POST",
+        body: JSON.stringify({ decline: true }),
+      }),
+      request("/api/public/options/selection-token-a/select", {
+        method: "POST",
+        body: JSON.stringify({ decline: true }),
+      }),
+    ]);
+
+    expect(responses.map(response => response.status).sort()).toEqual([200, 410]);
+    expect(h.state.options[0].status).toBe("declined");
+    expect(h.state.client.needsAdminCall).toBe(true);
+    expect(h.state.activities.filter(activity => activity.action === "activity_appointment_options_declined")).toHaveLength(1);
+  });
+
+  it("allows only one concurrent staff reoffer after decline and sends one fresh generation", async () => {
+    h.state.client.status = "FormsCompleted";
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.tenant.autoAllocationEmailEnabled = true;
+    h.state.options = [];
+    const originalOffer = await request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({ selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }] }),
+    });
+    expect(originalOffer.status).toBe(200);
+    const original = h.state.options.find(option => option.status === "pending")!;
+    const decline = await request(`/api/public/options/${original.selectionToken}/select`, {
+      method: "POST",
+      body: JSON.stringify({ decline: true }),
+    });
+    expect(decline.status).toBe(200);
+    const emailCountBeforeReoffer = h.state.emails.length;
+
+    const reoffer = () => request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({
+        reoffer: true,
+        selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }],
+      }),
+    });
+    const responses = await Promise.all([reoffer(), reoffer()]);
+
+    expect(responses.map(response => response.status).sort()).toEqual([200, 409]);
+    expect(h.state.emails).toHaveLength(emailCountBeforeReoffer + 1);
+    const currentGeneration = h.state.options.filter(option => option.status === "pending");
+    expect(currentGeneration).toHaveLength(1);
+    expect(currentGeneration[0].selectionToken).not.toBe(original.selectionToken);
+    expect(h.state.options.filter(option => option.status === "declined")).toHaveLength(1);
+    expect(h.state.client.status).toBe("OptionsSent");
+  });
+
+  it("keeps a declined request visible through failed reoffer and allows a successful staff retry", async () => {
+    h.state.client.status = "FormsCompleted";
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.tenant.autoAllocationEmailEnabled = true;
+    h.state.options = [];
+    const firstOffer = await request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({ selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }] }),
+    });
+    expect(firstOffer.status).toBe(200);
+    const declined = h.state.options.find(option => option.status === "pending")!;
+    const decline = await request(`/api/public/options/${declined.selectionToken}/select`, {
+      method: "POST",
+      body: JSON.stringify({ decline: true }),
+    });
+    expect(decline.status).toBe(200);
+    expect(h.state.client.needsAdminCall).toBe(true);
+
+    h.state.emailResult = { success: false, outcome: "rejected", error: "Rejected" };
+    const failedReoffer = await request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({
+        reoffer: true,
+        selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }],
+      }),
+    });
+    expect(failedReoffer.status).toBe(502);
+    expect(h.state.client.needsAdminCall).toBe(true);
+    expect(h.state.client.status).toBe("OptionsSent");
+    expect(h.state.options.find(option => option.selectionToken === declined.selectionToken)?.status).toBe("declined");
+    const failedGeneration = h.state.options.filter(option => option.status === "unavailable");
+    expect(failedGeneration).toHaveLength(1);
+    const failedToken = failedGeneration[0].selectionToken;
+    expect(failedToken).not.toBe(declined.selectionToken);
+    expect((await request(`/api/public/options/${failedToken}`)).status).toBe(410);
+    const failedTokenSelection = await request(`/api/public/options/${failedToken}/select`, {
+      method: "POST",
+      body: JSON.stringify({ clinicianOptionId: failedGeneration[0].id }),
+    });
+    expect(failedTokenSelection.status).toBe(410);
+
+    const declinedPortal = await request(`/api/public/options/${declined.selectionToken}`);
+    expect(declinedPortal.status).toBe(410);
+    const declinedSelection = await request(`/api/public/options/${declined.selectionToken}/select`, {
+      method: "POST",
+      body: JSON.stringify({ decline: true }),
+    });
+    expect(declinedSelection.status).toBe(410);
+
+    h.state.emailResult = { success: true, outcome: "accepted" };
+    const retry = await request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({
+        reoffer: true,
+        selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }],
+      }),
+    });
+    expect(retry.status).toBe(200);
+    expect(h.state.client.needsAdminCall).toBe(true);
+    expect(h.state.client.status).toBe("OptionsSent");
+    const successfulGeneration = h.state.options.filter(option => option.status === "pending");
+    expect(successfulGeneration).toHaveLength(1);
+    expect(successfulGeneration[0].selectionToken).not.toBe(declined.selectionToken);
+    expect(successfulGeneration[0].selectionToken).not.toBe(failedToken);
+  });
+
+  it("resends only the fresh reoffer and uses its token as the portal entry point", async () => {
+    h.state.client.status = "FormsCompleted";
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.tenant.autoAllocationEmailEnabled = true;
+    h.state.options = [];
+    const initial = await request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({ selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }] }),
+    });
+    expect(initial.status).toBe(200);
+    const oldOption = h.state.options.find(option => option.status === "pending")!;
+    const decline = await request(`/api/public/options/${oldOption.selectionToken}/select`, {
+      method: "POST",
+      body: JSON.stringify({ decline: true }),
+    });
+    expect(decline.status).toBe(200);
+
+    const reoffer = await request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({
+        reoffer: true,
+        selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }],
+      }),
+    });
+    expect(reoffer.status).toBe(200);
+    const freshOption = h.state.options.find(option => option.status === "pending")!;
+    expect(freshOption.selectionToken).not.toBe(oldOption.selectionToken);
+
+    const resend = await request("/api/clients/client-a/resend-allocation-options", { method: "POST" });
+    expect(resend.status).toBe(200);
+    const resentEmail = h.state.emails[h.state.emails.length - 1];
+    expect(resentEmail.text).toContain(`https://app.test/options/${freshOption.selectionToken}`);
+    expect(resentEmail.text).not.toContain(oldOption.selectionToken);
+    expect(resentEmail.text).toContain("Option 1:");
+    expect(resentEmail.text).not.toContain("Option 2:");
+  });
+
+  it("keeps a provider-accepted fresh offer live if sent-at evidence cannot be written", async () => {
+    h.state.client.status = "FormsCompleted";
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.tenant.autoAllocationEmailEnabled = true;
+    h.state.options = [];
+    const initial = await request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({ selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }] }),
+    });
+    expect(initial.status).toBe(200);
+    const original = h.state.options.find(option => option.status === "pending")!;
+    const decline = await request(`/api/public/options/${original.selectionToken}/select`, {
+      method: "POST",
+      body: JSON.stringify({ decline: true }),
+    });
+    expect(decline.status).toBe(200);
+    h.state.failOptionEvidenceWrite = true;
+    const emailCountBeforeReoffer = h.state.emails.length;
+
+    const reoffer = await request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({
+        reoffer: true,
+        selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }],
+      }),
+    });
+
+    expect(reoffer.status).toBe(200);
+    expect(h.state.emails).toHaveLength(emailCountBeforeReoffer + 1);
+    expect(h.state.client.status).toBe("OptionsSent");
+    expect(h.state.client.needsAdminCall).toBe(true);
+    const currentOption = h.state.options.find(option => option.status === "pending");
+    expect(currentOption).toBeDefined();
+    expect(currentOption?.selectionToken).not.toBe(original.selectionToken);
+    expect(currentOption?.sentAt).toBeFalsy();
+  });
+
+  it("exposes offer state with allocation-detail visibility disabled", async () => {
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.tenant.allocationVisibilityEnabled = false;
+    h.state.client.status = "OptionsSent";
+    h.state.options = [{
+      ...h.state.options[0],
+      status: "declined",
+    }];
+
+    const response = await request("/api/clients");
+
+    expect(response.status).toBe(200);
+    const listedClient = response.body.find((client: any) => client.id === h.state.client.id);
+    expect(listedClient.allocationOfferState).toBe("declined");
+    expect(listedClient).not.toHaveProperty("allocationVisibility");
+  });
+
   it("offers a future one-off appointment and lets the client select it", async () => {
     h.state.options = [];
     h.state.client.status = "FormsCompleted";
@@ -1709,6 +2050,24 @@ describe("registration journey HTTP routes", () => {
     expect(h.state.slot.isBooked).toBe(false);
   });
 
+  it("does not let a foreign tenant's option token decline this client's current offer", async () => {
+    h.state.options = [{
+      id: "foreign-option", clientId: "client-a", clinicianId: "clinician-a", slotId: "slot-a",
+      tenantId: "tenant-b", status: "pending", selectionToken: "foreign-option-token",
+    }];
+    h.state.client.needsAdminCall = false;
+
+    const decline = await request("/api/public/options/foreign-option-token/select", {
+      method: "POST",
+      body: JSON.stringify({ decline: true }),
+    });
+
+    expect(decline.status).toBe(404);
+    expect(h.state.options[0].status).toBe("pending");
+    expect(h.state.client.needsAdminCall).toBe(false);
+    expect(h.state.activities).toHaveLength(0);
+  });
+
   it("requires an explicit tenant owner when creating an offer", async () => {
     h.state.options = [];
     h.state.client.status = "FormsCompleted";
@@ -1751,7 +2110,7 @@ describe("registration journey HTTP routes", () => {
     });
 
     expect(response.status).toBe(409);
-    expect(response.body.error).toMatch(/no allocation options/i);
+    expect(response.body.error).toMatch(/no active pending offer|no allocation options/i);
     expect(h.state.emails).toHaveLength(0);
   });
 

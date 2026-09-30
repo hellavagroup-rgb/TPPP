@@ -12,6 +12,7 @@ import {
 import { formatDateUK, formatAssignedSlot } from "@/lib/dateUtils";
 import { correctSummaryClientName, editClientStatusPatch, getSummaryClientName } from "@shared/clientIdentitySummary";
 import { AllocationCardDetails, type AllocationVisibilityData } from "@/components/AllocationVisibility";
+import { AllocationOfferActions, type AllocationOfferState } from "@/components/AllocationOfferActions";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -125,7 +126,11 @@ function mutationErrorMessage(error: Error, fallback: string): string {
 }
 
 type ClinicianWithAvailability = Clinician & { name: string; availability: TimeSlot[] };
-type BoardClient = ClientType & { allocationVisibility?: AllocationVisibilityData | null; bookingSnapshot?: { id: string } | null };
+type BoardClient = ClientType & {
+  allocationVisibility?: AllocationVisibilityData | null;
+  allocationOfferState?: AllocationOfferState;
+  bookingSnapshot?: { id: string } | null;
+};
 
 function isSlotPending(slot: TimeSlot): boolean {
   return slot.type === "Recurring" && Boolean(slot.startDate && slot.startDate > practiceToday());
@@ -231,6 +236,7 @@ export default function Clients() {
   };
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedClient, setSelectedClient] = useState<ClientType | null>(null);
+  const [closedOfferClientIds, setClosedOfferClientIds] = useState<Set<string>>(() => new Set());
 
   // Custom insurer management
   const { data: insurerList = [] } = useInsurers();
@@ -376,12 +382,20 @@ export default function Clients() {
   const [selectedOptions, setSelectedOptions] = useState<{clinicianId: string; slotId: string; formatOverride?: { preference: SessionFormat; slotFormat: SessionFormat }}[]>([]);
 
   const allocateOptionsMutation = useMutation({
-    mutationFn: async ({ clientId, selections }: { clientId: string; selections: {clinicianId: string; slotId: string; formatOverride?: { preference: SessionFormat; slotFormat: SessionFormat }}[] }) => {
-      const response = await apiRequest("POST", `/api/clients/${clientId}/allocate-options`, { selections });
+    mutationFn: async ({ clientId, selections, reoffer }: { clientId: string; selections: {clinicianId: string; slotId: string; formatOverride?: { preference: SessionFormat; slotFormat: SessionFormat }}[]; reoffer?: boolean }) => {
+      const response = await apiRequest("POST", `/api/clients/${clientId}/allocate-options`, {
+        selections,
+        ...(reoffer ? { reoffer: true } : {}),
+      });
       return response.json();
     },
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       invalidateOperationalData(queryClient);
+      setClosedOfferClientIds((current) => {
+        const next = new Set(current);
+        next.delete(variables.clientId);
+        return next;
+      });
       toast({ title: "Options Sent", description: "Client has been moved to Options Sent." });
       setSelectedClient(null);
       setIsAllocateDialogOpen(false);
@@ -389,6 +403,7 @@ export default function Clients() {
       setAllocationReason("");
     },
     onError: (error: Error) => {
+      invalidateOperationalData(queryClient);
       let description = "Failed to send options. The client was not moved to Options Sent.";
       const jsonStart = error.message.indexOf("{");
       if (jsonStart !== -1) {
@@ -411,13 +426,17 @@ export default function Clients() {
     onSuccess: () => {
       toast({ title: "Options resent", description: "The allocation options email has been sent again." });
     },
-    onError: (error: Error) => {
+    onError: (error: Error, clientId) => {
+      invalidateOperationalData(queryClient);
       let description = "The allocation options email could not be resent.";
       const jsonStart = error.message.indexOf("{");
       if (jsonStart !== -1) {
         try {
           const parsed = JSON.parse(error.message.slice(jsonStart));
           if (parsed.error) description = parsed.error;
+          if (parsed.code === "OFFER_CLOSED") {
+            setClosedOfferClientIds((current) => new Set(current).add(clientId));
+          }
         } catch {
           // Keep the safe fallback message when the API response is not JSON.
         }
@@ -1417,6 +1436,15 @@ export default function Clients() {
     setIsAllocateDialogOpen(true);
   };
 
+  const handleOfferNewChoices = (client: ClientType) => {
+    setSelectedClient(client);
+    setIsManualAllocation(false);
+    setAllocationReason("");
+    setSelectedOptions([]);
+    fetchClientAvailability(client.id);
+    setIsAllocateDialogOpen(true);
+  };
+
   const handleOpenEditClient = (client: ClientType) => {
     setEditingClient(client);
     setEditClientSummaryName(getSummaryClientName(client.notes));
@@ -2354,7 +2382,8 @@ export default function Clients() {
                               Retry Registration Delivery
                             </DropdownMenuItem>
                           )}
-                          {client.status === "OptionsSent" && (
+                          {client.status === "OptionsSent" && client.allocationOfferState === "pending"
+                            && !closedOfferClientIds.has(client.id) && (
                             <DropdownMenuItem
                               disabled={resendAllocationOptionsMutation.isPending}
                               onClick={() => resendAllocationOptionsMutation.mutate(client.id)}
@@ -2444,23 +2473,15 @@ export default function Clients() {
                         {client.insurer && client.insurer !== "Private" && <Badge variant="outline" className="text-[10px] mb-2">{client.insurer}</Badge>}
                         {contactPreferenceBadge(client)}
                         {paymentStatusBadge(client) && <div className="mt-1">{paymentStatusBadge(client)}</div>}
-                        {client.status === "OptionsSent" && (
-                          <>
-                            <p className="text-[10px] text-orange-600 mt-2 flex items-center gap-1"><Mail className="h-3 w-3" /> Options sent to client</p>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="w-full gap-1 text-[10px] mt-2 border-orange-300 text-orange-700 hover:bg-orange-50 h-auto py-2"
-                              disabled={resendAllocationOptionsMutation.isPending}
-                              onClick={() => resendAllocationOptionsMutation.mutate(client.id)}
-                              data-testid={`button-resend-allocation-options-${client.id}`}
-                            >
-                              {resendAllocationOptionsMutation.isPending
-                                ? <Loader2 className="h-3 w-3 animate-spin" />
-                                : <Mail className="h-3 w-3" />}
-                              Resend Options Email
-                            </Button>
-                          </>
+                        {client.status === "OptionsSent" && multiClinicianAllocationEnabled && (
+                          <AllocationOfferActions
+                            state={closedOfferClientIds.has(client.id) ? "closed" : client.allocationOfferState ?? null}
+                            clientId={client.id}
+                            resendPending={resendAllocationOptionsMutation.isPending}
+                            onContactFamily={() => handleOpenEditClient(client)}
+                            onOfferNewChoices={() => handleOfferNewChoices(client)}
+                            onResend={() => resendAllocationOptionsMutation.mutate(client.id)}
+                          />
                         )}
                         {client.status === "OptionSelected" && (
                           <p className="text-[10px] text-teal-600 mt-2 flex items-center gap-1"><CheckCircle2 className="h-3 w-3" /> Client selected an option</p>
@@ -3346,7 +3367,11 @@ export default function Clients() {
                 disabled={allocationPreferenceLoading || selectedOptions.length === 0 || allocateOptionsMutation.isPending}
                 onClick={() => {
                   if (selectedClient) {
-                    allocateOptionsMutation.mutate({ clientId: selectedClient.id, selections: selectedOptions });
+                    allocateOptionsMutation.mutate({
+                      clientId: selectedClient.id,
+                      selections: selectedOptions,
+                      reoffer: selectedClient.status === "OptionsSent",
+                    });
                   }
                 }}
               >

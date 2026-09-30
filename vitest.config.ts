@@ -14,7 +14,7 @@ export default defineConfig({
   test: {
     // Run tests from the project root, not the Vite client root
     root: '.',
-    include: ['server/**/*.test.ts', 'client/src/lib/**/*.test.ts', 'client/src/pages/**/*.browser.test.tsx'],
+    include: ['server/**/*.test.ts', 'client/src/lib/**/*.test.ts', 'client/src/pages/**/*.browser.test.tsx', 'client/src/components/**/*.browser.test.tsx'],
     environment: 'node',
     // Parallel imports can start the server while authSession.test.ts is still
     // resolving routes, hitting the existing routes/index import cycle.

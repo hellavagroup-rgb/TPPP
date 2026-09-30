@@ -7,6 +7,7 @@ import multer from "multer";
 import ExcelJS from "exceljs";
 import { ClientAllocationUpdateError, ManualAssignmentError, SlotRetirementConflictError, storage } from "./storage";
 import { getAllocationVisibility } from "./allocationVisibility";
+import { getAllocationOfferStates } from "./allocationOfferState";
 import { withTenantAllocationVisibility } from "@shared/allocationVisibility";
 import { setupAuth, requireAuth, requireAdmin, requireClinician, hashPassword, auditLog, destroySessionsForUser } from "./auth";
 import passport from "passport";
@@ -1185,8 +1186,11 @@ export async function registerRoutes(
       const failedMap = new Map(failedPayments.map(fp => [fp.clientId, fp.failureReason]));
       const visibility = req.tenant?.allocationVisibilityEnabled && req.tenant.id
         ? await getAllocationVisibility(clientList, req.tenant.id) : null;
+      const offerStates = req.tenant?.multiClinicianAllocationEnabled && req.tenant.id
+        ? await getAllocationOfferStates(clientList, req.tenant.id) : null;
       const clients = clientList.map(c => ({
         ...withTenantAllocationVisibility(c, req.tenant?.id ?? "", !!visibility, visibility),
+        allocationOfferState: offerStates?.get(c.id) ?? null,
         hasFailedPayment: failedMap.has(c.id),
         latestFailureReason: failedMap.get(c.id) ?? null,
         paymentSetupRecoveryHref: c.registrationPaymentFailedAt
@@ -1834,7 +1838,7 @@ export async function registerRoutes(
   // CY&A: Multi-clinician allocation — inserts client_clinician_options rows and holds slots
   app.post("/api/clients/:clientId/allocate-options", requireAdmin, auditLog("assign", "client"), async (req, res) => {
     try {
-      const { selections } = req.body;
+      const { selections, reoffer } = req.body;
       // selections: [{clinicianId, slotId}, ...]
 
       if (!Array.isArray(selections) || selections.length < 1 || selections.length > 3) {
@@ -1919,6 +1923,24 @@ export async function registerRoutes(
           eq(clients.id, req.params.clientId), eq(clients.tenantId, req.tenant!.id),
         )).for("update");
         if (!current || current.completedAt) throw new Error("Reopen this completed booking before offering new slots.");
+        if (reoffer === true) {
+          const pending = await tx.select().from(clientClinicianOptions).where(and(
+            eq(clientClinicianOptions.clientId, req.params.clientId),
+            eq(clientClinicianOptions.tenantId, req.tenant!.id),
+            eq(clientClinicianOptions.status, "pending"),
+          ));
+          // A repeated recovery click must not replace a just-sent generation.
+          // Invalid old slots still permit the explicit fresh-choices recovery.
+          if (pending.length) {
+            const valid = await Promise.all(pending.map(async option => {
+              if (!option.slotId) return false;
+              const [slot] = await tx.select().from(timeSlots).where(eq(timeSlots.id, option.slotId));
+              return slot && slot.tenantId === req.tenant!.id
+                && slot.clinicianId === option.clinicianId && !slotUnavailableReason(slot);
+            }));
+            if (valid.every(Boolean)) throw new Error("REOFFER_ALREADY_PREPARED");
+          }
+        }
         // Lock in a stable order and recheck after locking: availability may have
         // changed since the request was validated. Offers themselves are not holds.
         for (const sel of [...selections].sort((a, b) => a.slotId.localeCompare(b.slotId))) {
@@ -1934,19 +1956,18 @@ export async function registerRoutes(
           inArray(clientClinicianOptions.status, ["pending", "selected"]),
         ));
         await tx.insert(clientClinicianOptions).values(options as any);
-      });
 
       // Auto-send allocation email if enabled
       if (shouldSendAllocationEmail) {
         try {
           const optionDetails = await Promise.all(
             options.map(async (opt) => {
-              const [clinRow] = await db.select().from(clinicians).where(eq(clinicians.id, opt.clinicianId)).limit(1);
+              const [clinRow] = await tx.select().from(clinicians).where(eq(clinicians.id, opt.clinicianId)).limit(1);
               const clinUser = clinRow?.userId
-                ? await db.select({ name: users.name }).from(users).where(eq(users.id, clinRow.userId)).limit(1).then(r => r[0])
+                ? await tx.select({ name: users.name }).from(users).where(eq(users.id, clinRow.userId)).limit(1).then(r => r[0])
                 : undefined;
               const slotRow = opt.slotId
-                ? await db.select().from(timeSlots).where(eq(timeSlots.id, opt.slotId)).limit(1).then(r => r[0])
+                ? await tx.select().from(timeSlots).where(eq(timeSlots.id, opt.slotId)).limit(1).then(r => r[0])
                 : undefined;
               return {
                 clinicianName: clinUser?.name || 'Clinician',
@@ -1975,28 +1996,34 @@ export async function registerRoutes(
           if (!sendResult.success) {
             throw new Error(sendResult.error || "Email provider rejected the allocation email");
           }
-          try {
-            await db.update(clientClinicianOptions).set({ sentAt: new Date() })
-              .where(and(eq(clientClinicianOptions.tenantId, req.tenant!.id),
-                inArray(clientClinicianOptions.selectionToken, options.map(option => option.selectionToken))));
-          } catch (timestampError) {
-            // Delivery already succeeded; do not mark delivered options unavailable.
-            console.error("Could not record allocation delivery time:", timestampError);
-          }
           console.log(`Allocation options email sent to client ${req.params.clientId}`);
         } catch (emailErr) {
           console.error('Failed to send allocation options email:', emailErr);
-          await db.update(clientClinicianOptions).set({ status: "unavailable" }).where(
+          await tx.update(clientClinicianOptions).set({ status: "unavailable" }).where(
             inArray(clientClinicianOptions.selectionToken, options.map(option => option.selectionToken))
           );
           return res.status(502).json({ error: "The allocation email could not be sent. The client was not moved to Options Sent." });
         }
       }
 
-      await db.update(clients).set({
+      await tx.update(clients).set({
         status: "OptionsSent",
         updatedAt: new Date(),
       }).where(eq(clients.id, req.params.clientId));
+      });
+      if (res.headersSent) return;
+      if (shouldSendAllocationEmail) {
+        // Best-effort evidence must not abort the transaction after provider
+        // acceptance (PostgreSQL errors leave an entire transaction aborted).
+        try {
+          await db.update(clientClinicianOptions).set({ sentAt: new Date() }).where(and(
+            eq(clientClinicianOptions.tenantId, req.tenant!.id),
+            inArray(clientClinicianOptions.selectionToken, options.map(option => option.selectionToken)),
+          ));
+        } catch (timestampError) {
+          console.error("Could not record allocation delivery time:", timestampError);
+        }
+      }
 
       const updated = await storage.getClientById(req.params.clientId);
       await recordActivity(req, "activity_client_options_sent", "client", req.params.clientId, {
@@ -2014,6 +2041,9 @@ export async function registerRoutes(
       res.json(updated);
     } catch (error) {
       console.error("Failed to allocate options:", error);
+      if (error instanceof Error && error.message === "REOFFER_ALREADY_PREPARED") {
+        return res.status(409).json({ error: "New choices have already been prepared. Refresh the client before sending again." });
+      }
       if (error instanceof Error && error.message === "OFFER_SLOT_UNAVAILABLE") {
         return res.status(409).json({ error: "An appointment slot is no longer available. Please refresh and choose another slot." });
       }
@@ -2044,25 +2074,39 @@ export async function registerRoutes(
         return res.status(503).json({ error: "Allocation email is not configured" });
       }
 
-      const allOptions = (await storage.getClientClinicianOptions(req.params.clientId))
-        .filter(option => option.tenantId === req.tenant!.id && option.status === "pending");
+      // Hold the same client lock used by decline, selection and replacement until
+      // provider acceptance, so a resend cannot email an already closed generation.
+      const tenant = req.tenant;
+      let resentTokens: string[] = [];
+      await db.transaction(async (tx) => {
+      const [currentClient] = await tx.select().from(clients).where(and(
+        eq(clients.id, client.id), eq(clients.tenantId, req.tenant!.id),
+      )).for("update");
+      if (!currentClient || currentClient.status !== "OptionsSent") {
+        return res.status(409).json({ code: "OFFER_CLOSED", error: "There is no active pending offer. Please offer new choices instead." });
+      }
+      const allOptions = await tx.select().from(clientClinicianOptions).where(and(
+        eq(clientClinicianOptions.clientId, client.id),
+        eq(clientClinicianOptions.tenantId, req.tenant!.id),
+        eq(clientClinicianOptions.status, "pending"),
+      ));
       const firstToken = allOptions[0]?.selectionToken;
       if (!firstToken) {
-        return res.status(409).json({ error: "No allocation options are available to resend" });
+        return res.status(409).json({ code: "OFFER_CLOSED", error: "There is no active pending offer. Please offer new choices instead." });
       }
-      for (const option of allOptions) {
+      for (const option of [...allOptions].sort((a, b) => (a.slotId || "").localeCompare(b.slotId || ""))) {
         if (!option.slotId) {
-          return res.status(409).json({ error: "An allocation option no longer has an appointment slot" });
+          return res.status(409).json({ code: "OFFER_CLOSED", error: "An allocation option no longer has an appointment slot. Please offer new choices instead." });
         }
         const [slot, clinician] = await Promise.all([
-          db.select().from(timeSlots).where(eq(timeSlots.id, option.slotId)).limit(1).then(rows => rows[0]),
-          db.select().from(clinicians).where(eq(clinicians.id, option.clinicianId)).limit(1).then(rows => rows[0]),
+          tx.select().from(timeSlots).where(eq(timeSlots.id, option.slotId)).for("update").then(rows => rows[0]),
+          tx.select().from(clinicians).where(eq(clinicians.id, option.clinicianId)).limit(1).then(rows => rows[0]),
         ]);
-        if (!slot || slot.tenantId !== req.tenant.id || clinician?.tenantId !== req.tenant.id
+        if (!slot || slot.tenantId !== tenant.id || clinician?.tenantId !== tenant.id
           || slot.clinicianId !== option.clinicianId || slotUnavailableReason(slot)) {
-          return res.status(409).json({ error: "An appointment option is no longer available. Please offer new options instead." });
+          return res.status(409).json({ code: "OFFER_CLOSED", error: "An appointment option is no longer available. Please offer new choices instead." });
         }
-        if (req.tenant.zoomLinkEmailEnabled === true && onlineBookingNeedsZoomLink(slot?.locationType) && !isValidZoomLink(clinician?.zoomLink)) {
+        if (tenant.zoomLinkEmailEnabled === true && onlineBookingNeedsZoomLink(slot?.locationType) && !isValidZoomLink(clinician?.zoomLink)) {
           const clinicianName = await getClinicianActivityName(clinician?.id);
           return res.status(409).json({ error: `${clinicianName} needs a valid Zoom link before these online options can be resent.` });
         }
@@ -2070,12 +2114,12 @@ export async function registerRoutes(
 
       const optionDetails = await Promise.all(
         allOptions.map(async (opt) => {
-          const [clinRow] = await db.select().from(clinicians).where(eq(clinicians.id, opt.clinicianId)).limit(1);
+          const [clinRow] = await tx.select().from(clinicians).where(eq(clinicians.id, opt.clinicianId)).limit(1);
           const clinUser = clinRow?.userId
-            ? await db.select({ name: users.name }).from(users).where(eq(users.id, clinRow.userId)).limit(1).then(r => r[0])
+            ? await tx.select({ name: users.name }).from(users).where(eq(users.id, clinRow.userId)).limit(1).then(r => r[0])
             : undefined;
           const slotRow = opt.slotId
-            ? await db.select().from(timeSlots).where(eq(timeSlots.id, opt.slotId)).limit(1).then(r => r[0])
+            ? await tx.select().from(timeSlots).where(eq(timeSlots.id, opt.slotId)).limit(1).then(r => r[0])
             : undefined;
           return {
             clinicianName: clinUser?.name || "Clinician",
@@ -2095,21 +2139,24 @@ export async function registerRoutes(
 
       const portalUrl = `${appBase}/options/${firstToken}`;
       const tenantContext = {
-        id: req.tenant.id,
-        name: req.tenant.name,
-        fromEmail: req.tenant.fromEmail,
-        primaryColor: req.tenant.primaryColor,
+        id: tenant.id,
+        name: tenant.name,
+        fromEmail: tenant.fromEmail,
+        primaryColor: tenant.primaryColor,
       };
       const allocationEmail = await generateAllocationOptionsEmail(optionDetails, portalUrl, tenantContext);
       const sendResult = await sendEmail({ ...allocationEmail, to: client.email });
       if (!sendResult.success) {
         return res.status(502).json({ error: "The allocation email could not be resent" });
       }
+      resentTokens = allOptions.map(option => option.selectionToken);
+      });
+      if (res.headersSent) return;
       try {
         await db.update(clientClinicianOptions).set({ sentAt: new Date() })
           .where(and(eq(clientClinicianOptions.clientId, client.id),
             eq(clientClinicianOptions.tenantId, req.tenant.id),
-            eq(clientClinicianOptions.status, "pending")));
+            inArray(clientClinicianOptions.selectionToken, resentTokens)));
       } catch (timestampError) {
         console.error("Could not record allocation resend time:", timestampError);
       }
@@ -2755,16 +2802,29 @@ export async function registerRoutes(
 
       if (decline) {
         // Options never reserve slots; declining only closes this client's options.
-        await db.transaction(async (tx) => {
-          for (const opt of allOptions) {
-            await tx.update(clientClinicianOptions)
-              .set({ status: "declined" })
-              .where(eq(clientClinicianOptions.id, opt.id));
+        const declined = await db.transaction(async (tx) => {
+          const [currentClient] = await tx.select().from(clients).where(and(
+            eq(clients.id, optionRow.clientId), eq(clients.tenantId, optionRow.tenantId),
+          )).for("update");
+          const [currentEntry] = await tx.select().from(clientClinicianOptions).where(and(
+            eq(clientClinicianOptions.id, optionRow.id),
+            eq(clientClinicianOptions.clientId, optionRow.clientId),
+            eq(clientClinicianOptions.tenantId, optionRow.tenantId),
+          ));
+          if (!currentClient || currentClient.status !== "OptionsSent" || currentEntry?.status !== "pending") {
+            return false;
           }
+          await tx.update(clientClinicianOptions).set({ status: "declined" }).where(and(
+            eq(clientClinicianOptions.clientId, optionRow.clientId),
+            eq(clientClinicianOptions.tenantId, optionRow.tenantId),
+            eq(clientClinicianOptions.status, "pending"),
+          ));
           await tx.update(clients)
             .set({ needsAdminCall: true, updatedAt: new Date() })
-            .where(eq(clients.id, optionRow.clientId));
+            .where(and(eq(clients.id, optionRow.clientId), eq(clients.tenantId, optionRow.tenantId)));
+          return true;
         });
+        if (!declined) return res.status(410).json({ error: "This options link is no longer active" });
         await recordActivity(req, "activity_appointment_options_declined", "client", client.id, {
           actorName: "Client",
           clientDisplayId: client.displayId || "Client",

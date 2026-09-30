@@ -32,3 +32,4 @@
 - [External bookings are not portal confirmations](external-bookings-not-portal-confirmations.md) — staff diary review is separate evidence; never translate it into a portal snapshot or payment.
 - [Historical appointment evidence](historic-appointment-evidence.md) — old allocation status/text is not a verified appointment; preserve context without inferring a selection from offers.
 - [Future appointment promises](future-appointment-promises.md) — exact future dates use one-off slots; recurring windows must not imply a verified first appointment.
+- [Offer recovery concurrency](offer-recovery-concurrency.md) — serialize decline, replacement, selection and resend; best-effort delivery evidence must not abort accepted offers.

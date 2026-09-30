@@ -1915,6 +1915,49 @@ describe("registration journey HTTP routes", () => {
     const listedClient = response.body.find((client: any) => client.id === h.state.client.id);
     expect(listedClient.allocationOfferState).toBe("declined");
     expect(listedClient).not.toHaveProperty("allocationVisibility");
+    expect(listedClient.allocationOfferEligibility).toBeNull();
+  });
+
+  it.each([
+    ["available", {}, 1],
+    ["booked", { isBooked: true }, 0],
+    ["expired", { date: "2000-01-01" }, 0],
+    ["foreign slot", { tenantId: "tenant-b" }, 0],
+  ])("shows %s pending slot eligibility on the staff list without changing history", async (_, changes, availableCount) => {
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.tenant.allocationVisibilityEnabled = false;
+    h.state.client.needsCall = true;
+    Object.assign(h.state.slot, changes);
+    const response = await request("/api/clients");
+    expect(response.status).toBe(200);
+    const listedClient = response.body.find((client: any) => client.id === h.state.client.id);
+    expect(listedClient.status).toBe("OptionsSent");
+    expect(listedClient.needsCall).toBe(true);
+    expect(listedClient.allocationOfferState).toBe("pending");
+    expect(listedClient.allocationOfferEligibility).toEqual({
+      pendingCount: 1, availableCount, unavailableCount: 1 - availableCount,
+    });
+    expect(listedClient).not.toHaveProperty("allocationVisibility");
+    expect(JSON.stringify(response.body)).not.toContain("selection-token-a");
+    expect(h.state.options[0].status).toBe("pending");
+  });
+
+  it("reports mixed pending eligibility without reopening a closed public link", async () => {
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.tenant.allocationVisibilityEnabled = false;
+    h.state.options.push(
+      { ...h.state.options[0], id: "option-missing", slotId: "missing-slot", selectionToken: "missing-token" },
+      { ...h.state.options[0], id: "option-old", status: "unavailable", selectionToken: "closed-token" },
+      { ...h.state.options[0], id: "option-foreign", tenantId: "tenant-b", selectionToken: "foreign-token" },
+    );
+    const response = await request("/api/clients");
+    const listedClient = response.body.find((client: any) => client.id === h.state.client.id);
+    expect(listedClient.allocationOfferEligibility).toEqual({
+      pendingCount: 2, availableCount: 1, unavailableCount: 1,
+    });
+    expect(JSON.stringify(response.body)).not.toMatch(/selection-token-a|missing-token|closed-token|foreign-token/);
+    expect((await request("/api/public/options/closed-token")).status).toBe(410);
+    expect(h.state.options.find((option: any) => option.id === "option-old").status).toBe("unavailable");
   });
 
   it("offers a future one-off appointment and lets the client select it", async () => {

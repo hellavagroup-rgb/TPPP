@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Mail, RefreshCw, UserRound } from "lucide-react";
+import type { AllocationOfferEligibility } from "@shared/allocationOfferSummary";
 
 export type AllocationOfferState = "pending" | "declined" | "closed" | null;
 
@@ -10,6 +11,7 @@ interface AllocationOfferActionsProps {
   onResend: () => void;
   resendPending?: boolean;
   clientId: string;
+  eligibility?: AllocationOfferEligibility | null;
 }
 
 export function AllocationOfferActions({
@@ -19,8 +21,37 @@ export function AllocationOfferActions({
   onResend,
   resendPending = false,
   clientId,
+  eligibility,
 }: AllocationOfferActionsProps) {
   if (state === "pending") {
+    const unavailableCount = eligibility?.unavailableCount ?? 0;
+    if (unavailableCount > 0) {
+      const pendingCount = eligibility?.pendingCount ?? 0;
+      const availableCount = eligibility?.availableCount ?? 0;
+      const warning = availableCount === 0
+        ? `All ${pendingCount} appointment choices are unavailable (${unavailableCount} unavailable). Offer New Choices to send the client current options.`
+        : `${unavailableCount} of ${pendingCount} appointment choices are unavailable; ${availableCount} remain available. Offer New Choices to send the client current options.`;
+
+      return (
+        <div className="mt-2 space-y-2" data-testid={`allocation-offer-actions-${clientId}`}>
+          <p className="text-[10px] text-orange-600 flex items-center gap-1">
+            <Mail className="h-3 w-3" /> Options sent to client
+          </p>
+          <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md p-2" role="status">
+            {warning}
+          </p>
+          <Button
+            size="sm"
+            className="w-full gap-1 text-xs"
+            onClick={onOfferNewChoices}
+            data-testid={`button-offer-new-choices-${clientId}`}
+          >
+            <RefreshCw className="h-3 w-3" /> Offer New Choices
+          </Button>
+        </div>
+      );
+    }
+
     return (
       <div data-testid={`allocation-offer-actions-${clientId}`}>
         <p className="text-[10px] text-orange-600 mt-2 flex items-center gap-1">

@@ -13,6 +13,7 @@ import { formatDateUK, formatAssignedSlot } from "@/lib/dateUtils";
 import { correctSummaryClientName, editClientStatusPatch, getSummaryClientName } from "@shared/clientIdentitySummary";
 import { AllocationCardDetails, type AllocationVisibilityData } from "@/components/AllocationVisibility";
 import { AllocationOfferActions, type AllocationOfferState } from "@/components/AllocationOfferActions";
+import type { AllocationOfferEligibility } from "@shared/allocationOfferSummary";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -129,6 +130,7 @@ type ClinicianWithAvailability = Clinician & { name: string; availability: TimeS
 type BoardClient = ClientType & {
   allocationVisibility?: AllocationVisibilityData | null;
   allocationOfferState?: AllocationOfferState;
+  allocationOfferEligibility?: AllocationOfferEligibility | null;
   bookingSnapshot?: { id: string } | null;
 };
 
@@ -2383,7 +2385,8 @@ export default function Clients() {
                             </DropdownMenuItem>
                           )}
                           {client.status === "OptionsSent" && client.allocationOfferState === "pending"
-                            && !closedOfferClientIds.has(client.id) && (
+                            && !closedOfferClientIds.has(client.id)
+                            && (client.allocationOfferEligibility?.unavailableCount ?? 0) === 0 && (
                             <DropdownMenuItem
                               disabled={resendAllocationOptionsMutation.isPending}
                               onClick={() => resendAllocationOptionsMutation.mutate(client.id)}
@@ -2476,6 +2479,7 @@ export default function Clients() {
                         {client.status === "OptionsSent" && multiClinicianAllocationEnabled && (
                           <AllocationOfferActions
                             state={closedOfferClientIds.has(client.id) ? "closed" : client.allocationOfferState ?? null}
+                            eligibility={client.allocationOfferEligibility}
                             clientId={client.id}
                             resendPending={resendAllocationOptionsMutation.isPending}
                             onContactFamily={() => handleOpenEditClient(client)}

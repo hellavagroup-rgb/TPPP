@@ -1190,7 +1190,8 @@ export async function registerRoutes(
         ? await getAllocationOfferStates(clientList, req.tenant.id) : null;
       const clients = clientList.map(c => ({
         ...withTenantAllocationVisibility(c, req.tenant?.id ?? "", !!visibility, visibility),
-        allocationOfferState: offerStates?.get(c.id) ?? null,
+        allocationOfferState: offerStates?.get(c.id)?.state ?? null,
+        allocationOfferEligibility: offerStates?.get(c.id)?.eligibility ?? null,
         hasFailedPayment: failedMap.has(c.id),
         latestFailureReason: failedMap.get(c.id) ?? null,
         paymentSetupRecoveryHref: c.registrationPaymentFailedAt

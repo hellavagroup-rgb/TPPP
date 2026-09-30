@@ -58,8 +58,9 @@ import {
 } from "@shared/registrationConsent";
 import { isValidZoomLink, onlineBookingNeedsZoomLink, shouldResetZoomDelivery } from "@shared/bookingZoom";
 import { zoomDeliveryIdempotencyKey } from "./bookingZoomWorkflow";
-import { confirmBooking, confirmBookingInTransaction } from "./bookingConfirmation";
+import { confirmBooking, confirmBookingInTransaction, ExternalBookingReviewConflictError } from "./bookingConfirmation";
 import { confirmationBlocker, confirmationBlockerCopy } from "@shared/confirmationRecovery";
+import { externalBookingReview, historicReconciliationInventory, recordExternalBookingReview } from "./historicReconciliation";
 import { inspectRegistrationPayment, reconcileRegistrationPayment } from "./paymentReconciliation";
 import { listStripeWebhookFailures, recordStripeWebhookFailure, resolveStripeWebhookFailure } from "./stripeWebhookFailures";
 import Stripe from "stripe";
@@ -1152,6 +1153,27 @@ export async function registerRoutes(
   });
 
   // ============ CLIENT ROUTES (GDPR Protected) ============
+  app.get("/api/historic-reconciliation", requireAdmin, async (req, res) => {
+    if (!req.tenant?.id) return res.status(403).json({ error: "Practice context is required" });
+    try {
+      res.json(await historicReconciliationInventory(req.tenant.id));
+    } catch (error) {
+      console.error("Historic reconciliation inventory failed", error);
+      res.status(500).json({ error: "Could not load reconciliation evidence" });
+    }
+  });
+
+  app.post("/api/historic-reconciliation/:id/external-review", requireAdmin, async (req, res) => {
+    if (!req.tenant?.id || !req.user?.id) return res.status(403).json({ error: "Practice administrator required" });
+    const parsed = externalBookingReview.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Provide a verified diary reference, appointment details and family-message review." });
+    try {
+      res.json(await recordExternalBookingReview(req.tenant.id, req.params.id, req.user.id, req.ip || null, parsed.data));
+    } catch (error) {
+      res.status(409).json({ error: error instanceof Error ? error.message : "External booking review could not be recorded" });
+    }
+  });
+
   app.get("/api/clients", requireAdmin, auditLog("view", "client"), async (req, res) => {
     try {
       const includeArchived = req.query.includeArchived === "true";
@@ -1459,7 +1481,7 @@ export async function registerRoutes(
       
       const isConfirmation = ["Scheduled", "BookingConfirmed"].includes(req.body.status)
         && req.body.status !== oldStatus;
-      if (isConfirmation && req.tenant?.confirmationRecoveryEnabled) {
+      if (isConfirmation && (req.tenant?.confirmationRecoveryEnabled || req.tenant?.registrationFormEnabled)) {
         const [assignedSlot, assignedClinician] = await Promise.all([
           currentClient.assignedSlotId
             ? db.select().from(timeSlots).where(and(
@@ -1692,6 +1714,7 @@ export async function registerRoutes(
 
       res.json(updated);
     } catch (error) {
+      if (error instanceof ExternalBookingReviewConflictError) return res.status(409).json({ error: error.message });
       console.error("Failed to update client:", error);
       if (error instanceof ClientAllocationUpdateError) {
         return res.status(500).json({
@@ -2205,7 +2228,7 @@ export async function registerRoutes(
       }
 
       const finalReassignment = ["Scheduled", "BookingConfirmed"].includes(transition.status);
-      if (req.tenant?.confirmationRecoveryEnabled && finalReassignment) {
+      if ((req.tenant?.confirmationRecoveryEnabled || req.tenant?.registrationFormEnabled) && finalReassignment) {
         // Repair is a separate action; never combine assignment and confirmation.
         const blocker = confirmationBlocker(clientToReassign, {
           paymentsEnabled: req.tenant.paymentsEnabled === true,
@@ -2312,6 +2335,7 @@ export async function registerRoutes(
       }
       res.json(updated);
     } catch (error: any) {
+      if (error instanceof ExternalBookingReviewConflictError) return res.status(409).json({ error: error.message });
       console.error("Failed to reassign client:", error);
       if (error?.message === "Reopen this completed booking before editing its status or allocation.") {
         return res.status(409).json({ error: error.message });

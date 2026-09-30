@@ -20,6 +20,7 @@ const h = vi.hoisted(() => {
     deliveries: [] as any[],
     bookingSnapshots: [] as any[],
     slotClaimFails: false,
+    slotConflict: false,
     stripeLinkActive: true,
     deactivatedLinks: [] as string[],
     returnProviderKeys: [] as string[],
@@ -100,7 +101,7 @@ const h = vi.hoisted(() => {
     execute: vi.fn(async () => []),
     select: (selection?: any) => ({
       from: (table: any) => chain(() => selection?.conflictingClientId && tableName(table) === "clients"
-        ? []
+        ? state.slotConflict ? [{ conflictingClientId: "client-b" }] : []
         : selection?.sentAt && tableName(table) === "clients"
         ? [{ sentAt: state.client.zoomLinkSentAt || null }]
         : selection?.displayId && tableName(table) === "clients" && state.webhookLookupIsForeign
@@ -535,6 +536,7 @@ function resetState(overrides: { client?: any; tenant?: any } = {}) {
   h.state.deliveries = [];
   h.state.bookingSnapshots = [];
   h.state.slotClaimFails = false;
+  h.state.slotConflict = false;
   h.state.stripeLinkActive = true;
   h.state.deactivatedLinks = [];
   h.state.returnProviderKeys = [];
@@ -708,7 +710,7 @@ describe("registration journey HTTP routes", () => {
     expect(h.state.bookingSnapshots).toHaveLength(1);
 
     resetState({
-      tenant: { confirmationRecoveryEnabled: false, paymentsEnabled: true },
+      tenant: { confirmationRecoveryEnabled: false, registrationFormEnabled: false, paymentsEnabled: true },
       client: { status: "AwaitingConfirmation", paymentType: "self_pay", paymentStatus: "active" },
     });
     const legacy = await request("/api/clients/client-a", {
@@ -716,6 +718,50 @@ describe("registration journey HTTP routes", () => {
     });
     expect(legacy.status).toBe(200);
     expect(h.state.bookingSnapshots).toHaveLength(1);
+  });
+
+  it("guards the registration practice even before its confirmation-recovery toggle is enabled", async () => {
+    resetState({
+      tenant: { confirmationRecoveryEnabled: false, registrationFormEnabled: true, paymentsEnabled: true },
+      client: { status: "AwaitingConfirmation", paymentType: "self_pay", paymentStatus: "active" },
+    });
+    h.state.slot.isBooked = true;
+    const response = await request("/api/clients/client-a", {
+      method: "PATCH", body: JSON.stringify({ status: "Scheduled" }),
+    });
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe("payment_unverified");
+    expect(h.state.bookingSnapshots).toHaveLength(0);
+  });
+
+  it("does not create a second portal booking after an external appointment review", async () => {
+    resetState({
+      tenant: { confirmationRecoveryEnabled: true, paymentsEnabled: false },
+      client: { status: "AwaitingConfirmation", paymentType: "insurer" },
+    });
+    h.state.slot.isBooked = true;
+    h.state.activities.push({ action: "activity_external_booking_reviewed", tenantId: "tenant-a",
+      resourceId: "client-a", details: { externalReference: "diary-1" } });
+    const response = await request("/api/clients/client-a", {
+      method: "PATCH", body: JSON.stringify({ status: "Scheduled" }),
+    });
+    expect(response.status).toBe(409);
+    expect(h.state.bookingSnapshots).toHaveLength(0);
+  });
+
+  it("blocks confirmation if another active client claims the same slot", async () => {
+    resetState({
+      tenant: { confirmationRecoveryEnabled: true, paymentsEnabled: false },
+      client: { status: "AwaitingConfirmation", paymentType: "insurer" },
+    });
+    h.state.slot.isBooked = true;
+    h.state.slotConflict = true;
+    const response = await request("/api/clients/client-a", {
+      method: "PATCH", body: JSON.stringify({ status: "Scheduled" }),
+    });
+    expect(response.status).not.toBe(200);
+    expect(h.state.client.status).toBe("AwaitingConfirmation");
+    expect(h.state.bookingSnapshots).toHaveLength(0);
   });
 
   it("rejects confirmation on registration-pending records even with a paid badge", async () => {

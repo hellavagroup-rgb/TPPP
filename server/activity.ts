@@ -33,6 +33,7 @@ export const RECENT_ACTIVITY_ACTIONS = [
   "activity_appointment_options_declined",
   "activity_registration_submitted",
   "activity_booking_confirmed",
+  "activity_external_booking_reviewed",
   "activity_booking_completed",
   "activity_booking_reopened",
   "activity_zoom_link_sent",
@@ -70,6 +71,7 @@ export const RECENT_ACTIVITY_CATEGORY_ACTIONS = {
     "activity_appointment_options_declined",
     "activity_registration_submitted",
     "activity_booking_confirmed",
+    "activity_external_booking_reviewed",
     "activity_booking_completed",
     "activity_booking_reopened",
     "activity_zoom_link_sent",
@@ -245,6 +247,8 @@ export function toRecentActivityItem(log: AuditLog): RecentActivityItem {
       return { id: log.id, eventType: "client", title: "Client registration submitted", description: `${clientDisplayId} submitted their registration.`, actorName, timestamp: log.timestamp };
     case "activity_booking_confirmed":
       return { id: log.id, eventType: "client", title: "Booking confirmed", description: `${clientDisplayId}'s appointment is confirmed.`, actorName, timestamp: log.timestamp };
+    case "activity_external_booking_reviewed":
+      return { id: log.id, eventType: "client", title: "External appointment reviewed", description: `${clientDisplayId}: external diary appointment ${text(details, "externalReference", "recorded")} reviewed; portal booking and payment were not changed.`, actorName, timestamp: log.timestamp };
     case "activity_booking_completed":
       return { id: log.id, eventType: "client", title: "Booking completed", description: `${clientDisplayId}'s confirmed booking was completed.`, actorName, timestamp: log.timestamp };
     case "activity_booking_reopened":

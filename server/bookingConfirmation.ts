@@ -1,9 +1,10 @@
-import { and, eq, inArray, isNull, ne } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db } from "./db";
 import { confirmationBlocker, confirmationBlockerCopy } from "@shared/confirmationRecovery";
 import { ACTIVE_ALLOCATION_STATUSES } from "@shared/clientWorkflow";
 import {
   bookingSnapshots,
+  auditLogs,
   clients,
   clientClinicianOptions,
   clinicians,
@@ -27,6 +28,12 @@ export type BookingConfirmationResult = {
   status: "Scheduled" | "BookingConfirmed";
   newlyConfirmed: boolean;
 };
+
+export class ExternalBookingReviewConflictError extends Error {
+  constructor() {
+    super("This client has a reviewed external appointment. Do not create a second portal booking.");
+  }
+}
 
 export function confirmationStatus(bookingConfirmedEmailEnabled: boolean): "Scheduled" | "BookingConfirmed" {
   return bookingConfirmedEmailEnabled ? "BookingConfirmed" : "Scheduled";
@@ -73,12 +80,23 @@ export async function confirmBookingInTransaction(tx: any, input: BookingConfirm
         eq(bookingSnapshots.tenantId, input.tenantId),
       )).limit(1);
     if (existingSnapshot) {
+      if (client.status !== "Scheduled" && client.status !== "BookingConfirmed")
+        throw new Error("A booking snapshot already exists but the client status needs manual investigation");
       return {
         client,
         snapshot: existingSnapshot,
         status: client.status === "BookingConfirmed" ? "BookingConfirmed" : "Scheduled",
         newlyConfirmed: false,
       };
+    }
+    const externalReviews = await tx.select({ id: auditLogs.id, action: auditLogs.action })
+      .from(auditLogs).where(and(
+        eq(auditLogs.tenantId, input.tenantId),
+        eq(auditLogs.resourceId, client.id),
+        eq(auditLogs.action, "activity_external_booking_reviewed"),
+      ));
+    if (externalReviews.some((row: { action: string }) => row.action === "activity_external_booking_reviewed")) {
+      throw new ExternalBookingReviewConflictError();
     }
     if (!client.assignedSlotId || !client.assignedClinicianId) {
       throw new Error("A clinician and appointment slot are required to confirm this booking");
@@ -91,8 +109,10 @@ export async function confirmBookingInTransaction(tx: any, input: BookingConfirm
       registrationFormEnabled: tenants.registrationFormEnabled,
     })
       .from(tenants).where(eq(tenants.id, input.tenantId)).limit(1);
+    const guardedManual = (input.source === "manual" || input.source === "reassignment")
+      && (tenant?.confirmationRecoveryEnabled || tenant?.registrationFormEnabled);
     if (input.source === "manual" || input.source === "reassignment") {
-      if (tenant?.confirmationRecoveryEnabled) {
+      if (guardedManual) {
         const blocker = confirmationBlocker(client, {
           paymentsEnabled: tenant.paymentsEnabled === true,
           registrationEnabled: tenant.registrationFormEnabled === true,
@@ -108,10 +128,13 @@ export async function confirmBookingInTransaction(tx: any, input: BookingConfirm
     )).limit(1);
     if (!slot) throw new Error("The appointment slot could not be found");
     if (slot.clinicianId !== client.assignedClinicianId || slot.retiredAt ||
-        (tenant?.confirmationRecoveryEnabled && (input.source === "manual" || input.source === "reassignment") && !slot.isBooked)) {
+        (guardedManual && !slot.isBooked)) {
       throw new Error("The assigned slot is no longer reserved for this clinician");
     }
-    if (tenant?.confirmationRecoveryEnabled && (input.source === "manual" || input.source === "reassignment")) {
+    // Different clients lock different rows; serialize by slot as well so two
+    // simultaneous confirmation sources cannot claim the same appointment.
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`${input.tenantId}:${slot.id}:booking-confirmation`}))`);
+    {
       const [conflict] = await tx.select({ conflictingClientId: clients.id }).from(clients).where(and(
         eq(clients.tenantId, input.tenantId),
         eq(clients.assignedSlotId, slot.id),
@@ -119,6 +142,12 @@ export async function confirmBookingInTransaction(tx: any, input: BookingConfirm
         inArray(clients.status, [...ACTIVE_ALLOCATION_STATUSES]),
       )).limit(1);
       if (conflict) throw new Error("Another active client is assigned to this appointment slot");
+      const [confirmedConflict] = await tx.select({ id: bookingSnapshots.id }).from(bookingSnapshots).where(and(
+        eq(bookingSnapshots.tenantId, input.tenantId),
+        eq(bookingSnapshots.slotId, slot.id),
+        ne(bookingSnapshots.clientId, client.id),
+      )).limit(1);
+      if (confirmedConflict) throw new Error("This appointment slot already belongs to a confirmed booking");
     }
     const [clinician] = await tx.select({
       id: clinicians.id,

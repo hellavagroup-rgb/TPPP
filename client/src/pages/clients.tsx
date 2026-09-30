@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Client, ClientStatus, FormTemplate } from "@/lib/mockData";
 import { confirmationBlocker, confirmationBlockerCopy } from "@shared/confirmationRecovery";
+import { HistoricReconciliation, useHistoricReconciliation } from "@/components/HistoricReconciliation";
 import { bookingCompletionBlocker } from "@shared/bookingCompletion";
 import {
   isAwaitingConfirmationStatus,
@@ -202,7 +203,10 @@ export default function Clients() {
   const writeuppChecklistEnabled = tenant?.writeuppChecklistEnabled === true;
   const completedBookingsEnabled = tenant?.completedBookingsEnabled === true;
   const paymentReconciliationEnabled = tenant?.paymentReconciliationEnabled === true;
-  const confirmationRecoveryEnabled = tenant?.confirmationRecoveryEnabled === true;
+  const confirmationRecoveryEnabled = tenant?.confirmationRecoveryEnabled === true || tenant?.registrationFormEnabled === true;
+  const historicReconciliationEnabled = isAdmin && tenant?.registrationFormEnabled === true;
+  const historicInventory = useHistoricReconciliation(historicReconciliationEnabled);
+  const externalReviewedIds = new Set(historicInventory.data?.filter(row => row.externalReview).map(row => row.id) || []);
   const { data: webhookFailures = [], isError: webhookFailuresUnavailable } = useQuery<Array<{
     eventId: string; eventType: string; reason: string; attempts: number;
     lastFailedAt: string; clientId: string | null; displayId: string | null;
@@ -2078,6 +2082,8 @@ export default function Clients() {
         </div>
       </div>
 
+      {historicReconciliationEnabled && <HistoricReconciliation rows={historicInventory.data || []} error={historicInventory.isError} />}
+
       {/* Kanban Board */}
       {!showConfirmedState && !showArchivedState && !showCompletedState ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
@@ -2489,16 +2495,26 @@ export default function Clients() {
             </div>
           </div>
 
-          {/* Column 5: Awaiting Confirmation */}
+          {/* Booking progress remains separate from portal-confirmed and externally reviewed cases. */}
           <div className="bg-purple-50/50 rounded-lg p-3 min-h-[400px]">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="font-semibold text-purple-800 text-sm">Awaiting Confirmation</h3>
+              <h3 className="font-semibold text-purple-800 text-sm">{historicReconciliationEnabled ? "Booking progress" : "Awaiting Confirmation"}</h3>
               <Badge variant="secondary" className="bg-purple-100 text-purple-700">
                 {filteredClients.filter(c => isAwaitingConfirmationStatus(c.status)).length}
               </Badge>
             </div>
             <div className="space-y-2">
-              {filteredClients.filter(c => isAwaitingConfirmationStatus(c.status)).map(client => {
+              {(historicReconciliationEnabled
+                ? [
+                    { label: "Registration / payment pending", clients: filteredClients.filter(c => c.status === "RegistrationPending" && !externalReviewedIds.has(c.id)) },
+                    { label: "Awaiting portal confirmation", clients: filteredClients.filter(c => c.status === "AwaitingConfirmation" && !externalReviewedIds.has(c.id)) },
+                    { label: "Historically booked outside portal — staff reviewed", clients: filteredClients.filter(c => externalReviewedIds.has(c.id) && (c.status === "AwaitingConfirmation" || c.status === "RegistrationPending")) },
+                    { label: "Confirmed in portal", clients: filteredClients.filter(c => c.status === "BookingConfirmed") },
+                  ]
+                : [{ label: "", clients: filteredClients.filter(c => isAwaitingConfirmationStatus(c.status)) }]
+              ).map(group => <div key={group.label} className="space-y-2">
+                {group.label && <h4 className="text-xs font-semibold text-purple-900 border-b border-purple-200 pb-1">{group.label} ({group.clients.length})</h4>}
+                {group.clients.map(client => {
                 const apptConfirmed = (client as any).writeuppAppointmentConfirmed === true;
                 const dataTransferred = (client as any).writeuppDataTransferred === true;
                 const bothTicked = apptConfirmed && dataTransferred;
@@ -2623,7 +2639,7 @@ export default function Clients() {
                               )}
                             </div>
                           )}
-                          {(!confirmationRecoveryEnabled || !blocker) && <Button
+                          {(!confirmationRecoveryEnabled || !blocker) && !externalReviewedIds.has(client.id) && <Button
                             size="sm"
                             className="w-full gap-1 text-xs mt-2 bg-green-600 hover:bg-green-700"
                             disabled={updateClientMutation.isPending}
@@ -2718,7 +2734,8 @@ export default function Clients() {
                     </CardContent>
                   </Card>
                 );
-              })}
+                })}
+              </div>)}
               {filteredClients.filter(c => isAwaitingConfirmationStatus(c.status)).length === 0 && (
                 <p className="text-xs text-muted-foreground text-center py-4">No clients</p>
               )}

@@ -31,7 +31,7 @@ import { syncAllActiveConnections } from "./gmailSync";
 import { requireTenant } from './middleware/tenant';
 import { requireSuperAdmin } from './middleware/superAdmin';
 import { db } from "./db";
-import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, formDeliveries, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs, intakeMessages, gmailConnections, paymentCharges, clientClinicianOptions, bookingSnapshots } from "@shared/schema";
+import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, formDeliveries, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs, intakeMessages, gmailConnections, paymentCharges, clientClinicianOptions, allocationOfferDeliveries, bookingSnapshots } from "@shared/schema";
 import { designatedIntakeCompletionBlocker, shouldValidateIntakeCompletion } from "./workflowFormDesignation";
 import { isStripeConfigured, getStripeInstance, createPaymentLink, chargeOffSession, constructWebhookEvent, childNameFromClientNotes } from "./stripe";
 import { encryptSecret, decryptSecret, isEncryptionConfigured } from "./encryption";
@@ -1840,196 +1840,473 @@ export async function registerRoutes(
   app.post("/api/clients/:clientId/allocate-options", requireAdmin, auditLog("assign", "client"), async (req, res) => {
     try {
       const { selections, reoffer } = req.body;
-      // selections: [{clinicianId, slotId}, ...]
-
-      if (!Array.isArray(selections) || selections.length < 1 || selections.length > 3) {
-        return res.status(400).json({ error: "Must provide 1–3 clinician/slot selections" });
-      }
 
       const client = await storage.getClientById(req.params.clientId);
       if (!client) return res.status(404).json({ error: "Client not found" });
       if (client.tenantId !== req.tenant?.id) return res.status(403).json({ error: "Access denied" });
 
-      if (!req.tenant?.multiClinicianAllocationEnabled) {
-        return res.status(400).json({ error: "Multi-clinician allocation is not enabled for this tenant" });
-      }
-
       const shouldSendAllocationEmail = Boolean(req.tenant.autoAllocationEmailEnabled);
       const appBase = process.env.APP_BASE_URL?.replace(/\/$/, "");
-      if (shouldSendAllocationEmail && !client.email) {
-        return res.status(400).json({ error: "Client does not have an email address for allocation options" });
-      }
-      if (shouldSendAllocationEmail && !appBase) {
-        console.error(`Allocation options rejected: APP_BASE_URL is not configured for client ${req.params.clientId}`);
-        return res.status(503).json({ error: "Allocation email is not configured. No options were sent." });
-      }
 
-      // Reject duplicate slotIds in the request
-      const slotIds = selections.map((s: any) => s.slotId);
-      if (new Set(slotIds).size !== slotIds.length) {
-        return res.status(400).json({ error: "Duplicate slot selections are not allowed" });
-      }
-
-      // Validate every selection: must have IDs, slot must be available, slot/clinician must belong to tenant
       const confirmedFormatOverrides: Array<{ preference: "online" | "in_person"; slotFormat: "online" | "in_person" }> = [];
-      for (const sel of selections) {
-        if (!sel.clinicianId || !sel.slotId) {
-          return res.status(400).json({ error: "Each selection must have clinicianId and slotId" });
-        }
-
-        // Verify slot exists, is unbooked, belongs to this tenant, and belongs to the stated clinician
-        const [slot] = await db.select().from(timeSlots).where(eq(timeSlots.id, sel.slotId)).limit(1);
-        if (!slot) return res.status(400).json({ error: `Slot ${sel.slotId} not found` });
-        const unavailable = slotUnavailableReason(slot);
-        if (unavailable) return res.status(409).json({ error: `Slot ${sel.slotId} ${unavailable}` });
-        if (slot.clinicianId !== sel.clinicianId) {
-          return res.status(400).json({ error: `Slot ${sel.slotId} does not belong to clinician ${sel.clinicianId}` });
-        }
-        if (slot.tenantId !== req.tenant?.id) {
-          return res.status(403).json({ error: `Slot ${sel.slotId} does not belong to this tenant` });
-        }
-        if (
-          sel.formatOverride
-          && (sel.formatOverride.preference === "online" || sel.formatOverride.preference === "in_person")
-          && (sel.formatOverride.slotFormat === "online" || sel.formatOverride.slotFormat === "in_person")
-          && sel.formatOverride.preference !== sel.formatOverride.slotFormat
-          && slot.locationType === sel.formatOverride.slotFormat
-        ) {
-          confirmedFormatOverrides.push(sel.formatOverride);
-        }
-
-        // Verify clinician belongs to this tenant
-        const [clinician] = await db.select().from(clinicians).where(eq(clinicians.id, sel.clinicianId)).limit(1);
-        if (!clinician) return res.status(400).json({ error: `Clinician ${sel.clinicianId} not found` });
-        if (clinician.tenantId !== req.tenant?.id) {
-          return res.status(403).json({ error: `Clinician ${sel.clinicianId} does not belong to this tenant` });
-        }
-        if (req.tenant.zoomLinkEmailEnabled === true && onlineBookingNeedsZoomLink(slot.locationType) && !isValidZoomLink(clinician.zoomLink)) {
-          const clinicianName = await getClinicianActivityName(clinician.id);
-          return res.status(409).json({ error: `${clinicianName} needs a valid Zoom link before online appointment options can be sent. Add it in Clinicians and try again.` });
+      const recoverableDeliveryStatuses = reoffer === true
+        ? ["prepared", "sending", "accepted"] as const
+        : ["prepared", "sending", "accepted", "uncertain"] as const;
+      let delivery = await db.select().from(allocationOfferDeliveries).where(and(
+        eq(allocationOfferDeliveries.tenantId, req.tenant!.id),
+        eq(allocationOfferDeliveries.clientId, client.id),
+        inArray(allocationOfferDeliveries.status, recoverableDeliveryStatuses),
+      )).orderBy(desc(allocationOfferDeliveries.createdAt)).limit(1).then(rows => rows[0]);
+      const replacingUncertainGeneration = reoffer === true && Boolean(await db.select({ id: allocationOfferDeliveries.id })
+        .from(allocationOfferDeliveries).where(and(
+          eq(allocationOfferDeliveries.tenantId, req.tenant!.id),
+          eq(allocationOfferDeliveries.clientId, client.id),
+          eq(allocationOfferDeliveries.status, "uncertain"),
+        )).limit(1).then(rows => rows[0]));
+      if (delivery?.status === "uncertain") {
+        return res.status(409).json({ error: "The previous allocation email may have been accepted, but its provider deduplication window expired. Do not retry automatically; reconcile delivery or explicitly prepare fresh choices." });
+      }
+      if (!delivery && reoffer !== true && client.status === "OptionsSent") {
+        const finalized = await db.select().from(allocationOfferDeliveries).where(and(
+          eq(allocationOfferDeliveries.tenantId, req.tenant!.id),
+          eq(allocationOfferDeliveries.clientId, client.id),
+          eq(allocationOfferDeliveries.status, "finalized"),
+        )).orderBy(desc(allocationOfferDeliveries.createdAt)).limit(1).then(rows => rows[0]);
+        if (finalized) {
+          const currentOptions = await db.select().from(clientClinicianOptions).where(and(
+            eq(clientClinicianOptions.clientId, client.id),
+            eq(clientClinicianOptions.tenantId, req.tenant!.id),
+            inArray(clientClinicianOptions.selectionToken, finalized.optionTokens),
+          ));
+          const sameSelection = !Array.isArray(selections) || (
+            selections.length === currentOptions.length
+            && selections.every((selection: any) => currentOptions.some(option =>
+              option.clinicianId === selection.clinicianId && option.slotId === selection.slotId,
+            ))
+          );
+          if (sameSelection && currentOptions.length === finalized.optionTokens.length
+            && currentOptions.every(option => option.status === "pending")) {
+            return res.json(client);
+          }
         }
       }
 
-      const options = selections.map((sel: { clinicianId: string; slotId: string }) => ({
-        clientId: req.params.clientId,
-        clinicianId: sel.clinicianId,
-        slotId: sel.slotId,
-        status: "pending" as const,
-        selectionToken: crypto.randomBytes(32).toString("hex"),
-        tenantId: req.tenant!.id,
-      }));
-
-      await db.transaction(async (tx) => {
-        const [current] = await tx.select({ completedAt: clients.completedAt }).from(clients).where(and(
-          eq(clients.id, req.params.clientId), eq(clients.tenantId, req.tenant!.id),
-        )).for("update");
-        if (!current || current.completedAt) throw new Error("Reopen this completed booking before offering new slots.");
-        if (reoffer === true) {
-          const pending = await tx.select().from(clientClinicianOptions).where(and(
-            eq(clientClinicianOptions.clientId, req.params.clientId),
-            eq(clientClinicianOptions.tenantId, req.tenant!.id),
-            eq(clientClinicianOptions.status, "pending"),
-          ));
-          // A repeated recovery click must not replace a just-sent generation.
-          // Invalid old slots still permit the explicit fresh-choices recovery.
-          if (pending.length) {
-            const valid = await Promise.all(pending.map(async option => {
-              if (!option.slotId) return false;
-              const [slot] = await tx.select().from(timeSlots).where(eq(timeSlots.id, option.slotId));
-              return slot && slot.tenantId === req.tenant!.id
-                && slot.clinicianId === option.clinicianId && !slotUnavailableReason(slot);
+      if (!delivery) {
+        if (!req.tenant?.multiClinicianAllocationEnabled) {
+          return res.status(400).json({ error: "Multi-clinician allocation is not enabled for this tenant" });
+        }
+        if (!shouldSendAllocationEmail) {
+          if (!Array.isArray(selections) || selections.length < 1 || selections.length > 3) {
+            return res.status(400).json({ error: "Must provide 1–3 clinician/slot selections" });
+          }
+          const slotIds = selections.map((s: any) => s.slotId);
+          if (new Set(slotIds).size !== slotIds.length) {
+            return res.status(400).json({ error: "Duplicate slot selections are not allowed" });
+          }
+          for (const sel of selections) {
+            if (!sel.clinicianId || !sel.slotId) {
+              return res.status(400).json({ error: "Each selection must have clinicianId and slotId" });
+            }
+            const [slot] = await db.select().from(timeSlots).where(eq(timeSlots.id, sel.slotId)).limit(1);
+            if (!slot) return res.status(400).json({ error: `Slot ${sel.slotId} not found` });
+            const unavailable = slotUnavailableReason(slot);
+            if (unavailable) return res.status(409).json({ error: `Slot ${sel.slotId} ${unavailable}` });
+            if (slot.clinicianId !== sel.clinicianId) {
+              return res.status(400).json({ error: `Slot ${sel.slotId} does not belong to clinician ${sel.clinicianId}` });
+            }
+            if (slot.tenantId !== req.tenant?.id) {
+              return res.status(403).json({ error: `Slot ${sel.slotId} does not belong to this tenant` });
+            }
+            const [clinician] = await db.select().from(clinicians).where(eq(clinicians.id, sel.clinicianId)).limit(1);
+            if (!clinician) return res.status(400).json({ error: `Clinician ${sel.clinicianId} not found` });
+            if (clinician.tenantId !== req.tenant?.id) {
+              return res.status(403).json({ error: `Clinician ${sel.clinicianId} does not belong to this tenant` });
+            }
+            if (req.tenant.zoomLinkEmailEnabled === true && onlineBookingNeedsZoomLink(slot.locationType) && !isValidZoomLink(clinician.zoomLink)) {
+              const clinicianName = await getClinicianActivityName(clinician.id);
+              return res.status(409).json({ error: `${clinicianName} needs a valid Zoom link before online appointment options can be sent. Add it in Clinicians and try again.` });
+            }
+          }
+          const updated = await db.transaction(async tx => {
+            const [current] = await tx.select().from(clients).where(and(
+              eq(clients.id, client.id), eq(clients.tenantId, req.tenant!.id),
+            )).for("update");
+            if (!current || current.completedAt) throw new Error("Reopen this completed booking before offering new slots.");
+            if (reoffer === true && !replacingUncertainGeneration) {
+              const pending = await tx.select().from(clientClinicianOptions).where(and(
+                eq(clientClinicianOptions.clientId, client.id),
+                eq(clientClinicianOptions.tenantId, req.tenant!.id),
+                eq(clientClinicianOptions.status, "pending"),
+              ));
+              if (pending.length) {
+                const valid = await Promise.all(pending.map(async option => {
+                  if (!option.slotId) return false;
+                  const [slot] = await tx.select().from(timeSlots).where(eq(timeSlots.id, option.slotId));
+                  return slot && slot.tenantId === req.tenant!.id
+                    && slot.clinicianId === option.clinicianId && !slotUnavailableReason(slot);
+                }));
+                if (valid.every(Boolean)) throw new Error("REOFFER_ALREADY_PREPARED");
+              }
+            }
+            for (const sel of [...selections].sort((a: any, b: any) => String(a.slotId).localeCompare(String(b.slotId)))) {
+              if (!sel.clinicianId || !sel.slotId) throw new Error("INVALID_OFFER_SELECTION");
+              const [slot] = await tx.select().from(timeSlots).where(eq(timeSlots.id, sel.slotId)).for("update");
+              const [clinician] = await tx.select().from(clinicians).where(eq(clinicians.id, sel.clinicianId)).limit(1);
+              if (!slot || !clinician || slot.tenantId !== req.tenant!.id || clinician.tenantId !== req.tenant!.id
+                || slot.clinicianId !== sel.clinicianId || slotUnavailableReason(slot)) {
+                throw new Error("OFFER_SLOT_UNAVAILABLE");
+              }
+              if (
+                sel.formatOverride
+                && (sel.formatOverride.preference === "online" || sel.formatOverride.preference === "in_person")
+                && (sel.formatOverride.slotFormat === "online" || sel.formatOverride.slotFormat === "in_person")
+                && sel.formatOverride.preference !== sel.formatOverride.slotFormat
+                && slot.locationType === sel.formatOverride.slotFormat
+              ) confirmedFormatOverrides.push(sel.formatOverride);
+            }
+            const options = selections.map((sel: { clinicianId: string; slotId: string }) => ({
+              clientId: client.id,
+              clinicianId: sel.clinicianId,
+              slotId: sel.slotId,
+              status: "pending" as const,
+              selectionToken: crypto.randomBytes(32).toString("hex"),
+              tenantId: req.tenant!.id,
             }));
-            if (valid.every(Boolean)) throw new Error("REOFFER_ALREADY_PREPARED");
+            await tx.update(clientClinicianOptions).set({ status: "unavailable" }).where(and(
+              eq(clientClinicianOptions.clientId, client.id),
+              eq(clientClinicianOptions.tenantId, req.tenant!.id),
+              inArray(clientClinicianOptions.status, ["pending", "selected"]),
+            ));
+            await tx.insert(clientClinicianOptions).values(options as any);
+            const [result] = await tx.update(clients).set({ status: "OptionsSent", updatedAt: new Date() })
+              .where(eq(clients.id, client.id)).returning();
+            return result;
+          });
+          await recordActivity(req, "activity_client_options_sent", "client", req.params.clientId, {
+            clientDisplayId: updated?.displayId || client.displayId,
+            optionCount: selections.length,
+          });
+          for (const override of confirmedFormatOverrides) {
+            await recordActivity(req, "activity_session_format_override", "client", req.params.clientId, {
+              clientDisplayId: updated?.displayId || client.displayId,
+              submittedPreference: override.preference,
+              selectedSlotFormat: override.slotFormat,
+            });
           }
+          return res.json(updated);
         }
-        // Lock in a stable order and recheck after locking: availability may have
-        // changed since the request was validated. Offers themselves are not holds.
-        for (const sel of [...selections].sort((a, b) => a.slotId.localeCompare(b.slotId))) {
-          const [slot] = await tx.select().from(timeSlots).where(eq(timeSlots.id, sel.slotId)).for("update");
-          if (!slot || slot.clinicianId !== sel.clinicianId
-            || slot.tenantId !== req.tenant!.id || slotUnavailableReason(slot)) {
-            throw new Error("OFFER_SLOT_UNAVAILABLE");
-          }
-        }
-        await tx.update(clientClinicianOptions).set({ status: "unavailable" }).where(and(
-          eq(clientClinicianOptions.clientId, req.params.clientId),
-          eq(clientClinicianOptions.tenantId, req.tenant!.id),
-          inArray(clientClinicianOptions.status, ["pending", "selected"]),
-        ));
-        await tx.insert(clientClinicianOptions).values(options as any);
 
-      // Auto-send allocation email if enabled
-      if (shouldSendAllocationEmail) {
-        try {
-          const optionDetails = await Promise.all(
-            options.map(async (opt) => {
-              const [clinRow] = await tx.select().from(clinicians).where(eq(clinicians.id, opt.clinicianId)).limit(1);
-              const clinUser = clinRow?.userId
-                ? await tx.select({ name: users.name }).from(users).where(eq(users.id, clinRow.userId)).limit(1).then(r => r[0])
-                : undefined;
-              const slotRow = opt.slotId
-                ? await tx.select().from(timeSlots).where(eq(timeSlots.id, opt.slotId)).limit(1).then(r => r[0])
-                : undefined;
-              return {
-                clinicianName: clinUser?.name || 'Clinician',
-                type: slotRow?.type || null,
-                day: slotRow?.day || null,
-                date: slotRow?.date || null,
-                startDate: slotRow?.startDate || null,
-                endDate: slotRow?.endDate || null,
-                frequency: slotRow?.frequency || "weekly",
-                startTime: slotRow?.startTime || '',
-                endTime: slotRow?.endTime || '',
-                selectionToken: opt.selectionToken,
-                locationType: slotRow?.locationType || null,
-              };
-            })
-          );
-          // Use the first option's token as the portal entry point (any token gets all options)
+        if (!client.email) {
+          return res.status(400).json({ error: "Client does not have an email address for allocation options" });
+        }
+        if (!appBase) {
+          console.error(`Allocation options rejected: APP_BASE_URL is not configured for client ${req.params.clientId}`);
+          return res.status(503).json({ error: "Allocation email is not configured. No options were sent." });
+        }
+        if (!Array.isArray(selections) || selections.length < 1 || selections.length > 3) {
+          return res.status(400).json({ error: "Must provide 1–3 clinician/slot selections" });
+        }
+
+        // Reject duplicate slotIds in the request.
+        const slotIds = selections.map((s: any) => s.slotId);
+        if (new Set(slotIds).size !== slotIds.length) {
+          return res.status(400).json({ error: "Duplicate slot selections are not allowed" });
+        }
+
+        // Validate every selection before building the durable generation.
+        for (const sel of selections) {
+          if (!sel.clinicianId || !sel.slotId) {
+            return res.status(400).json({ error: "Each selection must have clinicianId and slotId" });
+          }
+          const [slot] = await db.select().from(timeSlots).where(eq(timeSlots.id, sel.slotId)).limit(1);
+          if (!slot) return res.status(400).json({ error: `Slot ${sel.slotId} not found` });
+          const unavailable = slotUnavailableReason(slot);
+          if (unavailable) return res.status(409).json({ error: `Slot ${sel.slotId} ${unavailable}` });
+          if (slot.clinicianId !== sel.clinicianId) {
+            return res.status(400).json({ error: `Slot ${sel.slotId} does not belong to clinician ${sel.clinicianId}` });
+          }
+          if (slot.tenantId !== req.tenant?.id) {
+            return res.status(403).json({ error: `Slot ${sel.slotId} does not belong to this tenant` });
+          }
+          if (
+            sel.formatOverride
+            && (sel.formatOverride.preference === "online" || sel.formatOverride.preference === "in_person")
+            && (sel.formatOverride.slotFormat === "online" || sel.formatOverride.slotFormat === "in_person")
+            && sel.formatOverride.preference !== sel.formatOverride.slotFormat
+            && slot.locationType === sel.formatOverride.slotFormat
+          ) {
+            confirmedFormatOverrides.push(sel.formatOverride);
+          }
+          const [clinician] = await db.select().from(clinicians).where(eq(clinicians.id, sel.clinicianId)).limit(1);
+          if (!clinician) return res.status(400).json({ error: `Clinician ${sel.clinicianId} not found` });
+          if (clinician.tenantId !== req.tenant?.id) {
+            return res.status(403).json({ error: `Clinician ${sel.clinicianId} does not belong to this tenant` });
+          }
+          if (req.tenant.zoomLinkEmailEnabled === true && onlineBookingNeedsZoomLink(slot.locationType) && !isValidZoomLink(clinician.zoomLink)) {
+            const clinicianName = await getClinicianActivityName(clinician.id);
+            return res.status(409).json({ error: `${clinicianName} needs a valid Zoom link before online appointment options can be sent. Add it in Clinicians and try again.` });
+          }
+        }
+
+        const prepared = await db.transaction(async (tx) => {
+          const [current] = await tx.select({ completedAt: clients.completedAt, status: clients.status }).from(clients).where(and(
+            eq(clients.id, client.id), eq(clients.tenantId, req.tenant!.id),
+          )).for("update");
+          if (!current || current.completedAt) throw new Error("Reopen this completed booking before offering new slots.");
+
+          // The client lock also serializes concurrent staff retries so they
+          // either reuse this attempt or create exactly one new generation.
+          const existing = await tx.select().from(allocationOfferDeliveries).where(and(
+            eq(allocationOfferDeliveries.tenantId, req.tenant!.id),
+            eq(allocationOfferDeliveries.clientId, client.id),
+            inArray(allocationOfferDeliveries.status, recoverableDeliveryStatuses),
+          )).orderBy(desc(allocationOfferDeliveries.createdAt)).limit(1).then(rows => rows[0]);
+          if (existing) return existing;
+          if (reoffer !== true && current.status === "OptionsSent") {
+            const finalized = await tx.select().from(allocationOfferDeliveries).where(and(
+              eq(allocationOfferDeliveries.tenantId, req.tenant!.id),
+              eq(allocationOfferDeliveries.clientId, client.id),
+              eq(allocationOfferDeliveries.status, "finalized"),
+            )).orderBy(desc(allocationOfferDeliveries.createdAt)).limit(1).then(rows => rows[0]);
+            if (finalized) {
+              const finalizedOptions = await tx.select().from(clientClinicianOptions).where(and(
+                eq(clientClinicianOptions.clientId, client.id),
+                eq(clientClinicianOptions.tenantId, req.tenant!.id),
+                inArray(clientClinicianOptions.selectionToken, finalized.optionTokens),
+              ));
+              const sameSelection = finalizedOptions.length === selections.length
+                && selections.every((selection: any) => finalizedOptions.some(option =>
+                  option.clinicianId === selection.clinicianId && option.slotId === selection.slotId,
+                ));
+              if (sameSelection && finalizedOptions.length === finalized.optionTokens.length
+                && finalizedOptions.every(option => option.status === "pending")) {
+                return finalized;
+              }
+            }
+          }
+
+          if (reoffer === true && !replacingUncertainGeneration) {
+            const pending = await tx.select().from(clientClinicianOptions).where(and(
+              eq(clientClinicianOptions.clientId, client.id),
+              eq(clientClinicianOptions.tenantId, req.tenant!.id),
+              eq(clientClinicianOptions.status, "pending"),
+            ));
+            if (pending.length) {
+              const valid = await Promise.all(pending.map(async option => {
+                if (!option.slotId) return false;
+                const [slot] = await tx.select().from(timeSlots).where(eq(timeSlots.id, option.slotId));
+                return slot && slot.tenantId === req.tenant!.id
+                  && slot.clinicianId === option.clinicianId && !slotUnavailableReason(slot);
+              }));
+              if (valid.every(Boolean)) throw new Error("REOFFER_ALREADY_PREPARED");
+            }
+          }
+          if (replacingUncertainGeneration) {
+            await tx.update(allocationOfferDeliveries).set({
+              status: "failed",
+              lastError: "Superseded by an explicit fresh-offer request",
+              updatedAt: new Date(),
+            }).where(and(
+              eq(allocationOfferDeliveries.tenantId, req.tenant!.id),
+              eq(allocationOfferDeliveries.clientId, client.id),
+              eq(allocationOfferDeliveries.status, "uncertain"),
+            ));
+          }
+          for (const sel of [...selections].sort((a: any, b: any) => a.slotId.localeCompare(b.slotId))) {
+            const [slot] = await tx.select().from(timeSlots).where(eq(timeSlots.id, sel.slotId)).for("update");
+            if (!slot || slot.clinicianId !== sel.clinicianId
+              || slot.tenantId !== req.tenant!.id || slotUnavailableReason(slot)) {
+              throw new Error("OFFER_SLOT_UNAVAILABLE");
+            }
+          }
+
+          const options = selections.map((sel: { clinicianId: string; slotId: string }) => ({
+            clientId: client.id,
+            clinicianId: sel.clinicianId,
+            slotId: sel.slotId,
+            status: "pending" as const,
+            selectionToken: crypto.randomBytes(32).toString("hex"),
+            tenantId: req.tenant!.id,
+          }));
+          const optionDetails = await Promise.all(options.map(async opt => {
+            const [clinRow] = await tx.select().from(clinicians).where(eq(clinicians.id, opt.clinicianId)).limit(1);
+            const clinUser = clinRow?.userId
+              ? await tx.select({ name: users.name }).from(users).where(eq(users.id, clinRow.userId)).limit(1).then(rows => rows[0])
+              : undefined;
+            const slotRow = await tx.select().from(timeSlots).where(eq(timeSlots.id, opt.slotId)).limit(1).then(rows => rows[0]);
+            return {
+              clinicianName: clinUser?.name || "Clinician",
+              type: slotRow?.type || null,
+              day: slotRow?.day || null,
+              date: slotRow?.date || null,
+              startDate: slotRow?.startDate || null,
+              endDate: slotRow?.endDate || null,
+              frequency: slotRow?.frequency || "weekly",
+              startTime: slotRow?.startTime || "",
+              endTime: slotRow?.endTime || "",
+              selectionToken: opt.selectionToken,
+              locationType: slotRow?.locationType || null,
+            };
+          }));
           const firstToken = options[0]?.selectionToken;
-          if (!firstToken) {
-            throw new Error("No selection token was available");
-          }
+          if (!firstToken) throw new Error("No selection token was available");
           const portalUrl = `${appBase}/options/${firstToken}`;
-          const tcAlloc = req.tenant ? { id: req.tenant.id, name: req.tenant.name, fromEmail: req.tenant.fromEmail, primaryColor: req.tenant.primaryColor } : undefined;
-          const allocEmail = await generateAllocationOptionsEmail(optionDetails, portalUrl, tcAlloc);
-          const sendResult = await sendEmail({ ...allocEmail, to: client.email! });
-          if (!sendResult.success) {
-            throw new Error(sendResult.error || "Email provider rejected the allocation email");
-          }
-          console.log(`Allocation options email sent to client ${req.params.clientId}`);
-        } catch (emailErr) {
-          console.error('Failed to send allocation options email:', emailErr);
-          await tx.update(clientClinicianOptions).set({ status: "unavailable" }).where(
-            inArray(clientClinicianOptions.selectionToken, options.map(option => option.selectionToken))
-          );
-          return res.status(502).json({ error: "The allocation email could not be sent. The client was not moved to Options Sent." });
-        }
-      }
-
-      await tx.update(clients).set({
-        status: "OptionsSent",
-        updatedAt: new Date(),
-      }).where(eq(clients.id, req.params.clientId));
-      });
-      if (res.headersSent) return;
-      if (shouldSendAllocationEmail) {
-        // Best-effort evidence must not abort the transaction after provider
-        // acceptance (PostgreSQL errors leave an entire transaction aborted).
-        try {
-          await db.update(clientClinicianOptions).set({ sentAt: new Date() }).where(and(
+          const tenantContext = {
+            id: req.tenant!.id,
+            name: req.tenant!.name,
+            fromEmail: req.tenant!.fromEmail,
+            primaryColor: req.tenant!.primaryColor,
+          };
+          const generated = await generateAllocationOptionsEmail(optionDetails, portalUrl, tenantContext);
+          const emailPayload = { ...generated, to: client.email! };
+          const generationKey = crypto.randomUUID();
+          await tx.update(clientClinicianOptions).set({ status: "unavailable" }).where(and(
+            eq(clientClinicianOptions.clientId, client.id),
             eq(clientClinicianOptions.tenantId, req.tenant!.id),
-            inArray(clientClinicianOptions.selectionToken, options.map(option => option.selectionToken)),
+            inArray(clientClinicianOptions.status, ["pending", "selected"]),
           ));
-        } catch (timestampError) {
-          console.error("Could not record allocation delivery time:", timestampError);
-        }
+          await tx.insert(clientClinicianOptions).values(options as any);
+          const [inserted] = await tx.insert(allocationOfferDeliveries).values({
+            tenantId: req.tenant!.id,
+            clientId: client.id,
+            generationKey,
+            idempotencyKey: `allocation-offer-${req.tenant!.id}-${client.id}-${generationKey}`,
+            status: "prepared",
+            optionTokens: options.map(option => option.selectionToken),
+            emailPayload,
+          }).returning();
+          return inserted;
+        });
+        delivery = prepared;
       }
 
+      if (delivery.status === "uncertain") {
+        return res.status(409).json({ error: "The previous allocation email may have been accepted, but its provider deduplication window expired. Do not retry automatically; reconcile delivery or explicitly prepare fresh choices." });
+      }
+
+      const deliveryResult = await db.transaction(async (tx) => {
+        const [current] = await tx.select().from(clients).where(and(
+          eq(clients.id, client.id), eq(clients.tenantId, req.tenant!.id),
+        )).for("update");
+        const [attempt] = await tx.select().from(allocationOfferDeliveries).where(and(
+          eq(allocationOfferDeliveries.id, delivery!.id),
+          eq(allocationOfferDeliveries.tenantId, req.tenant!.id),
+          eq(allocationOfferDeliveries.clientId, client.id),
+        )).limit(1);
+        if (!current || current.completedAt || !attempt) return { outcome: "closed" as const };
+        if (attempt.status === "finalized") return { outcome: "sent" as const };
+        if (attempt.status === "uncertain") return { outcome: "uncertain" as const };
+        if (attempt.status === "failed") return { outcome: "rejected" as const };
+
+        const activeOptions = await tx.select().from(clientClinicianOptions).where(and(
+          eq(clientClinicianOptions.clientId, client.id),
+          eq(clientClinicianOptions.tenantId, req.tenant!.id),
+          inArray(clientClinicianOptions.selectionToken, attempt.optionTokens),
+        ));
+        // Never revive declined/selected/unavailable tokens during recovery.
+        if (activeOptions.length !== attempt.optionTokens.length
+          || activeOptions.some(option => option.status !== "pending")) {
+          return { outcome: "closed" as const };
+        }
+
+        let accepted = attempt.status === "accepted";
+        if (!accepted) {
+          const now = new Date();
+          if (attempt.status === "sending" && attempt.dedupExpiresAt && attempt.dedupExpiresAt <= now) {
+            await db.update(allocationOfferDeliveries).set({
+              status: "uncertain",
+              lastError: "Provider idempotency window expired before acceptance could be recorded",
+              updatedAt: now,
+            }).where(eq(allocationOfferDeliveries.id, attempt.id));
+            return { outcome: "uncertain" as const };
+          }
+          const sendStartedAt = attempt.sendStartedAt || now;
+          const dedupExpiresAt = attempt.dedupExpiresAt || new Date(sendStartedAt.getTime() + 23 * 60 * 60 * 1000);
+          // Persist the send claim before contacting Resend. The client row lock
+          // stays held during delivery, preventing a decline from racing it.
+          await db.update(allocationOfferDeliveries).set({
+            status: "sending",
+            sendStartedAt,
+            dedupExpiresAt,
+            updatedAt: now,
+          }).where(eq(allocationOfferDeliveries.id, attempt.id));
+          const sendResult = await sendEmail({
+            ...attempt.emailPayload,
+            idempotencyKey: attempt.idempotencyKey,
+          });
+          if (!sendResult.success) {
+            if (sendResult.outcome === "rejected") {
+              await db.update(allocationOfferDeliveries).set({
+                status: "failed",
+                lastError: sendResult.error || "Email provider rejected the allocation email",
+                updatedAt: new Date(),
+              }).where(eq(allocationOfferDeliveries.id, attempt.id));
+              await tx.update(clientClinicianOptions).set({ status: "unavailable" }).where(and(
+                eq(clientClinicianOptions.tenantId, req.tenant!.id),
+                inArray(clientClinicianOptions.selectionToken, attempt.optionTokens),
+                eq(clientClinicianOptions.status, "pending"),
+              ));
+              return { outcome: "rejected" as const };
+            }
+            await db.update(allocationOfferDeliveries).set({
+              lastError: sendResult.error || "Provider delivery outcome is unknown",
+              updatedAt: new Date(),
+            }).where(eq(allocationOfferDeliveries.id, attempt.id));
+            return { outcome: "unknown" as const };
+          }
+          await db.update(allocationOfferDeliveries).set({
+            status: "accepted",
+            acceptedAt: new Date(),
+            providerMessageId: sendResult.providerMessageId || null,
+            lastError: null,
+            updatedAt: new Date(),
+          }).where(eq(allocationOfferDeliveries.id, attempt.id));
+          accepted = true;
+        }
+
+        if (accepted) {
+          const sentAt = new Date();
+          await tx.update(clients).set({ status: "OptionsSent", updatedAt: sentAt })
+            .where(and(eq(clients.id, client.id), eq(clients.tenantId, req.tenant!.id)));
+          await tx.update(allocationOfferDeliveries).set({
+            status: "finalized",
+            updatedAt: sentAt,
+          }).where(eq(allocationOfferDeliveries.id, attempt.id));
+          return { outcome: "sent" as const };
+        }
+        return { outcome: "unknown" as const };
+      });
+
+      if (deliveryResult.outcome === "closed") {
+        return res.status(409).json({ code: "OFFER_CLOSED", error: "This offer is no longer active. Please refresh before offering new choices." });
+      }
+      if (deliveryResult.outcome === "uncertain") {
+        return res.status(409).json({ error: "The provider idempotency window expired before delivery could be confirmed. Reconcile the existing offer before retrying." });
+      }
+      if (deliveryResult.outcome === "rejected") {
+        return res.status(502).json({ error: "The allocation email could not be sent. The client was not moved to Options Sent." });
+      }
+      if (deliveryResult.outcome === "unknown") {
+        return res.status(502).json({ error: "The allocation email delivery outcome is unknown. Retry to recover the same offer safely." });
+      }
+
+      // Delivery evidence is useful but not part of the workflow commit. In
+      // particular, an evidence-write outage must not undo an accepted offer.
+      try {
+        await db.update(clientClinicianOptions).set({ sentAt: new Date() }).where(and(
+          eq(clientClinicianOptions.clientId, client.id),
+          eq(clientClinicianOptions.tenantId, req.tenant!.id),
+          inArray(clientClinicianOptions.selectionToken, delivery.optionTokens),
+        ));
+      } catch (timestampError) {
+        console.error("Could not record allocation delivery time:", timestampError);
+      }
+
+      console.log(`Allocation options email sent to client ${req.params.clientId}`);
       const updated = await storage.getClientById(req.params.clientId);
       await recordActivity(req, "activity_client_options_sent", "client", req.params.clientId, {
         clientDisplayId: updated?.displayId || client.displayId,
-        optionCount: selections.length,
+        optionCount: delivery.optionTokens.length,
       });
       for (const override of confirmedFormatOverrides) {
         await recordActivity(req, "activity_session_format_override", "client", req.params.clientId, {
@@ -2047,6 +2324,9 @@ export async function registerRoutes(
       }
       if (error instanceof Error && error.message === "OFFER_SLOT_UNAVAILABLE") {
         return res.status(409).json({ error: "An appointment slot is no longer available. Please refresh and choose another slot." });
+      }
+      if (error instanceof Error && error.message === "INVALID_OFFER_SELECTION") {
+        return res.status(400).json({ error: "Each selection must have clinicianId and slotId" });
       }
       if (error instanceof Error && error.message === "Reopen this completed booking before offering new slots.") {
         return res.status(409).json({ error: error.message });
@@ -2085,6 +2365,18 @@ export async function registerRoutes(
       )).for("update");
       if (!currentClient || currentClient.status !== "OptionsSent") {
         return res.status(409).json({ code: "OFFER_CLOSED", error: "There is no active pending offer. Please offer new choices instead." });
+      }
+      const unfinishedDelivery = await tx.select({ id: allocationOfferDeliveries.id }).from(allocationOfferDeliveries).where(and(
+        eq(allocationOfferDeliveries.clientId, client.id),
+        eq(allocationOfferDeliveries.tenantId, tenant.id),
+        inArray(allocationOfferDeliveries.status, ["prepared", "sending", "accepted", "uncertain"]),
+      )).limit(1).then(rows => rows[0]);
+      if (unfinishedDelivery) {
+        return res.status(409).json({
+          code: "ALLOCATION_DELIVERY_RECOVERY_REQUIRED",
+          error: "The previous appointment email has not finished saving. Retry the original offer action to recover it before using Resend. If delivery needs reconciliation, do not send another email.",
+          recoveryPath: `/api/clients/${client.id}/allocate-options`,
+        });
       }
       const allOptions = await tx.select().from(clientClinicianOptions).where(and(
         eq(clientClinicianOptions.clientId, client.id),
@@ -2705,6 +2997,12 @@ export async function registerRoutes(
       const client = await storage.getClientById(optionRow.clientId);
       if (!client) return res.status(404).json({ error: "Client not found" });
       if (client.tenantId !== optionRow.tenantId) return res.status(404).json({ error: "Options not found" });
+      const unfinalizedDelivery = await db.select().from(allocationOfferDeliveries).where(and(
+        eq(allocationOfferDeliveries.clientId, optionRow.clientId),
+        eq(allocationOfferDeliveries.tenantId, optionRow.tenantId),
+        inArray(allocationOfferDeliveries.status, ["prepared", "sending", "accepted", "uncertain"]),
+      )).then(rows => rows.find(row => row.optionTokens.includes(req.params.selectionToken)));
+      if (unfinalizedDelivery) return res.status(410).json({ error: "This options link is not active until the offer has been finalized" });
       const isCurrentOffer = optionRow.status === "pending" && client.status === "OptionsSent";
       const isCompletedOffer = optionRow.status === "selected"
         && ["OptionSelected", "RegistrationPending", "BookingConfirmed", "Scheduled"].includes(client.status);
@@ -2767,6 +3065,12 @@ export async function registerRoutes(
       const client = await storage.getClientById(optionRow.clientId);
       if (!client) return res.status(404).json({ error: "Client not found" });
       if (client.tenantId !== optionRow.tenantId) return res.status(404).json({ error: "Options not found" });
+      const unfinalizedDelivery = await db.select().from(allocationOfferDeliveries).where(and(
+        eq(allocationOfferDeliveries.clientId, optionRow.clientId),
+        eq(allocationOfferDeliveries.tenantId, optionRow.tenantId),
+        inArray(allocationOfferDeliveries.status, ["prepared", "sending", "accepted", "uncertain"]),
+      )).then(rows => rows.find(row => row.optionTokens.includes(req.params.selectionToken)));
+      if (unfinalizedDelivery) return res.status(410).json({ error: "This options link is not active until the offer has been finalized" });
       if (optionRow.status === "declined" || optionRow.status === "unavailable") {
         return res.status(410).json({ error: "This options link is no longer active" });
       }

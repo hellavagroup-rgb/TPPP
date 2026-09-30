@@ -23,6 +23,7 @@ vi.mock('./storage', () => ({
 }));
 
 import {
+  classifyEmailProviderError,
   generateFormInviteEmail,
   generatePasswordResetEmail,
   generateTaskReminderEmail,
@@ -40,6 +41,21 @@ import {
   generatePaymentFailureEmail,
   generateRegistrationInviteEmail,
 } from './email';
+
+describe("provider error delivery certainty", () => {
+  it.each([null, undefined, 408, 409, 500, 502, 503, 504])(
+    "treats status %s as ambiguous so retries retain their idempotency key",
+    statusCode => {
+      expect(classifyEmailProviderError({ statusCode })).toBe("unknown");
+    },
+  );
+  it.each([400, 401, 403, 422, 429])(
+    "treats definitive request rejection %s as nonacceptance",
+    statusCode => {
+      expect(classifyEmailProviderError({ statusCode })).toBe("rejected");
+    },
+  );
+});
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 

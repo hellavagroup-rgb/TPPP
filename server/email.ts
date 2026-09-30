@@ -114,6 +114,16 @@ async function getStoredTemplate(templateKey: string, tenantId?: string | null):
 
 export type EmailSendOutcome = "accepted" | "rejected" | "unknown";
 
+// Resend converts fetch failures into application_error/statusCode:null.
+// Neither those nor server/timeout errors prove that the send was rejected.
+export function classifyEmailProviderError(error: { statusCode?: number | null }): "rejected" | "unknown" {
+  const status = error.statusCode;
+  return typeof status === "number" && status >= 400 && status < 500
+    && status !== 408 && status !== 409
+    ? "rejected"
+    : "unknown";
+}
+
 export async function sendEmail(options: EmailOptions): Promise<{ success: boolean; outcome: EmailSendOutcome; error?: string; providerMessageId?: string }> {
   try {
     const from = options.from || buildFromAddress();
@@ -130,7 +140,7 @@ export async function sendEmail(options: EmailOptions): Promise<{ success: boole
 
     if (error) {
       console.error('Email send error:', error);
-      return { success: false, outcome: "rejected", error: error.message };
+      return { success: false, outcome: classifyEmailProviderError(error), error: error.message };
     }
 
     console.log('Email sent successfully:', data?.id);

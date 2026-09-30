@@ -9,6 +9,7 @@ const h = vi.hoisted(() => {
     client: {} as any,
     tenant: {} as any,
     options: [] as any[],
+    offerDeliveries: [] as any[],
     slot: {} as any,
     clinician: {} as any,
     user: { name: "Dr Test" } as any,
@@ -22,12 +23,16 @@ const h = vi.hoisted(() => {
     slotClaimFails: false,
     slotConflict: false,
     failOptionEvidenceWrite: false,
+    failOfferCommitAfterAcceptance: false,
+    failOfferAcceptanceSave: false,
+    providerDeliveries: [] as any[],
     stripeLinkActive: true,
     deactivatedLinks: [] as string[],
     returnProviderKeys: [] as string[],
     legacyProviderKeys: [] as string[],
     emailResult: { success: true, outcome: "accepted" } as any,
     emailThrows: false,
+    acceptedWithLostProviderResponse: false,
     paymentResult: { url: "https://pay.test/session", paymentLinkId: "plink_1" } as any,
     checkoutSession: null as any,
     checkoutSessions: [] as any[],
@@ -43,6 +48,7 @@ const h = vi.hoisted(() => {
     slotChangeBeforeTransaction: null as Record<string, unknown> | null,
   };
   let transactionTail: Promise<void> = Promise.resolve();
+  let durableOfferPatches: Array<{ id: string; patch: any }> | undefined;
 
   const tableName = (table: any) => {
     const symbol = Object.getOwnPropertySymbols(table).find(s => s.description === "drizzle:Name");
@@ -57,6 +63,7 @@ const h = vi.hoisted(() => {
       case "clinicians": return state.clinician?.id ? [state.clinician] : [];
       case "users": return state.user ? [state.user] : [];
       case "client_clinician_options": return state.options;
+      case "allocation_offer_deliveries": return state.offerDeliveries;
       // The harness has no SQL predicate evaluator; enforce the tenant predicate
       // for template reads here so cross-practice configuration is testable.
       case "form_templates": return state.registrationTemplate?.id
@@ -110,6 +117,9 @@ const h = vi.hoisted(() => {
           // Enforce the real SQL ownership predicate for snapshot reads. A foreign
           // row with the same client ID must not satisfy an idempotent confirmation.
           const sql = new PgDialect().sqlToQuery(condition).sql;
+          if (sql.includes('"allocation_offer_deliveries"')) {
+            return offerDeliveryRowsMatching(condition).filter(row => rows.includes(row));
+          }
           if (sql.includes('"booking_snapshots"."tenant_id"')) {
             return rows.filter(row => row.tenantId === state.tenant.id);
           }
@@ -129,6 +139,28 @@ const h = vi.hoisted(() => {
       then: (resolve: any, reject: any) => Promise.resolve(execute()).then(resolve, reject),
     };
     return builder;
+  };
+
+  const offerDeliveryRowsMatching = (condition: any) => {
+    if (!condition) return state.offerDeliveries;
+    const { sql, params } = new PgDialect().sqlToQuery(condition);
+    return state.offerDeliveries.filter(row => {
+      for (const [property, column] of Object.entries({
+        id: "id", tenantId: "tenant_id", clientId: "client_id",
+        generationKey: "generation_key", status: "status",
+      })) {
+        const equality = new RegExp(`"${column}"\\s*=\\s*\\$(\\d+)`, "g");
+        for (const match of sql.matchAll(equality)) {
+          if (row[property] !== params[Number(match[1]) - 1]) return false;
+        }
+        const membership = new RegExp(`"${column}"\\s+(not\\s+)?in\\s*\\(([^)]*)\\)`, "i").exec(sql);
+        if (membership) {
+          const values = [...membership[2].matchAll(/\$(\d+)/g)].map(match => params[Number(match[1]) - 1]);
+          if (membership[1] ? values.includes(row[property]) : !values.includes(row[property])) return false;
+        }
+      }
+      return true;
+    });
   };
 
   const db: any = {
@@ -158,6 +190,12 @@ const h = vi.hoisted(() => {
             ...value,
           }));
           state.options.push(...inserted);
+        } else if (tableName(table) === "allocation_offer_deliveries") {
+          inserted = (Array.isArray(values) ? values : [values]).map(value => ({
+            id: `offer-delivery-${state.offerDeliveries.length + 1}`,
+            createdAt: new Date(), updatedAt: new Date(), ...value,
+          }));
+          state.offerDeliveries.push(...inserted);
         } else if (tableName(table) === "form_submissions") {
           inserted = (Array.isArray(values) ? values : [values]).map((value, index) => ({
             id: `submission-${state.submissions.length + index + 1}`, ...value,
@@ -219,11 +257,23 @@ const h = vi.hoisted(() => {
         return deleted;
       },
     }),
-    update: (table: any) => ({
+    update: (table: any, transactional = false) => ({
       set: (patch: any) => {
         let optionCondition: any;
         return chain(() => {
         const name = tableName(table);
+        if (name === "allocation_offer_deliveries") {
+          if (patch.status === "accepted" && state.failOfferAcceptanceSave) {
+            state.failOfferAcceptanceSave = false;
+            throw new Error("Provider acceptance save failed");
+          }
+          const matching = offerDeliveryRowsMatching(optionCondition);
+          if (!transactional && durableOfferPatches) {
+            for (const row of matching) durableOfferPatches.push({ id: row.id, patch: structuredClone(patch) });
+          }
+          for (const row of matching) Object.assign(row, patch);
+          return matching;
+        }
         if (name === "time_slots") {
           if (patch.isBooked && (state.slotClaimFails || state.slot.isBooked)) return [];
           Object.assign(state.slot, patch);
@@ -292,9 +342,23 @@ const h = vi.hoisted(() => {
         client: state.client, slot: state.slot, options: state.options,
         snapshots: state.bookingSnapshots, submissions: state.submissions, charges: state.charges,
         activities: state.activities,
+        offerDeliveries: state.offerDeliveries,
       });
+      durableOfferPatches = [];
       try {
-        return await callback(db);
+        const result = await callback({
+          ...db,
+          update: (table: any) => db.update(table, true),
+        });
+        if (state.failOfferCommitAfterAcceptance
+          && state.client.status === "OptionsSent"
+          && state.offerDeliveries.some(row => row.status === "finalized"
+            && backup.offerDeliveries.find(old => old.id === row.id)?.status !== "finalized")
+          && state.providerDeliveries.length) {
+          state.failOfferCommitAfterAcceptance = false;
+          throw new Error("Transaction commit failed after provider acceptance");
+        }
+        return result;
       } catch (error) {
         state.client = backup.client;
         state.slot = backup.slot;
@@ -303,8 +367,16 @@ const h = vi.hoisted(() => {
         state.submissions = backup.submissions;
         state.charges = backup.charges;
         state.activities = backup.activities;
+        // Acceptance is written through the independent durable connection,
+        // so it survives rollback of the offer finalization transaction.
+        state.offerDeliveries = backup.offerDeliveries;
+        for (const evidence of durableOfferPatches) {
+          const restored = state.offerDeliveries.find(row => row.id === evidence.id);
+          if (restored) Object.assign(restored, evidence.patch);
+        }
         throw error;
       } finally {
+        durableOfferPatches = undefined;
         release();
       }
     },
@@ -492,6 +564,15 @@ vi.mock("./email", async importOriginal => {
     sendEmail: vi.fn(async (email: any) => {
       h.state.emails.push(email);
       if (h.state.emailThrows) throw new Error("transport failed");
+      if (h.state.emailResult.success
+        && (!email.idempotencyKey || !h.state.providerDeliveries.some(item => item.idempotencyKey === email.idempotencyKey))) {
+        h.state.providerDeliveries.push(email);
+      }
+      if (h.state.acceptedWithLostProviderResponse) {
+        h.state.acceptedWithLostProviderResponse = false;
+        const sdkError = { name: "application_error", statusCode: null, message: "Unable to fetch data" };
+        return { success: false, outcome: actual.classifyEmailProviderError(sdkError), error: sdkError.message };
+      }
       return h.state.emailResult;
     }),
   };
@@ -566,6 +647,7 @@ function resetState(overrides: { client?: any; tenant?: any } = {}) {
     status: "pending",
     selectionToken: "selection-token-a",
   }];
+  h.state.offerDeliveries = [];
   h.state.slot = {
     id: "slot-a", tenantId: "tenant-a", clinicianId: "clinician-a", isBooked: false,
     type: "SpecificDate", day: null, date: "2999-09-10",
@@ -588,12 +670,16 @@ function resetState(overrides: { client?: any; tenant?: any } = {}) {
   h.state.slotClaimFails = false;
   h.state.slotConflict = false;
   h.state.failOptionEvidenceWrite = false;
+  h.state.failOfferCommitAfterAcceptance = false;
+  h.state.failOfferAcceptanceSave = false;
+  h.state.providerDeliveries = [];
   h.state.stripeLinkActive = true;
   h.state.deactivatedLinks = [];
   h.state.returnProviderKeys = [];
   h.state.legacyProviderKeys = [];
   h.state.emailResult = { success: true, outcome: "accepted" };
   h.state.emailThrows = false;
+  h.state.acceptedWithLostProviderResponse = false;
   h.state.paymentResult = { url: "https://pay.test/session", paymentLinkId: "plink_1" };
   h.state.checkoutSession = null;
   h.state.checkoutSessions = [];
@@ -1758,6 +1844,234 @@ describe("registration journey HTTP routes", () => {
     expect(currentGeneration[0].selectionToken).not.toBe(original.selectionToken);
     expect(h.state.options.filter(option => option.status === "declined")).toHaveLength(1);
     expect(h.state.client.status).toBe("OptionsSent");
+  });
+
+  it("recovers a fresh accepted offer after commit failure without another email or new tokens", async () => {
+    h.state.client.status = "FormsCompleted";
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.tenant.autoAllocationEmailEnabled = true;
+    h.state.options = [];
+    h.state.failOfferCommitAfterAcceptance = true;
+    const offer = () => request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({ selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }] }),
+    });
+
+    const failed = await offer();
+    expect(failed.status).toBeGreaterThanOrEqual(500);
+    expect(h.state.client.status).toBe("FormsCompleted");
+    expect(h.state.offerDeliveries).toHaveLength(1);
+    expect(h.state.offerDeliveries[0].status).toBe("accepted");
+    expect(h.state.providerDeliveries).toHaveLength(1);
+    const sentEmail = h.state.providerDeliveries[0];
+    expect(sentEmail.idempotencyKey).toBeTruthy();
+    const token = h.state.options[0].selectionToken;
+    expect(sentEmail.text + sentEmail.html).toContain(`/options/${token}`);
+    expect(sentEmail.from).toContain("hello@practice.test");
+    expect(sentEmail.text + sentEmail.html).toContain("Practice A");
+
+    const retry = await offer();
+    expect(retry.status).toBe(200);
+    expect(h.state.client.status).toBe("OptionsSent");
+    expect(h.state.offerDeliveries[0].status).toBe("finalized");
+    expect(h.state.options).toHaveLength(1);
+    expect(h.state.options[0].selectionToken).toBe(token);
+    expect(h.state.options[0].sentAt).toBeTruthy();
+    expect(h.state.emails).toHaveLength(1);
+    expect(h.state.providerDeliveries).toHaveLength(1);
+    const portal = await request(`/api/public/options/${token}`);
+    expect(portal.status).toBe(200);
+  });
+
+  it.each(["commit", "acceptance save"] as const)(
+    "blocks ordinary resend after a stale reoffer's %s failure, then safely recovers the original email",
+    async failure => {
+      h.state.client.status = "OptionsSent";
+      h.state.tenant.multiClinicianAllocationEnabled = true;
+      h.state.tenant.autoAllocationEmailEnabled = true;
+      h.state.options[0].slotId = null;
+      const oldToken = h.state.options[0].selectionToken;
+      h.state.failOfferCommitAfterAcceptance = failure === "commit";
+      h.state.failOfferAcceptanceSave = failure === "acceptance save";
+      const offer = () => request("/api/clients/client-a/allocate-options", {
+        method: "POST",
+        body: JSON.stringify({ reoffer: true, selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }] }),
+      });
+      expect((await offer()).status).toBeGreaterThanOrEqual(500);
+      const freshToken = h.state.options.find(row => row.status === "pending")!.selectionToken;
+      expect(h.state.client.status).toBe("OptionsSent");
+      const emailCount = h.state.emails.length;
+      const resend = await request("/api/clients/client-a/resend-allocation-options", { method: "POST" });
+      expect(resend.status).toBe(409);
+      expect(resend.body.code).toBe("ALLOCATION_DELIVERY_RECOVERY_REQUIRED");
+      expect(h.state.emails).toHaveLength(emailCount);
+      expect((await offer()).status).toBe(200);
+      expect(h.state.providerDeliveries).toHaveLength(1);
+      expect(h.state.options.find(row => row.status === "pending")!.selectionToken).toBe(freshToken);
+      expect((await request(`/api/public/options/${freshToken}`)).status).toBe(200);
+      expect((await request(`/api/public/options/${oldToken}`)).status).toBe(410);
+    },
+  );
+
+  it("keeps declined tokens closed when an accepted fresh offer is recovered", async () => {
+    h.state.client.status = "FormsCompleted";
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.tenant.autoAllocationEmailEnabled = true;
+    h.state.options = [];
+    const offer = (reoffer = false) => request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({ reoffer, selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }] }),
+    });
+    expect((await offer()).status).toBe(200);
+    const oldToken = h.state.options[0].selectionToken;
+    expect((await request(`/api/public/options/${oldToken}/select`, {
+      method: "POST", body: JSON.stringify({ decline: true }),
+    })).status).toBe(200);
+
+    h.state.failOfferCommitAfterAcceptance = true;
+    expect((await offer(true)).status).toBeGreaterThanOrEqual(500);
+    const freshToken = h.state.options.find(row => row.status === "pending")!.selectionToken;
+    const emailCount = h.state.emails.length;
+    expect((await offer(true)).status).toBe(200);
+    expect(h.state.emails).toHaveLength(emailCount);
+    expect(h.state.options.find(row => row.selectionToken === oldToken)!.status).toBe("declined");
+    expect((await request(`/api/public/options/${oldToken}`)).status).toBe(410);
+    expect((await request(`/api/public/options/${freshToken}`)).status).toBe(200);
+    expect(h.state.client.needsAdminCall).toBe(true);
+  });
+
+  it("does not reactivate a token whose offer was closed before staff recovery", async () => {
+    h.state.client.status = "OptionsSent";
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.tenant.autoAllocationEmailEnabled = true;
+    h.state.options = [];
+    h.state.failOfferCommitAfterAcceptance = true;
+    const offer = () => request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({ selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }] }),
+    });
+    expect((await offer()).status).toBeGreaterThanOrEqual(500);
+    const token = h.state.options[0].selectionToken;
+    expect((await request(`/api/public/options/${token}/select`, {
+      method: "POST", body: JSON.stringify({ decline: true }),
+    })).status).toBe(410);
+    // Simulate a separately persisted lifecycle closure. Even an accepted
+    // outbox attempt is not authority to turn a closed option back to pending.
+    h.state.options[0].status = "declined";
+    const emails = h.state.emails.length;
+    expect((await offer()).status).toBe(409);
+    expect(h.state.emails).toHaveLength(emails);
+    expect(h.state.options).toHaveLength(1);
+    expect(h.state.options[0].status).toBe("declined");
+    expect((await request(`/api/public/options/${token}`)).status).toBe(410);
+  });
+
+  it("ignores another tenant's recovery attempt and never sends its saved payload", async () => {
+    h.state.client.status = "FormsCompleted";
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.tenant.autoAllocationEmailEnabled = true;
+    h.state.options = [];
+    h.state.offerDeliveries = [{
+      id: "foreign-attempt", clientId: "client-a", tenantId: "tenant-b",
+      generationKey: "foreign-generation", idempotencyKey: "foreign-provider-key",
+      status: "accepted", optionTokens: ["foreign-token"],
+      acceptedAt: new Date(), createdAt: new Date(),
+      emailPayload: { to: "foreign@practice.test", subject: "Private", html: "Foreign practice" },
+    }];
+    const response = await request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({ selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }] }),
+    });
+    expect(response.status).toBe(200);
+    expect(h.state.emails).toHaveLength(1);
+    expect(h.state.emails[0].idempotencyKey).not.toBe("foreign-provider-key");
+    expect(h.state.emails[0].to).not.toBe("foreign@practice.test");
+    expect(h.state.offerDeliveries[0].status).toBe("accepted");
+    expect(h.state.options[0].selectionToken).not.toBe("foreign-token");
+  });
+
+  it("reuses the exact provider key and payload when acceptance evidence could not be saved", async () => {
+    h.state.client.status = "FormsCompleted";
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.tenant.autoAllocationEmailEnabled = true;
+    h.state.options = [];
+    h.state.failOfferAcceptanceSave = true;
+    const offer = () => request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({ selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }] }),
+    });
+    expect((await offer()).status).toBeGreaterThanOrEqual(500);
+    expect(h.state.providerDeliveries).toHaveLength(1);
+    const original = structuredClone(h.state.emails[0]);
+    const token = h.state.options[0].selectionToken;
+    h.state.tenant.name = "Renamed practice";
+    expect((await offer()).status).toBe(200);
+    expect(h.state.emails).toHaveLength(2);
+    expect(h.state.emails[1]).toEqual(original);
+    expect(h.state.providerDeliveries).toHaveLength(1);
+    expect(h.state.options).toHaveLength(1);
+    expect(h.state.options[0].selectionToken).toBe(token);
+  });
+
+  it("recovers provider acceptance followed by the SDK's lost-response error without duplicate delivery", async () => {
+    h.state.client.status = "FormsCompleted";
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.tenant.autoAllocationEmailEnabled = true;
+    h.state.options = [];
+    h.state.acceptedWithLostProviderResponse = true;
+    const offer = () => request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({ selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }] }),
+    });
+    expect((await offer()).status).toBe(502);
+    expect(h.state.offerDeliveries[0].status).toBe("sending");
+    expect(h.state.options[0].status).toBe("pending");
+    const token = h.state.options[0].selectionToken;
+    const payload = structuredClone(h.state.emails[0]);
+    expect((await offer()).status).toBe(200);
+    expect(h.state.emails[1]).toEqual(payload);
+    expect(h.state.providerDeliveries).toHaveLength(1);
+    expect(h.state.options).toHaveLength(1);
+    expect(h.state.options[0].selectionToken).toBe(token);
+    expect((await request(`/api/public/options/${token}`)).status).toBe(200);
+  });
+
+  it("replaces stale pending choices without automatic email but refuses to replace available choices", async () => {
+    h.state.client.status = "OptionsSent";
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.tenant.autoAllocationEmailEnabled = false;
+    const oldToken = h.state.options[0].selectionToken;
+    h.state.options[0].slotId = null;
+    const reoffer = () => request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({ reoffer: true, selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }] }),
+    });
+    expect((await reoffer()).status).toBe(200);
+    expect(h.state.options.find(row => row.selectionToken === oldToken)!.status).toBe("unavailable");
+    const fresh = h.state.options.find(row => row.status === "pending")!;
+    expect(fresh.selectionToken).not.toBe(oldToken);
+    expect((await reoffer()).status).toBe(409);
+    expect(h.state.options.filter(row => row.status === "pending")).toHaveLength(1);
+    expect(h.state.emails).toHaveLength(0);
+  });
+
+  it("blocks an uncertain retry after the provider duplicate-prevention window expires", async () => {
+    h.state.client.status = "FormsCompleted";
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.tenant.autoAllocationEmailEnabled = true;
+    h.state.options = [];
+    h.state.failOfferAcceptanceSave = true;
+    const offer = () => request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({ selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }] }),
+    });
+    expect((await offer()).status).toBeGreaterThanOrEqual(500);
+    h.state.offerDeliveries[0].dedupExpiresAt = new Date(Date.now() - 1000);
+    const emailCount = h.state.emails.length;
+    expect((await offer()).status).toBe(409);
+    expect(h.state.emails).toHaveLength(emailCount);
+    expect(h.state.client.status).toBe("FormsCompleted");
+    expect(h.state.offerDeliveries[0].status).toBe("uncertain");
   });
 
   it("keeps a declined request visible through failed reoffer and allows a successful staff retry", async () => {

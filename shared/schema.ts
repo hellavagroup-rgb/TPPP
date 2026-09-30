@@ -620,6 +620,37 @@ export const clientClinicianOptions = pgTable("client_clinician_options", {
   tenantId: varchar("tenant_id").references(() => tenants.id).notNull(),
 });
 
+// Durable snapshot of a newly generated offer email. It is committed before
+// contacting the provider so delivery/finalization can recover the same tokens,
+// branding, and provider idempotency key after a process or DB failure.
+export const allocationOfferDeliveries = pgTable("allocation_offer_deliveries", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").references(() => tenants.id).notNull(),
+  clientId: varchar("client_id").references(() => clients.id).notNull(),
+  generationKey: text("generation_key").notNull(),
+  idempotencyKey: text("idempotency_key").notNull(),
+  status: text("status", { enum: ["prepared", "sending", "accepted", "finalized", "failed", "uncertain"] }).notNull().default("prepared"),
+  optionTokens: json("option_tokens").$type<string[]>().notNull(),
+  emailPayload: json("email_payload").$type<{
+    to: string;
+    subject: string;
+    html: string;
+    text?: string;
+    from?: string;
+  }>().notNull(),
+  sendStartedAt: timestamp("send_started_at"),
+  dedupExpiresAt: timestamp("dedup_expires_at"),
+  acceptedAt: timestamp("accepted_at"),
+  providerMessageId: text("provider_message_id"),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("allocation_offer_deliveries_generation_unique").on(table.generationKey),
+  uniqueIndex("allocation_offer_deliveries_idempotency_unique").on(table.idempotencyKey),
+  index("allocation_offer_deliveries_client_status_idx").on(table.tenantId, table.clientId, table.status),
+]);
+
 export const clientClinicianOptionsRelations = relations(clientClinicianOptions, ({ one }) => ({
   client: one(clients, {
     fields: [clientClinicianOptions.clientId],

@@ -216,7 +216,7 @@ export default function Clients() {
     enabled: isAdmin,
     refetchInterval: 60_000,
   });
-  const [paymentInspection, setPaymentInspection] = useState<{ clientId: string; state: string; detail: string; blocker?: string } | null>(null);
+  const [paymentInspection, setPaymentInspection] = useState<{ clientId: string; state: string; detail: string; blocker?: string; confirmationEmail?: "accepted_by_provider" | "not_recorded" | "not_enabled" } | null>(null);
   const [checkingPayment, setCheckingPayment] = useState(false);
   const checkPayment = async (clientId: string, reconcile = false) => {
     setCheckingPayment(true);
@@ -1300,6 +1300,13 @@ export default function Clients() {
                   : paymentInspection.state === "open" ? "Checkout open"
                   : paymentInspection.state === "awaiting" ? "Awaiting payment" : "Unable to verify"}</p>
                 <p>{paymentInspection.detail}</p>
+                {paymentInspection.confirmationEmail && (
+                  <p>Confirmation email: {paymentInspection.confirmationEmail === "accepted_by_provider"
+                    ? "accepted by email provider (inbox delivery is not guaranteed)"
+                    : paymentInspection.confirmationEmail === "not_enabled"
+                      ? "not enabled for this practice"
+                      : "no provider acceptance recorded"}</p>
+                )}
                 {paymentInspection.blocker && <p className="text-red-700">{paymentInspection.blocker}</p>}
                 {paymentInspection.state === "paid_unrecorded" && (
                   <Button size="sm" variant="outline" className="h-6 mt-1 px-2 text-[10px]" disabled={checkingPayment}

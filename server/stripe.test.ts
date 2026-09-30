@@ -1,10 +1,48 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   childNameFromClientNotes,
+  chargeOffSession,
+  createPaymentLink,
   paymentLinkCreationIdempotencyKey,
   shouldDeactivatePreviousPaymentLink,
 } from "./stripe";
 import { buildIntakeClientSummary } from "./intakeClientSummary";
+
+const keys = vi.hoisted(() => [] as string[]);
+vi.mock("stripe", () => ({
+  default: class MockStripe {
+    constructor(key: string) { keys.push(key); }
+    prices = { create: async () => ({ id: "price_1" }) };
+    paymentLinks = {
+      create: async () => ({ id: "plink_1", active: true, url: "https://pay.test/link" }),
+      update: async () => ({ active: false }),
+    };
+    paymentIntents = { create: async () => ({ id: "pi_1", status: "succeeded" }) };
+  },
+}));
+
+describe("legacy registration payment account ownership", () => {
+  it("keeps a link and later charge on the same global account while opt-in is off", async () => {
+    const previous = process.env.STRIPE_SECRET_KEY;
+    process.env.STRIPE_SECRET_KEY = "sk_other";
+    keys.length = 0;
+    try {
+      await createPaymentLink({
+        clientId: "client-a", clientDisplayId: "A-001", amountPence: 12000,
+        successUrl: "https://app.test/return", tenantId: "tenant-a",
+        tenantStripeKey: "sk_tenant", registrationAttemptKey: "attempt-a",
+      });
+      await chargeOffSession({
+        customerId: "cus_1", paymentMethodId: "pm_1", amountPence: 12000,
+        clientDisplayId: "A-001", tenantStripeKey: "sk_tenant", tenantId: "tenant-a",
+      });
+      expect(keys).toEqual(["sk_other", "sk_other"]);
+    } finally {
+      if (previous === undefined) delete process.env.STRIPE_SECRET_KEY;
+      else process.env.STRIPE_SECRET_KEY = previous;
+    }
+  });
+});
 
 describe("shouldDeactivatePreviousPaymentLink", () => {
   it("never deactivates the link returned by an idempotent retry", () => {

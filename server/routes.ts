@@ -5824,30 +5824,23 @@ export async function registerRoutes(
         primaryColor: tenants.primaryColor,
         stripeSecretKey: tenants.stripeSecretKey,
       }).from(tenants);
-      const globalStripe = !!process.env.STRIPE_SECRET_KEY;
-      const candidates = globalStripe
-        ? await tenantQuery
-        : await tenantQuery.where(isNotNull(tenants.stripeSecretKey));
+      const candidates = await tenantQuery;
 
       let verifiedSession: any = null;
       let providerTenantId: string | null = null;
       let providerFailed = false;
-      const lookupCandidates = globalStripe
-        ? [{ id: null, stripeSecretKey: null }]
-        : candidates;
-
-      for (const candidate of lookupCandidates) {
+      // Tenant accounts take precedence. A configured global key must not
+      // make a different practice's Checkout session appear invalid.
+      for (const candidate of candidates.filter(candidate => candidate.stripeSecretKey)) {
         let key: string | null = null;
-        if (!globalStripe && candidate.stripeSecretKey) {
-          try {
-            key = decryptSecret(candidate.stripeSecretKey);
-          } catch {
-            continue;
-          }
-        }
-        const stripe = getStripeInstance(key);
-        if (!stripe) continue;
         try {
+          key = decryptSecret(candidate.stripeSecretKey!);
+        } catch {
+          providerFailed = true;
+          continue;
+        }
+        try {
+          const stripe = new Stripe(key, { apiVersion: "2026-05-27.dahlia" });
           verifiedSession = await stripe.checkout.sessions.retrieve(sessionId);
           providerTenantId = candidate.id;
           break;
@@ -5856,9 +5849,24 @@ export async function registerRoutes(
         }
       }
 
+      // Historical global-key practices can still use the return page, but
+      // only if the metadata identifies a practice without its own account.
+      if (!verifiedSession && process.env.STRIPE_SECRET_KEY) {
+        try {
+          const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: "2026-05-27.dahlia" });
+          const globalSession = await stripe.checkout.sessions.retrieve(sessionId);
+          const owner = candidates.find(candidate => candidate.id === globalSession.metadata?.tenantId);
+          if (owner && !owner.stripeSecretKey) {
+            verifiedSession = globalSession;
+            providerTenantId = owner.id;
+          }
+        } catch (error: any) {
+          if (error?.code !== "resource_missing") providerFailed = true;
+        }
+      }
       if (!verifiedSession) return generic(providerFailed ? "failed" : "invalid");
       const metadataTenantId = verifiedSession.metadata?.tenantId || null;
-      if (!metadataTenantId || (!globalStripe && providerTenantId !== metadataTenantId)) {
+      if (!metadataTenantId || providerTenantId !== metadataTenantId) {
         return generic("invalid");
       }
 
@@ -6007,12 +6015,22 @@ export async function registerRoutes(
               .from(clients).where(and(eq(clients.id, clientId), eq(clients.tenantId, webhookTenant.id))).limit(1).then(rows => rows[0])
             : undefined;
           const eventLinkId = typeof session.payment_link === "string" ? session.payment_link : session.payment_link?.id;
+          // A registration checkout for an opted-in practice must never fall
+          // through to the legacy handler, even when its signed metadata is
+          // incomplete or belongs to a superseded attempt. In particular the
+          // legacy handler deactivates the link before validating correlation.
           if (webhookTenant?.paymentReconciliationEnabled === true &&
-              linkedClient?.registrationPaymentAttemptKey &&
-              ["RegistrationPending", "Scheduled", "BookingConfirmed"].includes(linkedClient.status) &&
-              linkedClient.stripePaymentLinkId === eventLinkId &&
-              session.metadata?.tenantId === webhookTenant.id &&
-              session.metadata?.registrationAttemptKey === linkedClient.registrationPaymentAttemptKey) {
+              linkedClient?.registrationPaymentAttemptKey) {
+            if (!["RegistrationPending", "Scheduled", "BookingConfirmed"].includes(linkedClient.status) ||
+                linkedClient.stripePaymentLinkId !== eventLinkId ||
+                session.metadata?.tenantId !== webhookTenant.id ||
+                session.metadata?.registrationAttemptKey !== linkedClient.registrationPaymentAttemptKey ||
+                session.metadata?.clientId !== linkedClient.id) {
+              console.warn("Webhook: ignored uncorrelated registration checkout", {
+                tenantId: webhookTenant.id, eventId: event.id, reason: "current_attempt_mismatch",
+              });
+              return acknowledge();
+            }
             let verifiedTenantKey: string | null = null;
             try {
               verifiedTenantKey = webhookTenant.stripeSecretKey
@@ -6048,6 +6066,29 @@ export async function registerRoutes(
         // The link is also created with a completed_sessions limit of 1, so this
         // is defense in depth. The key used belongs to the signature-verified tenant.
         const completedPaymentLinkId = typeof session.payment_link === "string" ? session.payment_link : session.payment_link?.id;
+        // Do not disable an unrelated or still-unpaid registration link.
+        // Legacy tenants still need correlation before this Stripe mutation.
+        const legacyClient = await storage.getClientById(clientId);
+        if (!legacyClient || legacyClient.tenantId !== metaTenantId) return acknowledge();
+        const registrationAttemptKey = session.metadata?.registrationAttemptKey;
+        const isRegistrationPayment = legacyClient.status === "RegistrationPending" || !!registrationAttemptKey;
+        const validRegistrationPayment = !isRegistrationPayment || isCorrelatedRegistrationCheckout({
+          paymentStatus: session.payment_status,
+          metadataTenantId: session.metadata?.tenantId,
+          metadataClientId: session.metadata?.clientId,
+          metadataAttemptKey: registrationAttemptKey,
+          paymentLinkId: completedPaymentLinkId,
+          clientTenantId: legacyClient.tenantId,
+          clientId,
+          currentAttemptKey: legacyClient.registrationPaymentAttemptKey,
+          currentPaymentLinkId: legacyClient.stripePaymentLinkId,
+        });
+        if (!validRegistrationPayment) {
+          console.warn("Webhook: ignored uncorrelated registration checkout", {
+            tenantId: metaTenantId, eventId: event.id, reason: "current_attempt_mismatch",
+          });
+          return acknowledge();
+        }
         if (completedPaymentLinkId) {
           const stripeForLink = getStripeInstance(tenantStripeKey);
           if (stripeForLink) {
@@ -6062,39 +6103,14 @@ export async function registerRoutes(
         // Validate tenant ownership before any mutation. This runs on every
         // delivery: an existing ledger row suppresses only duplicate ledger
         // creation, never client finalization recovery.
-        const clientForUpdate = await storage.getClientById(clientId);
-        if (!clientForUpdate) return acknowledge();
-        if (clientForUpdate.tenantId !== metaTenantId) {
-          console.error(`Webhook: tenant mismatch for client ${clientId}`);
-          return acknowledge();
-        }
-
-        const client = clientForUpdate;
+        const client = legacyClient;
         const paymentIntentId = session.payment_intent;
         const stripeInstance = getStripeInstance(tenantStripeKey);
-        const registrationAttemptKey = session.metadata?.registrationAttemptKey;
-        const isRegistrationPayment = client.status === "RegistrationPending" || !!registrationAttemptKey;
         // A registration payment may finalize only from the *current* payment
         // link and attempt. This rejects stale links, cross-tenant metadata and
         // unpaid Checkout completion events before touching payment status,
         // ledger, or the booking workflow. Ordinary checkout handling remains
         // backward compatible below.
-        const validRegistrationPayment = !isRegistrationPayment || isCorrelatedRegistrationCheckout({
-          paymentStatus: session.payment_status,
-          metadataTenantId: session.metadata?.tenantId,
-          metadataClientId: session.metadata?.clientId,
-          metadataAttemptKey: registrationAttemptKey,
-          paymentLinkId: completedPaymentLinkId,
-          clientTenantId: client.tenantId,
-          clientId,
-          currentAttemptKey: client.registrationPaymentAttemptKey,
-          currentPaymentLinkId: client.stripePaymentLinkId,
-        });
-        if (!validRegistrationPayment) {
-          console.warn(`Webhook: ignored uncorrelated registration checkout for client ${clientId}`);
-          return acknowledge();
-        }
-
           // Persist paymentStatus = active; opportunistically save payment method if retrievable
           const clientUpdate: Record<string, unknown> = { paymentStatus: "active", updatedAt: new Date() };
 

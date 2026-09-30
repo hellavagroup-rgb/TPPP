@@ -6,7 +6,10 @@ import { confirmBooking } from "./bookingConfirmation";
 import { generateBookingConfirmedEmail, sendEmail } from "./email";
 
 type State = "awaiting" | "open" | "paid_unrecorded" | "recorded" | "uncertain";
-export type PaymentInspection = { state: State; detail: string; sessionId?: string; blocker?: string };
+export type PaymentInspection = {
+  state: State; detail: string; sessionId?: string; blocker?: string;
+  confirmationEmail?: "accepted_by_provider" | "not_recorded" | "not_enabled";
+};
 
 // Do not use getStripeInstance here: that legacy helper prefers a global key
 // over the tenant's key. Reconciliation must never search a different account.
@@ -60,11 +63,16 @@ async function inspect(tenant: Tenant, clientId: string, requestedSessionId?: st
     if (!paid) {
       return { state: open ? "open" : "awaiting", detail: open
         ? "Checkout is open; wait for Stripe payment or review it before sending another request."
-        : "Stripe has no completed payment on the current link. Do not mark paid or send a second request without reviewing the link." } as PaymentInspection;
+        : "Stripe has no completed payment on the current link. Check this practice's Stripe account for any payment made outside this link before taking another payment." } as PaymentInspection;
     }
     const [snapshot] = await db.select({ id: bookingSnapshots.id }).from(bookingSnapshots)
       .where(and(eq(bookingSnapshots.clientId, client.id), eq(bookingSnapshots.tenantId, tenant.id))).limit(1);
+    const [charge] = await db.select().from(paymentCharges)
+      .where(and(eq(paymentCharges.stripePaymentIntentId, paid.intentId), eq(paymentCharges.tenantId, tenant.id))).limit(1);
     const recorded = client.paymentStatus === "active" && !!snapshot &&
+      ["Scheduled", "BookingConfirmed"].includes(client.status) &&
+      charge?.status === "succeeded" && charge.clientId === client.id &&
+      charge.amountPence === client.agreedRatePence &&
       (!tenant.bookingConfirmedEmailEnabled || !!client.bookingConfirmationSentAt);
     return {
       state: recorded ? "recorded" : "paid_unrecorded",
@@ -73,6 +81,9 @@ async function inspect(tenant: Tenant, clientId: string, requestedSessionId?: st
         : "Stripe confirms payment, but the app has not finished booking progression.",
       blocker: !snapshot && (!client.assignedSlotId || !client.assignedClinicianId)
         ? "The allocated slot or clinician is missing; staff must resolve this before booking can be confirmed." : undefined,
+      confirmationEmail: tenant.bookingConfirmedEmailEnabled
+        ? (client.bookingConfirmationSentAt ? "accepted_by_provider" : "not_recorded")
+        : "not_enabled",
       paid, client, stripe,
     } as const;
   } catch (error) {
@@ -83,7 +94,7 @@ async function inspect(tenant: Tenant, clientId: string, requestedSessionId?: st
 
 export async function inspectRegistrationPayment(tenant: Tenant, clientId: string): Promise<PaymentInspection> {
   const result = await inspect(tenant, clientId);
-  return { state: result.state, detail: result.detail, sessionId: result.sessionId, blocker: result.blocker };
+  return { state: result.state, detail: result.detail, sessionId: result.sessionId, blocker: result.blocker, confirmationEmail: result.confirmationEmail };
 }
 
 export async function reconcileRegistrationPayment(
@@ -167,9 +178,18 @@ export async function reconcileRegistrationPayment(
         .where(and(eq(clients.id, client.id), eq(clients.tenantId, tenant.id)));
     }
     await afterConfirmation?.({ client, snapshot: confirmation.snapshot, intentId: paid.intentId });
-    return { state: "recorded", detail: "Stripe payment and booking are recorded. Staff must still schedule the appointment in the external practice system." };
+    return {
+      state: "recorded",
+      detail: "Stripe payment and booking are recorded. Staff must still schedule the appointment in the external practice system.",
+      confirmationEmail: tenant.bookingConfirmedEmailEnabled ? "accepted_by_provider" : "not_enabled",
+    };
   } catch (error) {
     console.error("Payment reconciliation: finalization incomplete");
-    return { state: "paid_unrecorded", detail: "Stripe confirms payment, but app finalization needs attention. Retry reconciliation; do not send another payment request.", blocker: (error as Error).message };
+    return {
+      state: "paid_unrecorded",
+      detail: "Stripe confirms payment, but app finalization needs attention. Retry reconciliation; do not send another payment request.",
+      blocker: error instanceof Error ? error.message : "Contact support to investigate this payment.",
+      confirmationEmail: "not_recorded",
+    };
   }
 }

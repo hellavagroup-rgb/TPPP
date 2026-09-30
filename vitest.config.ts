@@ -16,5 +16,8 @@ export default defineConfig({
     root: '.',
     include: ['server/**/*.test.ts', 'client/src/lib/**/*.test.ts', 'client/src/pages/**/*.browser.test.tsx'],
     environment: 'node',
+    // Parallel imports can start the server while authSession.test.ts is still
+    // resolving routes, hitting the existing routes/index import cycle.
+    maxWorkers: 1,
   },
 });

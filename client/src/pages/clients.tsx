@@ -3,6 +3,7 @@ import { Client, ClientStatus, FormTemplate } from "@/lib/mockData";
 import { confirmationBlocker, confirmationBlockerCopy } from "@shared/confirmationRecovery";
 import { HistoricReconciliation, useHistoricReconciliation } from "@/components/HistoricReconciliation";
 import { bookingCompletionBlocker } from "@shared/bookingCompletion";
+import { practiceToday, slotUnavailableReason } from "@shared/slotEligibility";
 import {
   isAwaitingConfirmationStatus,
   isMatchedAllocationStatus,
@@ -127,15 +128,7 @@ type ClinicianWithAvailability = Clinician & { name: string; availability: TimeS
 type BoardClient = ClientType & { allocationVisibility?: AllocationVisibilityData | null; bookingSnapshot?: { id: string } | null };
 
 function isSlotPending(slot: TimeSlot): boolean {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  
-  if (slot.startDate) {
-    const startDate = new Date(slot.startDate);
-    startDate.setHours(0, 0, 0, 0);
-    return startDate > today;
-  }
-  return false;
+  return slot.type === "Recurring" && Boolean(slot.startDate && slot.startDate > practiceToday());
 }
 
 function getSlotPendingDate(slot: TimeSlot): string | null {
@@ -146,12 +139,8 @@ function getSlotPendingDate(slot: TimeSlot): string | null {
 }
 
 function isSlotActiveGlobal(slot: TimeSlot) {
-  if (!slot.endDate) return true;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const endDate = new Date(slot.endDate);
-  endDate.setHours(0, 0, 0, 0);
-  return endDate >= today;
+  const reason = slotUnavailableReason({ ...slot, isBooked: false });
+  return reason === null || reason === "is not yet available";
 }
 
 function getSlotCounts(availability?: TimeSlot[]) {
@@ -1520,12 +1509,7 @@ export default function Clients() {
 
   // Helper to check if a slot is still active (end date is today or in the future)
   const isSlotActive = (slot: any) => {
-    if (!slot.endDate) return true; // No end date means always active
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const endDate = new Date(slot.endDate);
-    endDate.setHours(0, 0, 0, 0);
-    return endDate >= today;
+    return isSlotActiveGlobal(slot);
   };
 
   const getActiveSlots = (availability: any[]) => {

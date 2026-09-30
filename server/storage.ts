@@ -26,6 +26,7 @@ import {
   type RecentActivityCategory,
 } from "./activity";
 import { shouldResetZoomDelivery } from "@shared/bookingZoom";
+import { slotUnavailableReason } from "@shared/slotEligibility";
 import { UNALLOCATED_CLIENT_STATUSES } from "./strandedAllocationRepair";
 import {
   ACTIVE_ALLOCATION_STATUSES,
@@ -1038,7 +1039,7 @@ export class DatabaseStorage implements IStorage {
           throw new ManualAssignmentError("access_denied", "Access denied");
         }
 
-        const [slot] = await tx.select().from(timeSlots).where(eq(timeSlots.id, slotId));
+        const [slot] = await tx.select().from(timeSlots).where(eq(timeSlots.id, slotId)).for("update");
         if (!slot) {
           throw new ManualAssignmentError("slot_not_found", "Appointment slot not found");
         }
@@ -1051,20 +1052,11 @@ export class DatabaseStorage implements IStorage {
             "The selected appointment slot does not belong to this clinician",
           );
         }
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const startsLater = slot.startDate
-          ? new Date(`${slot.startDate}T00:00:00`) > today
-          : false;
-        const alreadyEnded = slot.endDate
-          ? new Date(`${slot.endDate}T00:00:00`) < today
-          : false;
-        if (slot.type === "Vacation" || startsLater || alreadyEnded) {
+        const unavailable = slotUnavailableReason(slot);
+        if (unavailable) {
           throw new ManualAssignmentError(
             "slot_unavailable",
-            startsLater
-              ? "The selected appointment slot is not yet available"
-              : "The selected appointment slot is no longer available",
+            `The selected appointment slot ${unavailable}`,
           );
         }
 

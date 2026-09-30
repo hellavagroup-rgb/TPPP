@@ -183,6 +183,28 @@ describe('Email Outlook rendering — no <style> blocks or class= attributes', (
       const email = await generateAllocationOptionsEmail(options, 'https://example.com/portal', tenantNone);
       assertOutlookSafe('generateAllocationOptionsEmail (no tenant)', email.html);
     });
+
+    it('clearly distinguishes recurring windows from exact one-off appointment dates', async () => {
+      const email = await generateAllocationOptionsEmail([
+        {
+          clinicianName: 'Dr. Eve', type: 'Recurring', day: 'Monday',
+          startTime: '09:00', endTime: '10:00', selectionToken: 'tok-recurring',
+          locationType: 'online', frequency: 'fortnightly',
+          startDate: '2026-06-01', endDate: '2026-11-30',
+        },
+        {
+          clinicianName: 'Dr. Frank', type: 'SpecificDate', day: null, date: '2026-08-16',
+          startTime: '14:00', endTime: '15:00', selectionToken: 'tok-oneoff',
+          locationType: 'in_person',
+        },
+      ], 'https://example.com/portal', tenant);
+
+      expect(email.text).toContain('Fortnightly — Monday, 9:00 AM–10:00 AM (Online)');
+      expect(email.text).toContain('Availability window: 1 Jun 2026 – 30 Nov 2026');
+      expect(email.text).toContain('First appointment date to be confirmed.');
+      expect(email.text).toContain('One-off appointment — 16 Aug 2026, 2:00 PM–3:00 PM (In Person)');
+      expect(email.text).not.toContain('One-off appointment — Sunday');
+    });
   });
 
   describe('generateBookingConfirmedEmail', () => {

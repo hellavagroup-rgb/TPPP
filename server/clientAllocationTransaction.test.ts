@@ -202,6 +202,9 @@ type AssignmentState = {
     day: string | null;
     date: string | null;
     startTime: string;
+    startDate?: string | null;
+    endDate?: string | null;
+    retiredAt?: Date | null;
   };
 };
 
@@ -418,6 +421,24 @@ describe("DatabaseStorage.assignClinicianToClient", () => {
       reason: "slot_unavailable",
       message: "The selected appointment slot is not yet available",
     });
+    expect(state).toEqual(original);
+  });
+
+  it.each([
+    ["expired one-off", { type: "SpecificDate", date: "2000-01-01" }, "slot_unavailable"],
+    ["expired recurring window", { type: "Recurring", endDate: "2000-01-01" }, "slot_unavailable"],
+    ["vacation", { type: "Vacation" }, "slot_unavailable"],
+    ["retired slot", { retiredAt: new Date("2026-01-01") }, "access_denied"],
+    ["booked slot", { isBooked: true }, "slot_unavailable"],
+    ["invalid one-off date", { type: "SpecificDate", date: "2026-02-30" }, "slot_unavailable"],
+  ])("does not assign an %s", async (_description, slotPatch, reason) => {
+    Object.assign(state.slot, slotPatch);
+    assignmentTransactions(state);
+    const original = structuredClone(state);
+
+    await expect(new DatabaseStorage().assignClinicianToClient(
+      "client-1", "clinician-1", "slot-1", "tenant-1",
+    )).rejects.toMatchObject({ reason });
     expect(state).toEqual(original);
   });
 

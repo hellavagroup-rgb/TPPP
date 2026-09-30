@@ -1,5 +1,6 @@
 import { Resend } from 'resend';
 import { storage } from './storage';
+import { formatOfferDate, formatOfferFrequency, formatOfferTimeRange, formatOfferWindow } from '../shared/offerSchedule';
 
 let resend: Resend | null = null;
 function getResend(): Resend {
@@ -492,6 +493,9 @@ export interface AllocationOption {
   endTime: string;
   selectionToken: string;
   locationType?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  frequency?: string | null;
 }
 
 export async function generateAllocationOptionsEmail(
@@ -504,19 +508,17 @@ export async function generateAllocationOptionsEmail(
 
   const optionsList = options.map((opt, i) => {
     const modeLabel = opt.locationType === 'in_person' ? ' (In Person)' : ' (Online)';
-    let dayLabel: string;
-    if (opt.type === 'SpecificDate' && opt.date) {
-      // Format as "16 Aug 2026" for one-off slots
-      const [y, m, d] = opt.date.split('-').map(Number);
-      const dateObj = new Date(y, m - 1, d);
-      dayLabel = dateObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-    } else {
-      dayLabel = opt.day || '';
+    const timeRange = formatOfferTimeRange(opt.startTime, opt.endTime);
+    if (opt.type === 'SpecificDate') {
+      const oneOffDate = opt.date ? formatOfferDate(opt.date) : 'Date unavailable';
+      return `Option ${i + 1}: One-off appointment — ${oneOffDate}, ${timeRange}${modeLabel}`;
     }
-    const slot = dayLabel
-      ? `${dayLabel} ${opt.startTime}–${opt.endTime}${modeLabel}`
-      : `${opt.startTime}–${opt.endTime}${modeLabel}`;
-    return `Option ${i + 1}: ${slot}`;
+    const weekday = opt.day || 'Weekday not specified';
+    return [
+      `Option ${i + 1}: ${formatOfferFrequency(opt.frequency)} — ${weekday}, ${timeRange}${modeLabel}`,
+      formatOfferWindow(opt.startDate, opt.endDate),
+      'First appointment date to be confirmed.',
+    ].join('\n');
   }).join('\n');
 
   if (storedTemplate) {

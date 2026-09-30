@@ -17,6 +17,7 @@ import {
 } from "@shared/schema";
 import { classifyPaymentReturn, type PaymentReturnResult } from "./paymentReturn";
 import { bookingCompletionDecision } from "@shared/bookingCompletion";
+import { slotUnavailableReason } from "@shared/slotEligibility";
 import { z } from "zod";
 import { sendEmail, getEmailDeliveryEvent, buildFromAddress, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateFormCompletedNotificationEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail, generateClinicianWelcomeEmail, generateAdminInviteEmail, generateAllocationOptionsEmail, generateBookingConfirmedEmail, generateZoomLinkEmail, getFormCompletionPageContent, GENERIC_PRACTICE_NAME } from "./email";
 import { alertIntakeBounce, isIntakeBounce } from "./intakeBounceAlerts";
@@ -1874,21 +1875,12 @@ export async function registerRoutes(
         // Verify slot exists, is unbooked, belongs to this tenant, and belongs to the stated clinician
         const [slot] = await db.select().from(timeSlots).where(eq(timeSlots.id, sel.slotId)).limit(1);
         if (!slot) return res.status(400).json({ error: `Slot ${sel.slotId} not found` });
-        if (slot.retiredAt) return res.status(409).json({ error: `Slot ${sel.slotId} has been retired and is no longer available` });
-        if (slot.isBooked) return res.status(400).json({ error: `Slot ${sel.slotId} is already booked` });
-        if (slot.type === "Vacation") return res.status(409).json({ error: `Slot ${sel.slotId} is not available for appointments` });
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        if (slot.startDate && new Date(`${slot.startDate}T00:00:00`) > today) {
-          return res.status(409).json({ error: `Slot ${sel.slotId} is not yet available` });
-        }
-        if (slot.endDate && new Date(`${slot.endDate}T00:00:00`) < today) {
-          return res.status(409).json({ error: `Slot ${sel.slotId} is no longer available` });
-        }
+        const unavailable = slotUnavailableReason(slot);
+        if (unavailable) return res.status(409).json({ error: `Slot ${sel.slotId} ${unavailable}` });
         if (slot.clinicianId !== sel.clinicianId) {
           return res.status(400).json({ error: `Slot ${sel.slotId} does not belong to clinician ${sel.clinicianId}` });
         }
-        if (slot.tenantId && slot.tenantId !== req.tenant?.id) {
+        if (slot.tenantId !== req.tenant?.id) {
           return res.status(403).json({ error: `Slot ${sel.slotId} does not belong to this tenant` });
         }
         if (
@@ -1927,6 +1919,15 @@ export async function registerRoutes(
           eq(clients.id, req.params.clientId), eq(clients.tenantId, req.tenant!.id),
         )).for("update");
         if (!current || current.completedAt) throw new Error("Reopen this completed booking before offering new slots.");
+        // Lock in a stable order and recheck after locking: availability may have
+        // changed since the request was validated. Offers themselves are not holds.
+        for (const sel of [...selections].sort((a, b) => a.slotId.localeCompare(b.slotId))) {
+          const [slot] = await tx.select().from(timeSlots).where(eq(timeSlots.id, sel.slotId)).for("update");
+          if (!slot || slot.clinicianId !== sel.clinicianId
+            || slot.tenantId !== req.tenant!.id || slotUnavailableReason(slot)) {
+            throw new Error("OFFER_SLOT_UNAVAILABLE");
+          }
+        }
         await tx.update(clientClinicianOptions).set({ status: "unavailable" }).where(and(
           eq(clientClinicianOptions.clientId, req.params.clientId),
           eq(clientClinicianOptions.tenantId, req.tenant!.id),
@@ -1952,6 +1953,9 @@ export async function registerRoutes(
                 type: slotRow?.type || null,
                 day: slotRow?.day || null,
                 date: slotRow?.date || null,
+                startDate: slotRow?.startDate || null,
+                endDate: slotRow?.endDate || null,
+                frequency: slotRow?.frequency || "weekly",
                 startTime: slotRow?.startTime || '',
                 endTime: slotRow?.endTime || '',
                 selectionToken: opt.selectionToken,
@@ -2010,6 +2014,9 @@ export async function registerRoutes(
       res.json(updated);
     } catch (error) {
       console.error("Failed to allocate options:", error);
+      if (error instanceof Error && error.message === "OFFER_SLOT_UNAVAILABLE") {
+        return res.status(409).json({ error: "An appointment slot is no longer available. Please refresh and choose another slot." });
+      }
       if (error instanceof Error && error.message === "Reopen this completed booking before offering new slots.") {
         return res.status(409).json({ error: error.message });
       }
@@ -2037,7 +2044,8 @@ export async function registerRoutes(
         return res.status(503).json({ error: "Allocation email is not configured" });
       }
 
-      const allOptions = await storage.getClientClinicianOptions(req.params.clientId);
+      const allOptions = (await storage.getClientClinicianOptions(req.params.clientId))
+        .filter(option => option.tenantId === req.tenant!.id && option.status === "pending");
       const firstToken = allOptions[0]?.selectionToken;
       if (!firstToken) {
         return res.status(409).json({ error: "No allocation options are available to resend" });
@@ -2050,6 +2058,10 @@ export async function registerRoutes(
           db.select().from(timeSlots).where(eq(timeSlots.id, option.slotId)).limit(1).then(rows => rows[0]),
           db.select().from(clinicians).where(eq(clinicians.id, option.clinicianId)).limit(1).then(rows => rows[0]),
         ]);
+        if (!slot || slot.tenantId !== req.tenant.id || clinician?.tenantId !== req.tenant.id
+          || slot.clinicianId !== option.clinicianId || slotUnavailableReason(slot)) {
+          return res.status(409).json({ error: "An appointment option is no longer available. Please offer new options instead." });
+        }
         if (req.tenant.zoomLinkEmailEnabled === true && onlineBookingNeedsZoomLink(slot?.locationType) && !isValidZoomLink(clinician?.zoomLink)) {
           const clinicianName = await getClinicianActivityName(clinician?.id);
           return res.status(409).json({ error: `${clinicianName} needs a valid Zoom link before these online options can be resent.` });
@@ -2070,6 +2082,9 @@ export async function registerRoutes(
             type: slotRow?.type || null,
             day: slotRow?.day || null,
             date: slotRow?.date || null,
+            startDate: slotRow?.startDate || null,
+            endDate: slotRow?.endDate || null,
+            frequency: slotRow?.frequency || "weekly",
             startTime: slotRow?.startTime || "",
             endTime: slotRow?.endTime || "",
             selectionToken: opt.selectionToken,
@@ -2666,9 +2681,12 @@ export async function registerRoutes(
           return {
             id: opt.id,
             status: opt.status,
+            available: Boolean(slotRow && clinicianRow?.tenantId === optionRow.tenantId
+              && slotRow.clinicianId === opt.clinicianId
+              && slotRow.tenantId === optionRow.tenantId && !slotUnavailableReason(slotRow)),
             clinicianName: clinicianUser?.name || "Clinician",
             slot: slotRow
-              ? { type: slotRow.type, day: slotRow.day, date: slotRow.date, startTime: slotRow.startTime, endTime: slotRow.endTime, locationType: slotRow.locationType }
+              ? { type: slotRow.type, day: slotRow.day, date: slotRow.date, startDate: slotRow.startDate, endDate: slotRow.endDate, frequency: slotRow.frequency, startTime: slotRow.startTime, endTime: slotRow.endTime, locationType: slotRow.locationType }
               : null,
           };
         })
@@ -2781,6 +2799,23 @@ export async function registerRoutes(
       let optionTransactionConfirmation: Awaited<ReturnType<typeof confirmBooking>> | null;
       try {
         optionTransactionConfirmation = await db.transaction(async (tx) => {
+          // Serialize against replacement offers and other choices for this client.
+          const [currentClient] = await tx.select().from(clients).where(and(
+            eq(clients.id, optionRow.clientId), eq(clients.tenantId, optionRow.tenantId),
+          )).for("update");
+          const [currentOption] = await tx.select().from(clientClinicianOptions).where(and(
+            eq(clientClinicianOptions.id, selectedOption.id),
+            eq(clientClinicianOptions.clientId, optionRow.clientId),
+            eq(clientClinicianOptions.tenantId, optionRow.tenantId),
+          ));
+          const [currentEntry] = await tx.select().from(clientClinicianOptions).where(and(
+            eq(clientClinicianOptions.id, optionRow.id),
+            eq(clientClinicianOptions.tenantId, optionRow.tenantId),
+          ));
+          if (!currentClient || currentClient.status !== "OptionsSent"
+            || currentOption?.status !== "pending" || currentEntry?.status !== "pending") {
+            throw new Error("SELECTION_ALREADY_SUBMITTED");
+          }
           const [selectedClinician] = await tx.select({
             sessionRatePence: clinicians.sessionRatePence,
           }).from(clinicians).where(and(
@@ -2792,37 +2827,19 @@ export async function registerRoutes(
           // Options are not holds. Claim exactly the selected slot with a conditional
           // update so two clients cannot both select it.
           if (!selectedOption.slotId) throw new Error("Selected option has no appointment slot");
+          const [currentSlot] = await tx.select().from(timeSlots).where(and(
+            eq(timeSlots.id, selectedOption.slotId),
+            eq(timeSlots.tenantId, optionRow.tenantId),
+            eq(timeSlots.clinicianId, selectedOption.clinicianId),
+          )).for("update");
+          if (!currentSlot || slotUnavailableReason(currentSlot)) throw new Error("SELECTED_SLOT_UNAVAILABLE");
           const claimed = await tx.update(timeSlots).set({ isBooked: true })
             .where(and(
               eq(timeSlots.id, selectedOption.slotId),
               eq(timeSlots.tenantId, optionRow.tenantId),
+              eq(timeSlots.clinicianId, selectedOption.clinicianId),
               isNull(timeSlots.retiredAt),
-              drizzleSql`(
-                ${timeSlots.isBooked} = false
-                OR (
-                  ${timeSlots.isBooked} = true
-                  AND EXISTS (
-                    SELECT 1
-                    FROM client_clinician_options legacy_option
-                    JOIN clients legacy_client ON legacy_client.id = legacy_option.client_id
-                    WHERE legacy_option.id = ${selectedOption.id}
-                      AND legacy_option.slot_id = ${selectedOption.slotId}
-                      AND legacy_option.client_id = ${optionRow.clientId}
-                      AND legacy_option.tenant_id = ${optionRow.tenantId}
-                      AND legacy_option.status = 'pending'
-                      AND legacy_client.status = 'OptionsSent'
-                  )
-                  AND NOT EXISTS (
-                    SELECT 1
-                    FROM clients booked_client
-                    WHERE booked_client.assigned_slot_id = ${timeSlots.id}
-                      AND booked_client.status IN (
-                        'Assigned', 'AwaitingConfirmation', 'Scheduled',
-                        'OptionSelected', 'RegistrationPending', 'BookingConfirmed'
-                      )
-                  )
-                )
-              )`,
+              eq(timeSlots.isBooked, false),
             )).returning({ id: timeSlots.id });
           if (claimed.length !== 1) throw new Error("SELECTED_SLOT_UNAVAILABLE");
 

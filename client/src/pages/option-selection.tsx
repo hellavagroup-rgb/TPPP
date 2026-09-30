@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Loader2, CheckCircle2, UserX, Clock, MapPin } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { formatOfferDate, formatOfferFrequency, formatOfferTimeRange, formatOfferWindow } from "@shared/offerSchedule";
 
 interface OptionDetail {
   id: string;
@@ -17,7 +18,11 @@ interface OptionDetail {
     startTime: string;
     endTime: string;
     locationType: string;
+    startDate?: string | null;
+    endDate?: string | null;
+    frequency?: string | null;
   } | null;
+  available?: boolean;
 }
 
 interface OptionsData {
@@ -26,14 +31,6 @@ interface OptionsData {
   tenantName: string;
   primaryColor: string | null;
   registrationUrl?: string | null;
-}
-
-function formatTime(t: string) {
-  // t is like "09:00" — convert to "9:00 AM"
-  const [h, m] = t.split(":").map(Number);
-  const ampm = h >= 12 ? "PM" : "AM";
-  const hour = h % 12 || 12;
-  return `${hour}:${m.toString().padStart(2, "0")} ${ampm}`;
 }
 
 function getSelectionErrorMessage(message: string) {
@@ -186,16 +183,24 @@ export default function OptionSelection() {
                 </CardTitle>
                 {option.slot && (
                   <CardDescription className="flex flex-col gap-1 mt-1">
-                    <span className="flex items-center gap-1.5">
-                      <Clock className="h-3.5 w-3.5" />
-                      {option.slot.type === "SpecificDate" && option.slot.date
-                        ? (() => {
-                            const [y, m, d] = option.slot.date.split("-").map(Number);
-                            return new Date(y, m - 1, d).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
-                          })()
-                        : option.slot.day}{" "}
-                      {formatTime(option.slot.startTime)} – {formatTime(option.slot.endTime)}
-                    </span>
+                    {option.slot.type === "SpecificDate" ? (
+                      <>
+                        <span className="flex items-center gap-1.5">
+                          <Clock className="h-3.5 w-3.5" />
+                          One-off appointment: {option.slot.date ? formatOfferDate(option.slot.date) : "Date unavailable"}
+                        </span>
+                        <span>{formatOfferTimeRange(option.slot.startTime, option.slot.endTime)}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="flex items-center gap-1.5">
+                          <Clock className="h-3.5 w-3.5" />
+                          {formatOfferFrequency(option.slot.frequency)} · {option.slot.day || "Weekday unavailable"} · {formatOfferTimeRange(option.slot.startTime, option.slot.endTime)}
+                        </span>
+                        <span>{formatOfferWindow(option.slot.startDate, option.slot.endDate)}</span>
+                        <span>First appointment date to be confirmed.</span>
+                      </>
+                    )}
                     <span className="flex items-center gap-1.5">
                       <MapPin className="h-3.5 w-3.5" />
                       {option.slot.locationType === "in_person" ? "In person" : "Online"}
@@ -204,10 +209,15 @@ export default function OptionSelection() {
                 )}
               </CardHeader>
               <CardContent className="pt-0">
+                {option.available === false && (
+                  <p className="text-sm text-destructive mb-3" role="status">
+                    This option is no longer available. Please contact your practice for another appointment option.
+                  </p>
+                )}
                 <Button
                   className="w-full"
                   style={{ backgroundColor: primaryColor, color: "#fff" }}
-                  disabled={mutation.isPending}
+                  disabled={mutation.isPending || option.available === false}
                   onClick={() => mutation.mutate({ clinicianOptionId: option.id })}
                 >
                   {mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}

@@ -39,6 +39,7 @@ const h = vi.hoisted(() => {
     stripeLinkMetadata: null as any,
     customerUpdates: [] as any[],
     rateChangeBeforeTransaction: null as number | null,
+    slotChangeBeforeTransaction: null as Record<string, unknown> | null,
   };
   let transactionTail: Promise<void> = Promise.resolve();
 
@@ -80,9 +81,13 @@ const h = vi.hoisted(() => {
           // Enforce the real SQL ownership predicate for snapshot reads. A foreign
           // row with the same client ID must not satisfy an idempotent confirmation.
           const sql = new PgDialect().sqlToQuery(condition).sql;
-          return sql.includes('"booking_snapshots"."tenant_id"')
-            ? rows.filter(row => row.tenantId === state.tenant.id)
-            : rows;
+          if (sql.includes('"booking_snapshots"."tenant_id"')) {
+            return rows.filter(row => row.tenantId === state.tenant.id);
+          }
+          if (sql.includes('"time_slots"."tenant_id"')) {
+            return rows.filter(row => row.tenantId === state.tenant.id);
+          }
+          return rows;
         };
         result = undefined;
         return builder;
@@ -236,6 +241,10 @@ const h = vi.hoisted(() => {
       if (state.rateChangeBeforeTransaction !== null) {
         state.client.agreedRatePence = state.rateChangeBeforeTransaction;
         state.rateChangeBeforeTransaction = null;
+      }
+      if (state.slotChangeBeforeTransaction) {
+        Object.assign(state.slot, state.slotChangeBeforeTransaction);
+        state.slotChangeBeforeTransaction = null;
       }
       const previous = transactionTail;
       let release!: () => void;
@@ -518,7 +527,7 @@ function resetState(overrides: { client?: any; tenant?: any } = {}) {
   }];
   h.state.slot = {
     id: "slot-a", tenantId: "tenant-a", clinicianId: "clinician-a", isBooked: false,
-    type: "SpecificDate", day: null, date: "2026-09-10",
+    type: "SpecificDate", day: null, date: "2999-09-10",
     startTime: "10:00", endTime: "11:00", locationType: "online",
   };
   h.state.clinician = {
@@ -555,6 +564,7 @@ function resetState(overrides: { client?: any; tenant?: any } = {}) {
   h.state.stripeLinkMetadata = null;
   h.state.customerUpdates = [];
   h.state.rateChangeBeforeTransaction = null;
+  h.state.slotChangeBeforeTransaction = null;
   vi.clearAllMocks();
 }
 
@@ -1566,6 +1576,185 @@ describe("registration journey HTTP routes", () => {
     expect(h.state.activities.filter(a => a.action === "activity_client_options_sent")).toHaveLength(1);
   });
 
+  it("offers a future one-off appointment and lets the client select it", async () => {
+    h.state.options = [];
+    h.state.client.status = "FormsCompleted";
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.tenant.autoAllocationEmailEnabled = true;
+    h.state.slot.date = "2999-09-10";
+
+    const offer = await request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({ selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }] }),
+    });
+
+    expect(offer.status).toBe(200);
+    expect(h.state.options).toHaveLength(1);
+    expect(h.state.options[0].status).toBe("pending");
+    expect(h.state.client.status).toBe("OptionsSent");
+
+    const selection = await request(`/api/public/options/${h.state.options[0].selectionToken}/select`, {
+      method: "POST",
+      body: JSON.stringify({ clinicianOptionId: h.state.options[0].id }),
+    });
+
+    expect(selection.status).toBe(200);
+    expect(selection.body.registrationUrl).toMatch(/^\/register\/client-a\//);
+    expect(h.state.client.status).toBe("OptionSelected");
+    expect(h.state.slot.isBooked).toBe(true);
+  });
+
+  it.each([
+    ["a past one-off appointment", { type: "SpecificDate", date: "2000-01-01" }],
+    ["an expired recurring window", { type: "Recurring", date: null, endDate: "2000-01-01" }],
+    ["a recurring slot whose start is in the future", { type: "Recurring", date: null, startDate: "2999-01-01" }],
+    ["a vacation", { type: "Vacation", date: null }],
+    ["a retired slot", { retiredAt: new Date(), date: null }],
+    ["a booked slot", { isBooked: true, date: null }],
+    ["a malformed one-off date", { type: "SpecificDate", date: "2026-02-30" }],
+  ])("does not offer %s", async (_description, slotPatch) => {
+    h.state.options = [];
+    h.state.client.status = "FormsCompleted";
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    Object.assign(h.state.slot, slotPatch);
+
+    const response = await request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({ selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }] }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(h.state.options).toHaveLength(0);
+    expect(h.state.client.status).toBe("FormsCompleted");
+  });
+
+  it("rechecks offer eligibility after locking the slot", async () => {
+    h.state.options = [];
+    h.state.client.status = "FormsCompleted";
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.slotChangeBeforeTransaction = { retiredAt: new Date() };
+
+    const response = await request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({ selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }] }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(h.state.slot.retiredAt).toBeInstanceOf(Date);
+    expect(h.state.options).toHaveLength(0);
+    expect(h.state.client.status).toBe("FormsCompleted");
+  });
+
+  it("rejects a future recurring window through the portal and stale selection link", async () => {
+    Object.assign(h.state.slot, {
+      type: "Recurring",
+      date: null,
+      day: "Monday",
+      startDate: "2999-01-01",
+    });
+
+    const portal = await request("/api/public/options/selection-token-a");
+    expect(portal.status).toBe(200);
+    expect(portal.body.options[0].available).toBe(false);
+
+    const selection = await request("/api/public/options/selection-token-a/select", {
+      method: "POST",
+      body: JSON.stringify({ clinicianOptionId: "option-a" }),
+    });
+
+    expect(selection.status).toBe(409);
+    expect(h.state.client.status).toBe("OptionsSent");
+    expect(h.state.options[0].status).toBe("pending");
+    expect(h.state.slot.isBooked).toBe(false);
+  });
+
+  it("does not claim a slot that becomes unavailable before selection locks it", async () => {
+    h.state.slotChangeBeforeTransaction = { isBooked: true };
+
+    const response = await request("/api/public/options/selection-token-a/select", {
+      method: "POST",
+      body: JSON.stringify({ clinicianOptionId: "option-a" }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(h.state.client.status).toBe("OptionsSent");
+    expect(h.state.options[0].status).toBe("pending");
+    expect(h.state.slot.isBooked).toBe(true);
+  });
+
+  it("rejects a slot belonging to another tenant when creating or selecting an offer", async () => {
+    h.state.options = [];
+    h.state.client.status = "FormsCompleted";
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.slot.tenantId = "tenant-b";
+
+    const offer = await request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({ selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }] }),
+    });
+    expect(offer.status).toBe(403);
+    expect(h.state.options).toHaveLength(0);
+
+    h.state.client.status = "OptionsSent";
+    h.state.options = [{
+      id: "option-a", clientId: "client-a", clinicianId: "clinician-a", slotId: "slot-a",
+      tenantId: "tenant-a", status: "pending", selectionToken: "selection-token-a",
+    }];
+    const selection = await request("/api/public/options/selection-token-a/select", {
+      method: "POST",
+      body: JSON.stringify({ clinicianOptionId: "option-a" }),
+    });
+    expect(selection.status).toBe(409);
+    expect(h.state.client.status).toBe("OptionsSent");
+    expect(h.state.slot.isBooked).toBe(false);
+  });
+
+  it("requires an explicit tenant owner when creating an offer", async () => {
+    h.state.options = [];
+    h.state.client.status = "FormsCompleted";
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.slot.tenantId = null;
+
+    const response = await request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({ selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }] }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(h.state.options).toHaveLength(0);
+    expect(h.state.client.status).toBe("FormsCompleted");
+  });
+
+  it("refuses to resend options whose slot has expired", async () => {
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.client.status = "OptionsSent";
+    Object.assign(h.state.slot, { type: "SpecificDate", date: "2000-01-01" });
+
+    const response = await request("/api/clients/client-a/resend-allocation-options", {
+      method: "POST",
+    });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error).toMatch(/no longer available/i);
+    expect(h.state.emails).toHaveLength(0);
+  });
+
+  it("does not include another tenant's pending options in a resend", async () => {
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.client.status = "OptionsSent";
+    h.state.options = [{
+      ...h.state.options[0], tenantId: "tenant-b", selectionToken: "foreign-token",
+    }];
+
+    const response = await request("/api/clients/client-a/resend-allocation-options", {
+      method: "POST",
+    });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error).toMatch(/no allocation options/i);
+    expect(h.state.emails).toHaveLength(0);
+  });
+
   it("records a verified session-format override when allocation options are sent", async () => {
     h.state.options = [];
     h.state.client.status = "FormsCompleted";
@@ -1825,7 +2014,7 @@ describe("registration journey HTTP routes", () => {
       clinicianId: "clinician-a",
       clinicianName: "Dr Test",
       slotType: "SpecificDate",
-      date: "2026-09-10",
+      date: "2999-09-10",
       day: null,
       startTime: "10:00",
       endTime: "11:00",
@@ -1900,6 +2089,9 @@ describe("registration journey HTTP routes", () => {
     });
     expect(conflict.status).toBe(409);
     expect(conflict.body.error).toMatch(/no longer available/i);
+    expect(h.state.client.status).toBe("OptionsSent");
+    expect(h.state.slot.isBooked).toBe(false);
+    expect(h.state.options[0].status).toBe("pending");
     expect(h.state.activities).toHaveLength(0);
     expect(h.state.emails).toHaveLength(0);
   });

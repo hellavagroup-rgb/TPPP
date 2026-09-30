@@ -14,6 +14,7 @@ export type Appointment = {
 
 export type AllocationVisibilityData = {
   appointment: Appointment | null;
+  legacyAssignedSlot?: string | null;
   options: Array<{
     status: "pending" | "selected" | "declined" | "unavailable";
     createdAt: string;
@@ -26,27 +27,46 @@ export type AllocationVisibilityData = {
 export function appointmentText(appointment: Appointment | null): string {
   if (!appointment) return "Appointment details unavailable";
   const day = appointment.type === "SpecificDate" ? appointment.date : appointment.day;
-  const time = [appointment.startTime, appointment.endTime].filter(Boolean).join("–");
-  return day && time ? formatAssignedSlot(`${day} ${appointment.startTime}`) +
-    (appointment.endTime ? `–${appointment.endTime}` : "") : "Appointment day/time unavailable";
+  const start = appointment.startTime;
+  const end = appointment.endTime;
+  if (!day && !start && !end) return "Appointment day/time unavailable";
+  if (day && start) {
+    try {
+      return formatAssignedSlot(`${day} ${start}`) + (end ? `–${end}` : "");
+    } catch {
+      return "Appointment date unavailable";
+    }
+  }
+  return [day || "Day/date unavailable", start || (end ? `End ${end} · start time unavailable` : "Time unavailable")]
+    .join(" · ");
 }
 
 function Location({ type }: { type: string | null }) {
   return <span>{type === "in_person" ? "In-Person" : type === "online" ? "Online" : "Location unavailable"}</span>;
 }
 
-export function SelectedAppointment({ data, clientId }: { data: AllocationVisibilityData | null; clientId: string }) {
+export function SelectedAppointment({ data, clientId, historicSlot }: {
+  data: AllocationVisibilityData | null; clientId: string; historicSlot?: string | null;
+}) {
   const appointment = data?.appointment ?? null;
+  const legacySlot = data?.legacyAssignedSlot ?? historicSlot;
+  const completeTime = appointment?.startTime &&
+    (appointment.type === "SpecificDate" ? appointment.date : appointment.day);
   return <div className="mt-2 text-[10px] text-muted-foreground space-y-0.5" data-testid={`selected-appointment-${clientId}`}>
     <p className="font-medium text-foreground">Selected appointment</p>
     <p>{appointment?.clinicianName || "Clinician unavailable"}</p>
     <p>{appointmentText(appointment)}</p>
+    {!completeTime && legacySlot?.trim() && <p data-testid={`historic-slot-${clientId}`}>
+      Recorded appointment text (not verified): {legacySlot}
+    </p>}
     <p><Location type={appointment?.locationType ?? null} />{appointment?.retired ? " · Slot retired" : ""}</p>
   </div>;
 }
 
-export function OfferedOptions({ data, clientId }: { data: AllocationVisibilityData | null; clientId: string }) {
-  const [open, setOpen] = useState(false);
+export function OfferedOptions({ data, clientId, initiallyOpen = false }: {
+  data: AllocationVisibilityData | null; clientId: string; initiallyOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(initiallyOpen);
   return <div className="mt-2" data-testid={`offer-history-${clientId}`}>
     <button type="button" className="text-[10px] underline text-indigo-700" onClick={() => setOpen(!open)}
       aria-expanded={open}>Offered options ({data?.options.length ?? 0})</button>
@@ -62,18 +82,20 @@ export function OfferedOptions({ data, clientId }: { data: AllocationVisibilityD
 }
 
 export function AllocationCardDetails({
-  enabled, status, data, clientId, notes,
+  enabled, status, data, clientId, notes, historicSlot,
 }: {
   enabled: boolean;
   status: string;
   data: AllocationVisibilityData | null;
   clientId: string;
   notes: string | null | undefined;
+  historicSlot?: string | null;
 }) {
   if (!enabled) return null;
   return <>
-    {status !== "OptionsSent" && <SelectedAppointment data={data} clientId={clientId} />}
-    <OfferedOptions data={data} clientId={clientId} />
+    {status !== "OptionsSent" && <SelectedAppointment data={data} clientId={clientId} historicSlot={historicSlot} />}
+    <OfferedOptions key={`${clientId}-${status}`} data={data} clientId={clientId}
+      initiallyOpen={["Assigned", "OptionsSent", "OptionSelected"].includes(status)} />
     {notes && <p className="text-[10px] text-muted-foreground mt-1 italic line-clamp-2" data-testid={`notes-${clientId}`}>"{notes}"</p>}
   </>;
 }

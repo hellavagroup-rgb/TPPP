@@ -1,5 +1,13 @@
 # The Perinatal Psychology Practice - Client Management System
 
+## Matched details rollout
+
+The user approved enabling **Matched appointment details** for **CY&A Psychology only** on 30 September 2026, after publishing the visibility fix. Leave The Perinatal Psychology Practice and Wellness Demo Practice unchanged.
+
+After publishing, use Super Admin → CY&A Psychology → Features to enable **Matched appointment details** and save. Verify the production `allocation_visibility_enabled` values separately: publishing a schema does not apply tenant-specific data opt-ins. The live flag was still off at the last read-only inspection; approval is not evidence of activation.
+
+The presentation must preserve authorised notes through Assigned, OptionsSent and OptionSelected; use tenant-owned appointment/offer evidence; and label missing details or historical text without guessing a selection or changing booking/payment state.
+
 ## Recent Changes (July 2026)
 
 **Multi-tenancy & security incidents** (most recent first). Recurring root-cause pattern: tenant ID must always be derived server-side from a reliably-tagged parent entity (session tenant, or a verified parent record) — never trusted from a request body, and never left to a default on public routes.

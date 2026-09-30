@@ -2484,7 +2484,8 @@ export default function Clients() {
                       </>
                     )}
                     <AllocationCardDetails enabled={allocationVisibilityEnabled} status={client.status}
-                      data={client.allocationVisibility ?? null} clientId={client.id} notes={client.notes} />
+                      data={client.allocationVisibility ?? null} clientId={client.id} notes={client.notes}
+                      historicSlot={client.assignedSlot} />
                     {workflowProgress(client)}
                   </CardContent>
                 </Card>
@@ -2729,7 +2730,8 @@ export default function Clients() {
                         </>
                       )}
                       <AllocationCardDetails enabled={allocationVisibilityEnabled} status={client.status}
-                        data={client.allocationVisibility ?? null} clientId={client.id} notes={client.notes} />
+                        data={client.allocationVisibility ?? null} clientId={client.id} notes={client.notes}
+                        historicSlot={client.assignedSlot} />
                       {workflowProgress(client)}
                     </CardContent>
                   </Card>

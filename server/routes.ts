@@ -6856,6 +6856,7 @@ export async function registerRoutes(
         autoAllocationEmailEnabled: z.boolean().optional(),
         registrationFormEnabled: z.boolean().optional(),
         intakeDeliveryDiagnosticsEnabled: z.boolean().optional(),
+        allocationVisibilityEnabled: z.boolean().optional(),
         paymentReconciliationEnabled: z.boolean().optional(),
         confirmationRecoveryEnabled: z.boolean().optional(),
         bookingConfirmedEmailEnabled: z.boolean().optional(),

@@ -30,3 +30,4 @@
 - [Booking harness reservation states](booking-harness-reservation-states.md) — automated path fixtures can begin with an unreserved slot; test manual reservation checks separately.
 - [Tenant opt-ins at publish](tenant-opt-in-publish.md) — a schema-only publish does not replay migration data updates that activate specific practices.
 - [External bookings are not portal confirmations](external-bookings-not-portal-confirmations.md) — staff diary review is separate evidence; never translate it into a portal snapshot or payment.
+- [Historical appointment evidence](historic-appointment-evidence.md) — old allocation status/text is not a verified appointment; preserve context without inferring a selection from offers.

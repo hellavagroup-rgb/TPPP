@@ -8,6 +8,7 @@ export type AllocationOfferState = "pending" | "declined" | "closed";
 export interface AllocationOfferSummary {
   state: AllocationOfferState;
   eligibility: AllocationOfferEligibility | null;
+  deliveryAcceptedAt: Date | null;
 }
 
 // Workflow actions need this summary even when appointment-detail visibility is off.
@@ -23,6 +24,7 @@ export async function getAllocationOfferStates(clientList: Client[], tenantId: s
     tenantId: clientClinicianOptions.tenantId,
     status: clientClinicianOptions.status,
     createdAt: clientClinicianOptions.createdAt,
+    sentAt: clientClinicianOptions.sentAt,
     slotId: clientClinicianOptions.slotId,
     clinicianId: clientClinicianOptions.clinicianId,
   }).from(clientClinicianOptions).where(and(
@@ -57,6 +59,10 @@ export async function getAllocationOfferStates(clientList: Client[], tenantId: s
     }).length;
     result.set(id, {
       state,
+      // Pending rows alone do not prove the family was emailed. Be conservative
+      // if any current choice lacks its recorded provider-acceptance milestone.
+      deliveryAcceptedAt: pendingOptions.length && pendingOptions.every(option => option.sentAt)
+        ? pendingOptions[0].sentAt! : null,
       eligibility: state === "pending" ? {
         pendingCount: pendingOptions.length,
         availableCount,

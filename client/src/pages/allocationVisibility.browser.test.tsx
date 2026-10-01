@@ -59,6 +59,7 @@ describe("tenant-gated allocation cards", () => {
       appointment: null,
       options: [{ ...data.options[0], slot: { ...data.options[0].slot!, retired: true } }],
     }} clientId="one" notes={null} />);
+    expect(screen.getByTestId("selected-appointment-one").textContent).toContain("No selected appointment recorded");
     expect(screen.getByTestId("selected-appointment-one").textContent).toContain("Appointment details unavailable");
     fireEvent.click(screen.getByRole("button", { name: "Offered options (1)" }));
     expect(screen.getByTestId("offer-history-one").textContent).toContain("Slot retired");

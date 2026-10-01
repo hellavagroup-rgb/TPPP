@@ -130,10 +130,10 @@ describe("allocation offer-state summaries", () => {
   it("reports valid pending choices without changing declined or closed history", async () => {
     const summary = await getAllocationOfferStates(clients, "practice-a");
     expect(summary.get("client-a-pending")).toEqual({
-      state: "pending", eligibility: { pendingCount: 1, availableCount: 1, unavailableCount: 0 },
+      state: "pending", deliveryAcceptedAt: null, eligibility: { pendingCount: 1, availableCount: 1, unavailableCount: 0 },
     });
-    expect(summary.get("client-a-declined")).toEqual({ state: "declined", eligibility: null });
-    expect(summary.get("client-a-closed")).toEqual({ state: "closed", eligibility: null });
+    expect(summary.get("client-a-declined")).toEqual({ state: "declined", deliveryAcceptedAt: null, eligibility: null });
+    expect(summary.get("client-a-closed")).toEqual({ state: "closed", deliveryAcceptedAt: null, eligibility: null });
   });
 
   it.each([
@@ -147,7 +147,7 @@ describe("allocation offer-state summaries", () => {
     Object.assign(h.slots[0], changes);
     const summary = (await getAllocationOfferStates(clients, "practice-a")).get("client-a-pending");
     expect(summary).toEqual({
-      state: "pending", eligibility: { pendingCount: 1, availableCount: 0, unavailableCount: 1 },
+      state: "pending", deliveryAcceptedAt: null, eligibility: { pendingCount: 1, availableCount: 0, unavailableCount: 1 },
     });
   });
 
@@ -166,9 +166,20 @@ describe("allocation offer-state summaries", () => {
     addOption("client-a-pending", "practice-b", "pending", "2026-03-01T00:00:00Z", "foreign-token");
     const summary = (await getAllocationOfferStates(clients, "practice-a")).get("client-a-pending");
     expect(summary).toEqual({
-      state: "pending", eligibility: { pendingCount: 2, availableCount: 1, unavailableCount: 1 },
+      state: "pending", deliveryAcceptedAt: null, eligibility: { pendingCount: 2, availableCount: 1, unavailableCount: 1 },
     });
     expect(JSON.stringify(summary)).not.toMatch(/token|slot|clinician/);
+  });
+
+  it("uses delivery evidence only from all current tenant-owned pending choices", async () => {
+    const acceptedAt = new Date("2026-02-01T12:00:00Z");
+    h.options.find(option => option.clientId === "client-a-pending" && option.tenantId === "practice-a" && option.status === "pending").sentAt = acceptedAt;
+    expect((await getAllocationOfferStates(clients, "practice-a")).get("client-a-pending")?.deliveryAcceptedAt).toEqual(acceptedAt);
+    addOption("client-a-pending", "practice-a", "pending", "2026-02-01T00:00:00Z", "unsent-choice");
+    expect((await getAllocationOfferStates(clients, "practice-a")).get("client-a-pending")?.deliveryAcceptedAt).toBeNull();
+    h.options.forEach(option => { if (option.tenantId === "practice-a") option.sentAt = null; });
+    h.options.find(option => option.clientId === "client-a-pending" && option.tenantId === "practice-b").sentAt = acceptedAt;
+    expect((await getAllocationOfferStates(clients, "practice-a")).get("client-a-pending")?.deliveryAcceptedAt).toBeNull();
   });
 
   it("does not query data for foreign clients or completed appointments", async () => {

@@ -53,13 +53,13 @@ export function SelectedAppointment({ data, clientId, historicSlot }: {
   const completeTime = appointment?.startTime &&
     (appointment.type === "SpecificDate" ? appointment.date : appointment.day);
   return <div className="mt-2 text-[10px] text-muted-foreground space-y-0.5" data-testid={`selected-appointment-${clientId}`}>
-    <p className="font-medium text-foreground">Selected appointment</p>
-    <p>{appointment?.clinicianName || "Clinician unavailable"}</p>
+    <p className="font-medium text-foreground">{appointment ? "Selected appointment" : "No selected appointment recorded"}</p>
+    {appointment && <p>{appointment.clinicianName || "Clinician unavailable"}</p>}
     <p>{appointmentText(appointment)}</p>
     {!completeTime && legacySlot?.trim() && <p data-testid={`historic-slot-${clientId}`}>
       Recorded appointment text (not verified): {legacySlot}
     </p>}
-    <p><Location type={appointment?.locationType ?? null} />{appointment?.retired ? " · Slot retired" : ""}</p>
+    {appointment && <p><Location type={appointment.locationType ?? null} />{appointment.retired ? " · Slot retired" : ""}</p>}
   </div>;
 }
 

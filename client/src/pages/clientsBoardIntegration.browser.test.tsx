@@ -227,6 +227,59 @@ describe("Clients page compact board integration", () => {
     expect(screen.getAllByTestId("client-details-confirmed-1")).toHaveLength(1);
   });
 
+  it("does not claim the family is choosing when current offer delivery is unrecorded", async () => {
+    const client = makeClient("unsent-offer", "MAT-UNSENT", "OptionsSent");
+    client.notes = "Assessment enquiry; appointment options prepared.";
+    client.allocationOfferState = { state: "pending", deliveryAcceptedAt: null };
+    client.allocationOfferEligibility = { pendingCount: 1, availableCount: 1, unavailableCount: 0 };
+    client.allocationVisibility = {
+      appointment: null,
+      options: [{ status: "pending", clinicianName: "Clinician A", createdAt: "2026-01-09",
+        sentAt: "2026-01-09T12:00:00Z", slot: null }],
+    };
+    apiFixtures.tenant = makeTenant({ allocationVisibilityEnabled: true });
+    apiFixtures.clients = [client];
+    apiFixtures.historicRows = [];
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const tile = await screen.findByTestId("compact-client-card-unsent-offer");
+    expect(tile.textContent).toContain("Next action");
+    expect(tile.textContent).not.toContain("Waiting for");
+  });
+
+  it("shows context and a real next action for a historic Matched record without a selected appointment", async () => {
+    const matched = makeClient("legacy-matched", "MAT-LEGACY", "Assigned");
+    matched.notes = "Parent seeking an educational assessment; appointment choices discussed.";
+    matched.allocationVisibility = {
+      appointment: null,
+      options: [
+        { status: "unavailable", clinicianName: "Clinician A", createdAt: "2026-01-09",
+          sentAt: null, slot: { type: "Recurring", day: "Tuesday", date: null,
+            startTime: "17:00", endTime: "18:00", locationType: "in_person", retired: true } },
+        { status: "pending", clinicianName: "Clinician A", createdAt: "2026-01-09",
+          sentAt: null, slot: { type: "Recurring", day: "Monday", date: null,
+            startTime: "19:00", endTime: "20:00", locationType: "in_person", retired: false } },
+      ],
+    };
+    apiFixtures.tenant = makeTenant({ allocationVisibilityEnabled: true, registrationFormEnabled: true });
+    apiFixtures.clients = [matched];
+    apiFixtures.historicRows = [];
+    const user = userEvent.setup();
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const tile = await screen.findByTestId("compact-client-card-legacy-matched");
+    expect(tile.textContent).toContain("Parent seeking an educational assessment");
+    expect(tile.textContent).toMatch(/Next action/i);
+    expect(tile.textContent).not.toMatch(/waiting for.*(selection|choose)/i);
+    await user.click(tile);
+    const detail = await screen.findByRole("dialog");
+    expect(within(detail).getByTestId("selected-appointment-legacy-matched").textContent)
+      .toContain("No selected appointment recorded");
+    expect(within(detail).getAllByRole("button", { name: /Offer fresh choices/i }).length).toBeGreaterThan(0);
+    expect(within(detail).queryByRole("button", { name: "Email Sent" })).toBeNull();
+    expect(within(detail).queryByRole("button", { name: /Resend options/i })).toBeNull();
+  });
+
   it("opens the correct Matched and AwaitingConfirmation details with their real actions inside the panels", async () => {
     const matched = makeClient("matched-1", "MAT-201", "Assigned");
     matched.assignedClinicianId = "clinician-1";
@@ -256,7 +309,8 @@ describe("Clients page compact board integration", () => {
     await user.click(screen.getByTestId("compact-client-card-matched-1"));
     let detail = await screen.findByRole("dialog");
     expect(detail.textContent).toContain("MAT-201");
-    expect(within(detail).getByRole("button", { name: "Email Sent" })).toBeTruthy();
+    expect(within(detail).queryByRole("button", { name: "Email Sent" })).toBeNull();
+    expect(within(detail).getAllByRole("button", { name: /Offer fresh choices/i }).length).toBeGreaterThan(0);
     expect(within(detail).queryByText("AWT-301")).toBeNull();
 
     await user.keyboard("{Escape}");

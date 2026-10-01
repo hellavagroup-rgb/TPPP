@@ -3,7 +3,7 @@ import { Client, ClientStatus, FormTemplate } from "@/lib/mockData";
 import { confirmationBlocker, confirmationBlockerCopy } from "@shared/confirmationRecovery";
 import { canInspectRegistrationPayment } from "@shared/paymentReconciliationEligibility";
 import { HistoricReconciliation, useHistoricReconciliation } from "@/components/HistoricReconciliation";
-import { CompactClientCard, ClientDetailPanel } from "@/components/CompactClientCard";
+import { CompactClientCard, ClientDetailPanel, hasRecordedAppointmentSelection } from "@/components/CompactClientCard";
 import { ConfirmPortalReconcile } from "@/components/ConfirmPortalReconcile";
 import { WriteuppAppointmentAction } from "@/components/WriteuppAppointmentAction";
 import { classifyBookingProgress, getWriteUppArrangedIds } from "@/lib/clientBoardClassification";
@@ -104,6 +104,7 @@ import {
   type ClientStatus as CanonicalClientStatus,
 } from "@shared/clientWorkflow";
 import { paymentProgress, registrationProgress } from "@shared/clientProgress";
+import { getClientNextStep, getCompactClientDescription } from "@/lib/clientNextStep";
 import { invalidateOperationalData, useOperationalRefresh } from "@/lib/operationalRefresh";
 import {
   findAvailabilityInSubmissions,
@@ -135,11 +136,36 @@ function mutationErrorMessage(error: Error, fallback: string): string {
 type ClinicianWithAvailability = Clinician & { name: string; availability: TimeSlot[] };
 type BoardClient = ClientType & {
   allocationVisibility?: AllocationVisibilityData | null;
-  allocationOfferState?: AllocationOfferState;
+  allocationOfferState?: AllocationOfferState | {
+    state: AllocationOfferState;
+    deliveryAcceptedAt?: string | null;
+    sentAt?: string | null;
+  };
   allocationOfferEligibility?: AllocationOfferEligibility | null;
   bookingSnapshot?: { id: string } | null;
   writeuppArranged?: boolean;
 };
+
+function getAllocationOfferState(client: BoardClient): AllocationOfferState {
+  const projection = client.allocationOfferState;
+  return typeof projection === "string" ? projection : projection?.state ?? null;
+}
+
+function hasRecordedOfferDelivery(client: BoardClient, visibilityEnabled: boolean): boolean {
+  const projection = client.allocationOfferState;
+  if (client.status !== "OptionsSent" || getAllocationOfferState(client) !== "pending") return false;
+  if (typeof projection === "object" && projection && "deliveryAcceptedAt" in projection) {
+    return !!projection.deliveryAcceptedAt;
+  }
+  const deliveryAt = (typeof projection === "object" && projection
+    ? projection.deliveryAcceptedAt || projection.sentAt
+    : null) || (client as any).allocationOfferDeliveryAcceptedAt;
+  return client.status === "OptionsSent"
+    && getAllocationOfferState(client) === "pending"
+    && (!!deliveryAt || (visibilityEnabled
+      && !!client.allocationVisibility?.options?.filter(option => option.status === "pending").length
+      && client.allocationVisibility.options.filter(option => option.status === "pending").every(option => !!option.sentAt)));
+}
 
 function isSlotPending(slot: TimeSlot): boolean {
   return slot.type === "Recurring" && Boolean(slot.startDate && slot.startDate > practiceToday());
@@ -1474,6 +1500,81 @@ export default function Clients() {
     setIsAllocateDialogOpen(true);
   };
 
+  const compactDescription = (client: ClientType) => {
+    // The name is rendered separately behind its existing tenant flag; never
+    // leak the structured identity line through the free-text note preview.
+    const notes = client.notes?.split(/\r?\n/)
+      .filter(line => !/^Client name:\s*/i.test(line))
+      .join(" ");
+    return getCompactClientDescription(notes);
+  };
+
+  const clientNextStep = (client: BoardClient, extra: { externallyArranged?: boolean } = {}) => {
+    const registrationEnabled = tenant?.registrationFormEnabled === true;
+    const nextStep = getClientNextStep({
+      status: client.status,
+      registrationProgress: registrationEnabled ? registrationProgress(client) : undefined,
+      paymentProgress: registrationEnabled ? paymentProgress(client, { paymentsEnabled: tenant?.paymentsEnabled === true }) : undefined,
+      externallyArranged: extra.externallyArranged === true,
+      hasSelectedAppointment: hasRecordedAppointmentSelection({
+        visibilityEnabled: allocationVisibilityEnabled,
+        allocationVisibility: client.allocationVisibility,
+        assignedClinicianId: client.assignedClinicianId,
+        assignedSlotId: client.assignedSlotId,
+      }),
+      offerState: getAllocationOfferState(client),
+      offerDeliveryRecorded: hasRecordedOfferDelivery(client, allocationVisibilityEnabled),
+      offerEligibility: client.allocationOfferEligibility ?? undefined,
+      needsAdminCall: !!(client as any).needsAdminCall,
+      writeuppAppointmentConfirmed: (client as any).writeuppAppointmentConfirmed === true,
+      writeuppDataTransferred: (client as any).writeuppDataTransferred === true,
+      writeuppChecklistEnabled,
+      completedBookingsEnabled,
+      registrationEnabled,
+      isAdmin,
+    });
+    return nextStep;
+  };
+
+  const runClientNextStep = (client: BoardClient, step: ReturnType<typeof clientNextStep>) => {
+    switch (step.action) {
+      case "offer_new_choices":
+        handleOfferNewChoices(client);
+        break;
+      case "review_offer":
+        handleOpenEditClient(client);
+        break;
+      case "review_allocation":
+        handleOpenEditStatus(client);
+        break;
+      case "check_payment":
+        if (paymentReconciliationEnabled && canInspectRegistrationPayment(client)) void checkPayment(client.id);
+        break;
+      case "recover_payment":
+        if (client.registrationPaymentFailureCode === "stripe_unavailable") setLocation("/settings?tab=payments");
+        else handleOpenPaymentLink(client);
+        break;
+      case "retry_registration":
+        if (canSendRegistration(client)) sendRegistrationMutation.mutate(client.id);
+        break;
+      case "complete":
+        completeBookingMutation.mutate(client.id);
+        break;
+      // WriteUpp steps stay in the existing staff-verification control; opening
+      // the record never creates or duplicates an external-booking dialog.
+      default:
+        break;
+    }
+  };
+
+  const hasClientNextStepCallback = (client: BoardClient, step: ReturnType<typeof clientNextStep>, blocked = false) => {
+    if (step.action === "record_writeupp" || step.action === "review_writeupp" || step.action === "review_offer" || !step.action) return false;
+    if (step.action === "complete" && blocked) return false;
+    if (step.action === "retry_registration") return canSendRegistration(client);
+    if (step.action === "check_payment") return paymentReconciliationEnabled && canInspectRegistrationPayment(client);
+    return true;
+  };
+
   const handleOpenEditClient = (client: ClientType) => {
     setEditingClient(client);
     setEditClientSummaryName(getSummaryClientName(client.notes));
@@ -2359,9 +2460,11 @@ export default function Clients() {
                       clientId={client.id}
                       displayId={client.displayId}
                       clientName={intakeClientSummaryEnabled ? getSummaryClientName(client.notes) : null}
+                      description={compactDescription(client)}
                       status={client.status === "OptionsSent" ? "Options sent" : client.status === "OptionSelected" ? "Option selected" : "Matched"}
                       selectedDetails={allocationVisibilityEnabled && client.allocationVisibility?.appointment?.clinicianName
                         ? `Selected · ${client.allocationVisibility.appointment.clinicianName}` : null}
+                      nextStep={clientNextStep(client)}
                       onOpen={() => setSelectedPortalClientId(client.id)}
                     />}
                   <ClientDetailPanel
@@ -2371,6 +2474,9 @@ export default function Clients() {
                       displayId={client.displayId}
                       clientName={intakeClientSummaryEnabled ? getSummaryClientName(client.notes) : null}
                       status={client.status}
+                      guidance={multiClinicianAllocationEnabled ? clientNextStep(client) : null}
+                      onGuidanceAction={multiClinicianAllocationEnabled && hasClientNextStepCallback(client, clientNextStep(client))
+                        ? () => runClientNextStep(client, clientNextStep(client)) : undefined}
                     >
                 <Card className="bg-white shadow-sm hover:shadow-md transition-shadow cursor-pointer overflow-hidden"
                   data-testid={multiClinicianAllocationEnabled ? `client-details-${client.id}` : `kanban-card-${client.id}`}>
@@ -2430,7 +2536,7 @@ export default function Clients() {
                               Retry Registration Delivery
                             </DropdownMenuItem>
                           )}
-                          {client.status === "OptionsSent" && client.allocationOfferState === "pending"
+                          {client.status === "OptionsSent" && getAllocationOfferState(client) === "pending"
                             && !closedOfferClientIds.has(client.id)
                             && (client.allocationOfferEligibility?.unavailableCount ?? 0) === 0 && (
                             <DropdownMenuItem
@@ -2500,7 +2606,16 @@ export default function Clients() {
                             Retry Registration Delivery
                           </Button>
                           )}
-                        <Button
+                        {multiClinicianAllocationEnabled ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="w-full gap-1 text-[10px] mt-2 border-indigo-300 text-indigo-700 hover:bg-indigo-50 h-auto py-2 whitespace-normal"
+                            onClick={() => handleOfferNewChoices(client)}
+                          >
+                            <CalendarCheck className="h-3 w-3 flex-shrink-0" /> Offer fresh choices
+                          </Button>
+                        ) : <Button
                           size="sm"
                           variant="outline"
                           className="w-full gap-1 text-[10px] mt-2 border-purple-300 text-purple-700 hover:bg-purple-50 h-auto py-2 whitespace-normal"
@@ -2514,7 +2629,7 @@ export default function Clients() {
                           }}
                         >
                           <Mail className="h-3 w-3 flex-shrink-0" /> Email Sent
-                        </Button>
+                        </Button>}
                       </>
                     ) : (
                       <>
@@ -2523,15 +2638,32 @@ export default function Clients() {
                         {contactPreferenceBadge(client)}
                         {paymentStatusBadge(client) && <div className="mt-1">{paymentStatusBadge(client)}</div>}
                         {client.status === "OptionsSent" && multiClinicianAllocationEnabled && (
-                          <AllocationOfferActions
-                            state={closedOfferClientIds.has(client.id) ? "closed" : client.allocationOfferState ?? null}
-                            eligibility={client.allocationOfferEligibility}
-                            clientId={client.id}
-                            resendPending={resendAllocationOptionsMutation.isPending}
-                            onContactFamily={() => handleOpenEditClient(client)}
-                            onOfferNewChoices={() => handleOfferNewChoices(client)}
-                            onResend={() => resendAllocationOptionsMutation.mutate(client.id)}
-                          />
+                          getAllocationOfferState(client) === "pending"
+                            && !closedOfferClientIds.has(client.id)
+                            && !hasRecordedOfferDelivery(client, allocationVisibilityEnabled)
+                            ? (client.allocationOfferEligibility?.unavailableCount || client.allocationOfferEligibility?.pendingCount === 0)
+                              ? <div className="mt-2 space-y-2">
+                                  <p className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900" role="status">
+                                    {client.allocationOfferEligibility?.unavailableCount
+                                      ? `${client.allocationOfferEligibility.unavailableCount} offered choices are unavailable.`
+                                      : "No pending appointment choice is recorded."} Send current choices if the client still needs an appointment.
+                                  </p>
+                                  <Button size="sm" className="w-full gap-1 text-xs" onClick={() => handleOfferNewChoices(client)}>
+                                    <RefreshCw className="h-3 w-3" /> Offer fresh choices
+                                  </Button>
+                                </div>
+                              : <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900" role="status">
+                                  Offer email delivery is not recorded. Verify delivery evidence before treating this as a client wait.
+                                </p>
+                            : <AllocationOfferActions
+                                state={closedOfferClientIds.has(client.id) ? "closed" : getAllocationOfferState(client)}
+                                eligibility={client.allocationOfferEligibility}
+                                clientId={client.id}
+                                resendPending={resendAllocationOptionsMutation.isPending}
+                                onContactFamily={() => handleOpenEditClient(client)}
+                                onOfferNewChoices={() => handleOfferNewChoices(client)}
+                                onResend={() => resendAllocationOptionsMutation.mutate(client.id)}
+                              />
                         )}
                         {client.status === "OptionSelected" && (
                           <p className="text-[10px] text-teal-600 mt-2 flex items-center gap-1"><CheckCircle2 className="h-3 w-3" /> Client selected an option</p>
@@ -2586,6 +2718,10 @@ export default function Clients() {
                     hasSnapshot: !!client.bookingSnapshot,
                     checklistEnabled: writeuppChecklistEnabled,
                   }) : null;
+                const rawBookingStep = clientNextStep(client, { externallyArranged: isSeparatelyArranged });
+                const bookingStep = completionBlocker && rawBookingStep.action === "complete"
+                  ? { kind: "waiting" as const, title: "Waiting for booking requirements", detail: completionBlocker }
+                  : rawBookingStep;
                 const assignedSlot = clinicians.find(c => c.id === client.assignedClinicianId)?.availability
                   ?.find((slot: { id: string }) => slot.id === client.assignedSlotId);
                 const blocker = confirmationRecoveryEnabled ? confirmationBlocker(client, {
@@ -2641,11 +2777,13 @@ export default function Clients() {
                     clientId={client.id}
                     displayId={client.displayId}
                     clientName={intakeClientSummaryEnabled ? getSummaryClientName(client.notes) : null}
+                    description={compactDescription(client)}
                     status={isSeparatelyArranged ? "Booked in WriteUpp · external" :
-                      client.status === "RegistrationPending" ? (client.registrationFormSubmissionId ? "Payment pending" : "Registration pending") :
+                      client.status === "RegistrationPending" ? "Booking in progress" :
                         client.status === "BookingConfirmed" ? "Portal booking confirmed" : "Awaiting portal confirmation"}
                     selectedDetails={allocationVisibilityEnabled && client.allocationVisibility?.appointment?.clinicianName
                       ? `Selected · ${client.allocationVisibility.appointment.clinicianName}` : null}
+                    nextStep={bookingStep}
                     onOpen={() => setSelectedPortalClientId(client.id)}
                   />}
                   <ClientDetailPanel
@@ -2655,6 +2793,10 @@ export default function Clients() {
                     displayId={client.displayId}
                     clientName={intakeClientSummaryEnabled ? getSummaryClientName(client.notes) : null}
                     status={client.status}
+                    guidance={multiClinicianAllocationEnabled ? bookingStep : null}
+                    onGuidanceAction={multiClinicianAllocationEnabled && hasClientNextStepCallback(client, bookingStep, !!completionBlocker)
+                      ? () => runClientNextStep(client, bookingStep)
+                      : undefined}
                   >
                   {writeuppActionVisible && <section className="rounded-md border border-teal-200 bg-teal-50/60 p-3">
                     <p className="mb-2 text-xs text-teal-900">

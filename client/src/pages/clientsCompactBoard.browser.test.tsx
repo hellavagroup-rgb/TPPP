@@ -3,10 +3,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { CompactClientCard, ClientDetailPanel } from "@/components/CompactClientCard";
+import { CompactClientCard, ClientDetailPanel, hasRecordedAppointmentSelection } from "@/components/CompactClientCard";
 import { ConfirmPortalReconcile } from "@/components/ConfirmPortalReconcile";
 import { classifyBookingProgress, getWriteUppArrangedIds } from "@/lib/clientBoardClassification";
 import { mergePaymentInspection, paymentInspectionOutcome } from "@/lib/paymentInspectionState";
+import { getClientNextStep, getCompactClientDescription } from "@/lib/clientNextStep";
 
 afterEach(cleanup);
 
@@ -49,6 +50,120 @@ describe("compact multi-clinician client board", () => {
     </ClientDetailPanel>);
     expect(screen.getByTestId("legacy-card").textContent).toBe("Existing Tenant 1 controls");
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("shows a brief real admin note on the compact card when no parsed name is available", () => {
+    const description = getCompactClientDescription('"Needs a late afternoon appointment; prefers phone."', null);
+    render(<CompactClientCard clientId="note-1" displayId="WU4087139" status="Assigned"
+      description={description} onOpen={() => {}} />);
+    expect(screen.getByTestId("client-description-note-1").textContent)
+      .toBe("Needs a late afternoon appointment; prefers phone.");
+  });
+
+  it("makes the card next action explicit for an Assigned record with no selected appointment", () => {
+    const step = getClientNextStep({ status: "Assigned", hasSelectedAppointment: false, isAdmin: true });
+    render(<CompactClientCard clientId="assigned-1" displayId="WU4087139" status="Assigned"
+      nextStep={step} onOpen={() => {}} />);
+    expect(screen.getByTestId("next-step-assigned-1").textContent).toContain("Next action");
+    expect(screen.getByTestId("next-step-assigned-1").textContent).toContain("Review appointment choices");
+    expect(step.action).toBe("offer_new_choices");
+  });
+
+  it("recognizes recorded clinician and slot evidence when allocation details are not exposed", () => {
+    const hasSelectedAppointment = hasRecordedAppointmentSelection({
+      visibilityEnabled: false,
+      assignedClinicianId: "clinician-1",
+      assignedSlotId: "slot-1",
+    });
+    const step = getClientNextStep({ status: "Assigned", hasSelectedAppointment, isAdmin: true });
+    expect(step.title).toBe("Review the allocation");
+    expect(step.action).toBe("review_allocation");
+  });
+
+  it("respects an explicit empty visibility projection instead of falling back to legacy ids", () => {
+    expect(hasRecordedAppointmentSelection({
+      visibilityEnabled: true,
+      allocationVisibility: null,
+      assignedClinicianId: "clinician-1",
+      assignedSlotId: "legacy-slot",
+    })).toBe(false);
+  });
+
+  it("identifies the family as the wait owner when valid appointment choices remain pending", () => {
+    const step = getClientNextStep({
+      status: "OptionsSent",
+      offerState: "pending",
+      offerDeliveryRecorded: true,
+      offerEligibility: { pendingCount: 2, availableCount: 1, unavailableCount: 0 },
+    });
+    render(<CompactClientCard clientId="wait-1" displayId="WU4087139" status="Options sent"
+      nextStep={step} onOpen={() => {}} />);
+    expect(screen.getByTestId("next-step-wait-1").textContent).toContain("Waiting for");
+    expect(screen.getByTestId("next-step-wait-1").textContent).toContain("Waiting for the family to choose");
+  });
+
+  it("does not claim the family is waiting until current offer delivery is recorded", () => {
+    const step = getClientNextStep({
+      status: "OptionsSent",
+      offerState: "pending",
+      offerDeliveryRecorded: false,
+      offerEligibility: { pendingCount: 2, availableCount: 1, unavailableCount: 0 },
+    });
+    expect(step.kind).toBe("action");
+    expect(step.title).toBe("Review offer delivery");
+    expect(step.action).toBe("review_offer");
+  });
+
+  it("keeps RegistrationPending copy neutral for insurer or disabled-payment workflows", () => {
+    const step = getClientNextStep({
+      status: "RegistrationPending",
+      registrationProgress: "completed",
+      paymentProgress: "not_required",
+      hasSelectedAppointment: true,
+      registrationEnabled: true,
+    });
+    render(<CompactClientCard clientId="reg-1" displayId="WU4087139" status="Booking in progress"
+      nextStep={step} onOpen={() => {}} />);
+    expect(screen.getByTestId("compact-client-card-reg-1").textContent).toContain("Booking in progress");
+    expect(screen.getByTestId("compact-client-card-reg-1").textContent).not.toContain("Payment pending");
+  });
+
+  it("does not require WriteUpp checklist steps when that feature is disabled", () => {
+    const step = getClientNextStep({
+      status: "BookingConfirmed",
+      writeuppChecklistEnabled: false,
+      writeuppAppointmentConfirmed: false,
+      writeuppDataTransferred: false,
+      completedBookingsEnabled: false,
+    });
+    expect(step.kind).toBe("waiting");
+    expect(step.title).toBe("Booking verified");
+    expect(step.action).toBeUndefined();
+  });
+
+  it("does not ask staff to repeat an already recorded WriteUpp arrangement", () => {
+    const step = getClientNextStep({
+      status: "RegistrationPending",
+      externallyArranged: true,
+      registrationProgress: "sent",
+      paymentProgress: "awaiting_client",
+    });
+    expect(step.title).toBe("No further booking action");
+    expect(step.action).toBeUndefined();
+  });
+
+  it("puts detail guidance first and exposes its eligible action callback", async () => {
+    const user = userEvent.setup();
+    const onGuidanceAction = vi.fn();
+    render(<ClientDetailPanel open onOpenChange={() => {}} displayId="WU4087139" status="Assigned"
+      guidance={{ kind: "action", title: "Offer fresh choices", detail: "No selected appointment is recorded." }}
+      onGuidanceAction={onGuidanceAction}>
+      <p data-testid="detail-body">Allocation details</p>
+    </ClientDetailPanel>);
+    const guidance = screen.getByTestId("client-next-guidance");
+    expect(guidance.compareDocumentPosition(screen.getByTestId("detail-body")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /Continue/ }));
+    expect(onGuidanceAction).toHaveBeenCalledTimes(1);
   });
 
   it("groups only explicit writeuppArranged records outside active Booking progress", () => {

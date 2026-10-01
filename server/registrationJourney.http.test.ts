@@ -102,6 +102,27 @@ const h = vi.hoisted(() => {
     }));
   };
 
+  const submissionRowsMatching = (condition: any) => {
+    if (!condition) return state.submissions;
+    const { sql, params } = new PgDialect().sqlToQuery(condition);
+    const fields: Record<string, string> = {
+      id: "id",
+      clientId: "client_id",
+      tenantId: "tenant_id",
+      isDraft: "is_draft",
+    };
+    return state.submissions.filter(submission => Object.entries(fields).every(([property, column]) => {
+      const equality = new RegExp(`"${column}"\\s*=\\s*\\$(\\d+)`, "g");
+      for (const match of sql.matchAll(equality)) {
+        if (submission[property] !== params[Number(match[1]) - 1]) return false;
+      }
+      if (column === "is_draft" && new RegExp(`"${column}"\\s*=\\s*false`, "i").test(sql) && submission[property] !== false) {
+        return false;
+      }
+      return true;
+    }));
+  };
+
   const chain = (run: () => any[], onWhere?: (condition: any) => void) => {
     let result: any[] | undefined;
     const execute = () => result ??= run();
@@ -119,6 +140,9 @@ const h = vi.hoisted(() => {
           const sql = new PgDialect().sqlToQuery(condition).sql;
           if (sql.includes('"allocation_offer_deliveries"')) {
             return offerDeliveryRowsMatching(condition).filter(row => rows.includes(row));
+          }
+          if (sql.includes('"form_submissions"')) {
+            return submissionRowsMatching(condition).filter(row => rows.includes(row));
           }
           if (sql.includes('"booking_snapshots"."tenant_id"')) {
             return rows.filter(row => row.tenantId === state.tenant.id);
@@ -949,6 +973,18 @@ describe("registration journey HTTP routes", () => {
     };
   }
 
+  function readyLegacyForReconciliation() {
+    readyForReconciliation();
+    Object.assign(h.state.client, {
+      status: "AwaitingConfirmation",
+      registrationFormSubmissionId: "submission-registration",
+    });
+    h.state.submissions = [{
+      id: "submission-registration", clientId: "client-a", tenantId: "tenant-a",
+      isDraft: false,
+    }];
+  }
+
   it("diagnoses and reconciles a verified paid checkout once without charging or creating a link", async () => {
     readyForReconciliation();
     const before = await request("/api/clients/client-a/payment-reconciliation");
@@ -971,6 +1007,110 @@ describe("registration journey HTTP routes", () => {
       id: "cus_1", payload: { metadata: { clientId: "client-a", displayId: "A-001" } },
     });
     expect(h.state.paymentLinks).toHaveLength(0);
+  });
+
+  it("allows read-only Stripe inspection for an eligible legacy awaiting-confirmation client", async () => {
+    readyLegacyForReconciliation();
+    const clientBefore = structuredClone(h.state.client);
+    const response = await request("/api/clients/client-a/payment-reconciliation");
+    expect(response.status).toBe(200);
+    expect(response.body.state).toBe("paid_unrecorded");
+    expect(h.state.client).toEqual(clientBefore);
+    expect(h.state.charges).toHaveLength(0);
+    expect(h.state.bookingSnapshots).toHaveLength(0);
+    expect(h.state.deactivatedLinks).toHaveLength(0);
+    expect(h.state.customerUpdates).toHaveLength(0);
+    expect(h.state.emails).toHaveLength(0);
+    expect(h.state.paymentLinks).toHaveLength(0);
+  });
+
+  it("records a genuinely paid legacy checkout and confirms the booking once", async () => {
+    readyLegacyForReconciliation();
+    const [first, retry] = await Promise.all([
+      request("/api/clients/client-a/payment-reconciliation", { method: "POST" }),
+      request("/api/clients/client-a/payment-reconciliation", { method: "POST" }),
+    ]);
+    expect(first.body.state).toBe("recorded");
+    expect(retry.body.state).toBe("recorded");
+    expect(h.state.client.paymentStatus).toBe("active");
+    expect(h.state.client.status).toBe("BookingConfirmed");
+    expect(h.state.bookingSnapshots).toHaveLength(1);
+    expect(h.state.charges).toHaveLength(1);
+    expect(h.state.emails).toHaveLength(1);
+    // Each recovery retry safely reasserts link deactivation; booking/payment
+    // and the confirmation email still occur once.
+    expect(h.state.deactivatedLinks).toEqual(["plink_current", "plink_current"]);
+  });
+
+  it("denies legacy reconciliation without a same-tenant submitted registration and makes no changes", async () => {
+    const invalidRegistration = [
+      {
+        name: "missing",
+        prepare: () => {
+          h.state.client.registrationFormSubmissionId = null;
+          h.state.submissions = [];
+        },
+      },
+      {
+        name: "foreign",
+        prepare: () => {
+          h.state.submissions[0].tenantId = "tenant-b";
+        },
+      },
+      {
+        name: "draft",
+        prepare: () => {
+          h.state.submissions[0].isDraft = true;
+        },
+      },
+    ];
+    for (const scenario of invalidRegistration) {
+      readyLegacyForReconciliation();
+      scenario.prepare();
+      const clientBefore = structuredClone(h.state.client);
+      const submissionsBefore = structuredClone(h.state.submissions);
+      expect((await request("/api/clients/client-a/payment-reconciliation")).status, scenario.name).toBe(404);
+      expect((await request("/api/clients/client-a/payment-reconciliation", { method: "POST" })).status, scenario.name).toBe(404);
+      expect(h.state.returnProviderKeys, scenario.name).toHaveLength(0);
+      expect(h.state.client).toEqual(clientBefore);
+      expect(h.state.submissions).toEqual(submissionsBefore);
+      expect(h.state.charges).toHaveLength(0);
+      expect(h.state.bookingSnapshots).toHaveLength(0);
+      expect(h.state.deactivatedLinks).toHaveLength(0);
+      expect(h.state.customerUpdates).toHaveLength(0);
+      expect(h.state.emails).toHaveLength(0);
+      expect(h.state.paymentLinks).toHaveLength(0);
+    }
+  });
+
+  it("does not persist an unverified Stripe mismatch for legacy awaiting-confirmation clients", async () => {
+    readyLegacyForReconciliation();
+    h.state.checkoutSessions[0].payment_link = "plink_external";
+    const response = await request("/api/clients/client-a/payment-reconciliation", { method: "POST" });
+    expect(response.status).toBe(503);
+    expect(response.body.state).toBe("uncertain");
+    expect(h.state.client.status).toBe("AwaitingConfirmation");
+    expect(h.state.client.paymentStatus).toBe("setup_pending");
+    expect(h.state.charges).toHaveLength(0);
+    expect(h.state.bookingSnapshots).toHaveLength(0);
+    expect(h.state.deactivatedLinks).toHaveLength(0);
+    expect(h.state.emails).toHaveLength(0);
+  });
+
+  it("retains the external appointment review block for verified legacy payments", async () => {
+    readyLegacyForReconciliation();
+    h.state.activities.push({
+      id: "external-review", tenantId: "tenant-a", resourceId: "client-a",
+      action: "activity_external_booking_reviewed",
+    });
+    const response = await request("/api/clients/client-a/payment-reconciliation", { method: "POST" });
+    expect(response.status).toBe(409);
+    expect(response.body.state).toBe("paid_unrecorded");
+    expect(h.state.client.status).toBe("AwaitingConfirmation");
+    expect(h.state.client.paymentStatus).toBe("active");
+    expect(h.state.charges).toHaveLength(1);
+    expect(h.state.bookingSnapshots).toHaveLength(0);
+    expect(h.state.emails).toHaveLength(0);
   });
 
   it("does not record a payment or confirm a booking against a foreign snapshot", async () => {

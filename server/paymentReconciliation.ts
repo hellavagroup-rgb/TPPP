@@ -1,7 +1,8 @@
 import Stripe from "stripe";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "./db";
-import { bookingSnapshots, clients, paymentCharges, type BookingSnapshot, type Client, type Tenant } from "@shared/schema";
+import { bookingSnapshots, clients, formSubmissions, paymentCharges, type BookingSnapshot, type Client, type Tenant } from "@shared/schema";
+import { canInspectRegistrationPayment } from "@shared/paymentReconciliationEligibility";
 import { confirmBooking } from "./bookingConfirmation";
 import { generateBookingConfirmedEmail, sendEmail } from "./email";
 
@@ -18,11 +19,28 @@ function provider(tenant: Tenant) {
   return new Stripe(tenant.stripeSecretKey, { apiVersion: "2026-05-27.dahlia" });
 }
 
+async function hasSubmittedRegistration(client: Client, tenantId: string, executor: any = db): Promise<boolean> {
+  if (!client.registrationFormSubmissionId) return false;
+  const [submission] = await executor.select({ id: formSubmissions.id }).from(formSubmissions).where(and(
+    eq(formSubmissions.id, client.registrationFormSubmissionId),
+    eq(formSubmissions.clientId, client.id),
+    eq(formSubmissions.tenantId, tenantId),
+    eq(formSubmissions.isDraft, false),
+  )).limit(1);
+  return !!submission;
+}
+
 async function inspect(tenant: Tenant, clientId: string, requestedSessionId?: string) {
   const [client] = await db.select().from(clients).where(and(eq(clients.id, clientId), eq(clients.tenantId, tenant.id))).limit(1);
   if (!client) return { state: "uncertain", detail: "Client not found in this practice." } as PaymentInspection;
-  if (!client.stripePaymentLinkId || !client.registrationPaymentAttemptKey || !client.agreedRatePence) {
+  if (!canInspectRegistrationPayment(client) || !client.agreedRatePence) {
     return { state: "uncertain", detail: "No current registration payment link, attempt or agreed rate is recorded." } as PaymentInspection;
+  }
+  // A legacy awaiting-confirmation status is only eligible for provider
+  // inspection when its linked registration is an actual submitted response
+  // owned by this tenant and client. This is a read-only gate before Stripe.
+  if (client.status === "AwaitingConfirmation" && !await hasSubmittedRegistration(client, tenant.id)) {
+    return { state: "uncertain", detail: "The linked registration is missing, unsubmitted or does not belong to this client and practice." } as PaymentInspection;
   }
   try {
     const stripe = provider(tenant);
@@ -115,11 +133,17 @@ export async function reconcileRegistrationPayment(
     await db.transaction(async tx => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`${tenant.id}:${client.id}:reconcile-payment`}))`);
       const [current] = await tx.select().from(clients).where(and(eq(clients.id, client.id), eq(clients.tenantId, tenant.id))).for("update").limit(1);
-      if (!current || current.stripePaymentLinkId !== client.stripePaymentLinkId ||
+      if (!current || !canInspectRegistrationPayment(current) ||
+          current.stripePaymentLinkId !== client.stripePaymentLinkId ||
           current.registrationPaymentAttemptKey !== client.registrationPaymentAttemptKey ||
           current.agreedRatePence !== verifiedAmountPence ||
-          !["RegistrationPending", "BookingConfirmed", "Scheduled"].includes(current.status)) {
+          ((client.status === "AwaitingConfirmation" || current.status === "AwaitingConfirmation") &&
+            current.registrationFormSubmissionId !== client.registrationFormSubmissionId)) {
         throw new Error("The client's rate, payment attempt or workflow changed. Refresh and review.");
+      }
+      if (current.status === "AwaitingConfirmation" &&
+          !await hasSubmittedRegistration(current, tenant.id, tx)) {
+        throw new Error("The linked registration is missing, unsubmitted or does not belong to this client and practice.");
       }
       await tx.insert(paymentCharges).values({
         clientId: client.id, tenantId: tenant.id, amountPence: current.agreedRatePence!,

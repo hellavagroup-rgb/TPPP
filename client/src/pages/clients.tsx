@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Client, ClientStatus, FormTemplate } from "@/lib/mockData";
 import { confirmationBlocker, confirmationBlockerCopy } from "@shared/confirmationRecovery";
+import { canInspectRegistrationPayment } from "@shared/paymentReconciliationEligibility";
 import { HistoricReconciliation, useHistoricReconciliation } from "@/components/HistoricReconciliation";
 import { bookingCompletionBlocker } from "@shared/bookingCompletion";
 import { practiceToday, slotUnavailableReason } from "@shared/slotEligibility";
@@ -1300,10 +1301,9 @@ export default function Clients() {
             <p className="text-[10px] text-muted-foreground">{paymentCopy[1]}</p>
           </div>
         )}
-        {paymentReconciliationEnabled && client.paymentType === "self_pay" && client.stripePaymentLinkId && client.registrationPaymentAttemptKey
-          && ["RegistrationPending", "Scheduled", "BookingConfirmed"].includes(client.status) && (
+        {paymentReconciliationEnabled && canInspectRegistrationPayment(client) && (
           <div className="rounded border border-amber-200 bg-white p-2 text-[10px]" data-testid={`payment-reconciliation-${client.id}`}>
-            <p className="font-medium">Booking check: {client.status === "RegistrationPending" ? "waiting for verified payment and booking confirmation" : client.status}</p>
+            <p className="font-medium">Booking check: {["RegistrationPending", "AwaitingConfirmation"].includes(client.status) ? "waiting for verified payment and booking confirmation" : client.status}</p>
             <p>Stripe payment and the external practice appointment are separate. Check Stripe before resending a payment request.</p>
             <Button size="sm" variant="outline" className="h-6 mt-1 px-2 text-[10px]" disabled={checkingPayment}
               onClick={() => checkPayment(client.id)}>Check Stripe payment</Button>
@@ -1322,6 +1322,9 @@ export default function Clients() {
                       : "no provider acceptance recorded"}</p>
                 )}
                 {paymentInspection.blocker && <p className="text-red-700">{paymentInspection.blocker}</p>}
+                {paymentInspection.state === "paid_unrecorded" && (
+                  <p>Reconciliation records the verified payment and confirms the selected portal appointment. It does not book the appointment in WriteUpp.</p>
+                )}
                 {paymentInspection.state === "paid_unrecorded" && (
                   <Button size="sm" variant="outline" className="h-6 mt-1 px-2 text-[10px]" disabled={checkingPayment}
                     onClick={() => checkPayment(client.id, true)}>Reconcile verified payment</Button>

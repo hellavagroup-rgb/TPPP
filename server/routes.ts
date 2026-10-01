@@ -16,6 +16,7 @@ import {
   insertFormTemplateSchema, insertTaskSchema, insertUserSchema,
   type InsertFormTemplate
 } from "@shared/schema";
+import { canInspectRegistrationPayment } from "@shared/paymentReconciliationEligibility";
 import { classifyPaymentReturn, type PaymentReturnResult } from "./paymentReturn";
 import { bookingCompletionDecision } from "@shared/bookingCompletion";
 import { slotUnavailableReason } from "@shared/slotEligibility";
@@ -110,6 +111,26 @@ function formatActivitySlot(slot: { type?: string | null; day?: string | null; d
   const time = [slot.startTime, slot.endTime].filter(Boolean).join("–");
   const location = slot.locationType === "in_person" ? "in person" : "online";
   return [day, time, location].filter(Boolean).join(" · ");
+}
+
+async function hasSubmittedRegistrationForPayment(client: {
+  id: string;
+  status: string;
+  paymentType?: string | null;
+  stripePaymentLinkId?: string | null;
+  registrationPaymentAttemptKey?: string | null;
+  registrationFormSubmissionId?: string | null;
+}, tenantId: string): Promise<boolean> {
+  if (!canInspectRegistrationPayment(client)) return false;
+  if (client.status !== "AwaitingConfirmation") return true;
+  if (!client.registrationFormSubmissionId) return false;
+  const [submission] = await db.select({ id: formSubmissions.id }).from(formSubmissions).where(and(
+    eq(formSubmissions.id, client.registrationFormSubmissionId),
+    eq(formSubmissions.clientId, client.id),
+    eq(formSubmissions.tenantId, tenantId),
+    eq(formSubmissions.isDraft, false),
+  )).limit(1);
+  return !!submission;
 }
 
 async function sendOnlineZoomFollowUp(input: {
@@ -5862,11 +5883,16 @@ export async function registerRoutes(
   app.get("/api/clients/:id/payment-reconciliation", requireAdmin, async (req, res) => {
     if (!req.tenant?.paymentReconciliationEnabled) return res.status(404).json({ error: "Not available" });
     try {
-      const [client] = await db.select({ id: clients.id, status: clients.status, registrationPaymentAttemptKey: clients.registrationPaymentAttemptKey }).from(clients).where(and(
+      const [client] = await db.select({
+        id: clients.id, status: clients.status, paymentType: clients.paymentType,
+        stripePaymentLinkId: clients.stripePaymentLinkId,
+        registrationPaymentAttemptKey: clients.registrationPaymentAttemptKey,
+        registrationFormSubmissionId: clients.registrationFormSubmissionId,
+      }).from(clients).where(and(
         eq(clients.id, req.params.id), eq(clients.tenantId, req.tenant.id),
       )).limit(1);
       if (!client) return res.status(404).json({ error: "Client not found" });
-      if (!client.registrationPaymentAttemptKey || !["RegistrationPending", "Scheduled", "BookingConfirmed"].includes(client.status)) {
+      if (!await hasSubmittedRegistrationForPayment(client, req.tenant.id)) {
         return res.status(404).json({ error: "No registration payment to reconcile" });
       }
       res.set("Cache-Control", "no-store");
@@ -5880,11 +5906,16 @@ export async function registerRoutes(
   app.post("/api/clients/:id/payment-reconciliation", requireAdmin, async (req, res) => {
     if (!req.tenant?.paymentReconciliationEnabled) return res.status(404).json({ error: "Not available" });
     try {
-      const [client] = await db.select({ id: clients.id, status: clients.status, registrationPaymentAttemptKey: clients.registrationPaymentAttemptKey }).from(clients).where(and(
+      const [client] = await db.select({
+        id: clients.id, status: clients.status, paymentType: clients.paymentType,
+        stripePaymentLinkId: clients.stripePaymentLinkId,
+        registrationPaymentAttemptKey: clients.registrationPaymentAttemptKey,
+        registrationFormSubmissionId: clients.registrationFormSubmissionId,
+      }).from(clients).where(and(
         eq(clients.id, req.params.id), eq(clients.tenantId, req.tenant.id),
       )).limit(1);
       if (!client) return res.status(404).json({ error: "Client not found" });
-      if (!client.registrationPaymentAttemptKey || !["RegistrationPending", "Scheduled", "BookingConfirmed"].includes(client.status)) {
+      if (!await hasSubmittedRegistrationForPayment(client, req.tenant.id)) {
         return res.status(404).json({ error: "No registration payment to reconcile" });
       }
       const result = await reconcileRegistrationPayment(req.tenant, client.id, undefined,

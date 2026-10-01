@@ -16,7 +16,8 @@ export type HistoricRow = {
   intakeSubmitted: boolean; registrationSubmitted: boolean;
   consentEvidence: "recorded" | "legacy_terms_only" | "not_recorded";
   paymentType: string | null; paymentStatus: string | null; chargeStatuses: string[];
-  externalReview: { reviewedAt: string; externalReference: unknown; appointmentDate: unknown; startTime: unknown; familyMessageReview: unknown } | null;
+  writeuppArranged: boolean;
+  externalReview: { reviewedAt: string; externalReference: unknown; clinicianReference?: unknown; appointmentDate: unknown; startTime: unknown; familyMessageReview: unknown } | null;
 };
 
 export function useHistoricReconciliation(enabled: boolean) {
@@ -58,21 +59,20 @@ export function HistoricReconciliation({ rows, error }: { rows: HistoricRow[]; e
   });
   return (
     <section className="rounded-lg border p-4 bg-card" data-testid="historic-reconciliation">
-      <Button variant="outline" onClick={() => setOpen(v => !v)}>Historic booking reconciliation (read-only inventory)</Button>
+      <Button variant="outline" onClick={() => setOpen(v => !v)}>Historic booking evidence (secondary inventory)</Button>
       {open && <div className="mt-4 space-y-3">
-        <p className="text-sm text-muted-foreground">Compare the external diary and the family's actual message with each portal record before any correction. “Setup pending” is not payment proof. Recording an external review does not confirm a portal booking, charge a card, send an email, or alter a slot.</p>
+        <p className="text-sm text-muted-foreground">This secondary inventory compares external diary notes with portal evidence. “Setup pending” is not payment proof. Recording an external review does not confirm a portal booking, charge a card, send an email, or alter a slot.</p>
         {error && <p role="alert">Evidence could not be loaded. Do not reconcile from this screen.</p>}
         {!error && rows.map(row => <div key={row.id} className="border rounded p-3 text-sm space-y-1" data-testid={`historic-row-${row.displayId}`}>
-          <div className="font-semibold">{row.displayId} · {row.externalReview ? "Historically booked outside portal (staff reviewed)" : row.portalSnapshot ? "Portal booking confirmed" : row.status === "RegistrationPending" ? "Registration/payment pending in portal" : "Awaiting confirmation in portal"}</div>
+          <div className="font-semibold">{row.displayId} · {row.writeuppArranged ? "Booked in WriteUpp (staff verified)" : row.externalReview ? "External appointment reviewed" : row.portalSnapshot ? "Portal booking confirmed" : row.status === "RegistrationPending" ? "Registration/payment pending in portal" : "Awaiting confirmation in portal"}</div>
           <p>Portal status: {row.status} · Allocation: {row.allocation}{row.slot ? ` (${row.slot.date || row.slot.day} ${row.slot.startTime}–${row.slot.endTime})` : ""}</p>
-          {row.allocation === "duplicate" && <p className="text-destructive">Duplicate slot claim: resolve before confirming or recording a review.</p>}
           <p>Intake: {row.intakeSubmitted ? "submitted" : "not recorded"} · Registration: {row.registrationSubmitted ? "submitted" : "not recorded"} · Consent: {row.consentEvidence.replaceAll("_", " ")}</p>
           <p>Payment: {row.paymentType || "type missing"} / {row.paymentStatus || "status missing"} · Portal charges: {row.chargeStatuses.length ? row.chargeStatuses.join(", ") : "none recorded (check provider independently)"}</p>
           <p>Portal snapshot: {row.portalSnapshot ? `yes (${row.portalConfirmedAt})` : "none"} · Booking confirmation email accepted: {row.bookingEmailAcceptedAt || "not recorded"} · Booking event: {row.portalBookingEvent ? "recorded" : "none"} · Option selection: {row.optionSelectionEvent ? "recorded (not a confirmed appointment)" : "none"}</p>
           {row.externalReview ? <p>External diary review: {String(row.externalReview.externalReference)} · {String(row.externalReview.appointmentDate)} {String(row.externalReview.startTime)} · Family message review: {String(row.externalReview.familyMessageReview)}</p>
-            : !row.portalSnapshot && <Button variant="outline" size="sm" disabled={row.allocation === "duplicate" || row.allocation === "invalid"} onClick={() => {
+            : !row.portalSnapshot && ["AwaitingConfirmation", "RegistrationPending"].includes(row.status) && <Button variant="outline" size="sm" onClick={() => {
               setSelected(row); review.reset(); setExternalReference(""); setClinicianReference(""); setAppointmentDate(""); setStartTime(""); setFamilyMessageReview(""); setDiaryVerified(false);
-            }}>Record verified external appointment</Button>}
+             }}>Record independently verified external appointment</Button>}
         </div>)}
       </div>}
       <Dialog open={!!selected} onOpenChange={value => { if (!value) setSelected(null); }}>

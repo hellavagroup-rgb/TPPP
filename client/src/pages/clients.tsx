@@ -3,6 +3,11 @@ import { Client, ClientStatus, FormTemplate } from "@/lib/mockData";
 import { confirmationBlocker, confirmationBlockerCopy } from "@shared/confirmationRecovery";
 import { canInspectRegistrationPayment } from "@shared/paymentReconciliationEligibility";
 import { HistoricReconciliation, useHistoricReconciliation } from "@/components/HistoricReconciliation";
+import { CompactClientCard, ClientDetailPanel } from "@/components/CompactClientCard";
+import { ConfirmPortalReconcile } from "@/components/ConfirmPortalReconcile";
+import { WriteuppAppointmentAction } from "@/components/WriteuppAppointmentAction";
+import { classifyBookingProgress, getWriteUppArrangedIds } from "@/lib/clientBoardClassification";
+import { mergePaymentInspection, paymentInspectionOutcome, type PaymentInspectionResult } from "@/lib/paymentInspectionState";
 import { bookingCompletionBlocker } from "@shared/bookingCompletion";
 import { practiceToday, slotUnavailableReason } from "@shared/slotEligibility";
 import {
@@ -133,6 +138,7 @@ type BoardClient = ClientType & {
   allocationOfferState?: AllocationOfferState;
   allocationOfferEligibility?: AllocationOfferEligibility | null;
   bookingSnapshot?: { id: string } | null;
+  writeuppArranged?: boolean;
 };
 
 function isSlotPending(slot: TimeSlot): boolean {
@@ -217,18 +223,19 @@ export default function Clients() {
     enabled: isAdmin,
     refetchInterval: 60_000,
   });
-  const [paymentInspection, setPaymentInspection] = useState<{ clientId: string; state: string; detail: string; blocker?: string; confirmationEmail?: "accepted_by_provider" | "not_recorded" | "not_enabled" } | null>(null);
+  const [paymentInspections, setPaymentInspections] = useState<Record<string, PaymentInspectionResult>>({});
   const [checkingPayment, setCheckingPayment] = useState(false);
   const checkPayment = async (clientId: string, reconcile = false) => {
     setCheckingPayment(true);
     try {
       const response = await apiRequest(reconcile ? "POST" : "GET", `/api/clients/${clientId}/payment-reconciliation`);
       const result = await response.json();
+      if (!response.ok) throw new Error(result.error || (reconcile ? "Portal payment reconciliation failed" : "Stripe verification failed"));
       if (!result.state) throw new Error(result.error || "Stripe verification failed");
-      setPaymentInspection({ clientId, ...result });
+      setPaymentInspections(current => mergePaymentInspection(current, clientId, paymentInspectionOutcome(result, reconcile)));
       if (reconcile) await queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
     } catch (error) {
-      setPaymentInspection({ clientId, state: "uncertain", detail: (error as Error).message });
+      setPaymentInspections(current => mergePaymentInspection(current, clientId, { state: "uncertain", detail: (error as Error).message, ...(reconcile ? { reconciled: false } : {}) }));
     } finally {
       setCheckingPayment(false);
     }
@@ -239,6 +246,7 @@ export default function Clients() {
   };
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedClient, setSelectedClient] = useState<ClientType | null>(null);
+  const [selectedPortalClientId, setSelectedPortalClientId] = useState<string | null>(null);
   const [closedOfferClientIds, setClosedOfferClientIds] = useState<Set<string>>(() => new Set());
 
   // Custom insurer management
@@ -1284,6 +1292,7 @@ export default function Clients() {
       awaiting_client: ["Payment link ready", "Client: finish payment setup using the link already provided."],
       active: ["Payment active", "Card details are saved and payment setup is complete."],
     }[payment];
+    const paymentInspection = paymentInspections[client.id];
 
     return (
       <div className="mt-2 rounded border bg-slate-50 p-2 space-y-2" data-testid={`workflow-progress-${client.id}`}>
@@ -1307,8 +1316,11 @@ export default function Clients() {
             <p>Stripe payment and the external practice appointment are separate. Check Stripe before resending a payment request.</p>
             <Button size="sm" variant="outline" className="h-6 mt-1 px-2 text-[10px]" disabled={checkingPayment}
               onClick={() => checkPayment(client.id)}>Check Stripe payment</Button>
-            {paymentInspection?.clientId === client.id && (
-              <div className="mt-1" role="status">
+            {paymentInspection && (
+              <div className="mt-2 rounded bg-amber-50 p-2" role={paymentInspection.reconciled === false ? "alert" : "status"}
+                data-testid={`payment-inspection-${client.id}`}>
+                {paymentInspection.reconciled === true && <p className="font-semibold text-emerald-800">Portal payment reconciled</p>}
+                {paymentInspection.reconciled === false && <p className="font-semibold text-red-800">Portal reconciliation failed</p>}
                 <p className="font-semibold">{paymentInspection.state === "paid_unrecorded" ? "Paid in Stripe — app needs recovery"
                   : paymentInspection.state === "recorded" ? "Payment and booking recorded"
                   : paymentInspection.state === "open" ? "Checkout open"
@@ -1326,8 +1338,7 @@ export default function Clients() {
                   <p>Reconciliation records the verified payment and confirms the selected portal appointment. It does not book the appointment in WriteUpp.</p>
                 )}
                 {paymentInspection.state === "paid_unrecorded" && (
-                  <Button size="sm" variant="outline" className="h-6 mt-1 px-2 text-[10px]" disabled={checkingPayment}
-                    onClick={() => checkPayment(client.id, true)}>Reconcile verified payment</Button>
+                  <ConfirmPortalReconcile disabled={checkingPayment} onConfirm={() => checkPayment(client.id, true)} />
                 )}
               </div>
             )}
@@ -1400,6 +1411,19 @@ export default function Clients() {
     // Kanban view: show non-archived clients (all statuses for Kanban columns)
     return matchesSearch && !client.isArchived && !client.completedAt;
   });
+  const arrangedHistoricIds = getWriteUppArrangedIds(
+    historicInventory.data as Array<{ id: string; writeuppArranged?: boolean }> | undefined,
+    {
+      compactEnabled: multiClinicianAllocationEnabled,
+      historicEnabled: historicReconciliationEnabled,
+      loading: historicInventory.isLoading,
+      error: historicInventory.isError,
+    },
+  );
+  const bookingProgress = classifyBookingProgress(filteredClients.map(client => ({
+    ...client,
+    writeuppArranged: arrangedHistoricIds.has(client.id),
+  })));
 
   // Display labels for statuses (UI labels differ from database values)
   const getStatusDisplayLabel = getClientStatusLabel;
@@ -2330,7 +2354,26 @@ export default function Clients() {
             </div>
             <div className="space-y-2">
               {filteredClients.filter(c => isMatchedAllocationStatus(c.status)).map(client => (
-                <Card key={client.id} className="bg-white shadow-sm hover:shadow-md transition-shadow cursor-pointer overflow-hidden" data-testid={`kanban-card-${client.id}`}>
+                <div key={`matched-${client.id}`}>
+                  {multiClinicianAllocationEnabled && <CompactClientCard
+                      clientId={client.id}
+                      displayId={client.displayId}
+                      clientName={intakeClientSummaryEnabled ? getSummaryClientName(client.notes) : null}
+                      status={client.status === "OptionsSent" ? "Options sent" : client.status === "OptionSelected" ? "Option selected" : "Matched"}
+                      selectedDetails={allocationVisibilityEnabled && client.allocationVisibility?.appointment?.clinicianName
+                        ? `Selected · ${client.allocationVisibility.appointment.clinicianName}` : null}
+                      onOpen={() => setSelectedPortalClientId(client.id)}
+                    />}
+                  <ClientDetailPanel
+                      enabled={multiClinicianAllocationEnabled}
+                      open={selectedPortalClientId === client.id}
+                      onOpenChange={open => { if (!open) setSelectedPortalClientId(null); }}
+                      displayId={client.displayId}
+                      clientName={intakeClientSummaryEnabled ? getSummaryClientName(client.notes) : null}
+                      status={client.status}
+                    >
+                <Card className="bg-white shadow-sm hover:shadow-md transition-shadow cursor-pointer overflow-hidden"
+                  data-testid={multiClinicianAllocationEnabled ? `client-details-${client.id}` : `kanban-card-${client.id}`}>
                   <CardContent className="p-3">
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex flex-col gap-1">
@@ -2501,6 +2544,8 @@ export default function Clients() {
                     {workflowProgress(client)}
                   </CardContent>
                 </Card>
+                  </ClientDetailPanel>
+                </div>
               ))}
               {filteredClients.filter(c => isMatchedAllocationStatus(c.status)).length === 0 && (
                 <p className="text-xs text-muted-foreground text-center py-4">No clients</p>
@@ -2513,21 +2558,26 @@ export default function Clients() {
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-semibold text-purple-800 text-sm">{historicReconciliationEnabled ? "Booking progress" : "Awaiting Confirmation"}</h3>
               <Badge variant="secondary" className="bg-purple-100 text-purple-700">
-                {filteredClients.filter(c => isAwaitingConfirmationStatus(c.status)).length}
+                {bookingProgress.active.length + bookingProgress.confirmed.length}
               </Badge>
             </div>
             <div className="space-y-2">
               {(historicReconciliationEnabled
                 ? [
-                    { label: "Registration / payment pending", clients: filteredClients.filter(c => c.status === "RegistrationPending" && !externalReviewedIds.has(c.id)) },
-                    { label: "Awaiting portal confirmation", clients: filteredClients.filter(c => c.status === "AwaitingConfirmation" && !externalReviewedIds.has(c.id)) },
-                    { label: "Historically booked outside portal — staff reviewed", clients: filteredClients.filter(c => externalReviewedIds.has(c.id) && (c.status === "AwaitingConfirmation" || c.status === "RegistrationPending")) },
-                    { label: "Confirmed in portal", clients: filteredClients.filter(c => c.status === "BookingConfirmed") },
+                    { label: "Registration / payment pending", clients: bookingProgress.active.filter(c => c.status === "RegistrationPending") },
+                    { label: "Awaiting portal confirmation", clients: bookingProgress.active.filter(c => c.status === "AwaitingConfirmation") },
+                    { label: "Confirmed in portal", clients: bookingProgress.confirmed },
+                    { label: "Booked in WriteUpp · external appointment", clients: bookingProgress.arranged },
                   ]
-                : [{ label: "", clients: filteredClients.filter(c => isAwaitingConfirmationStatus(c.status)) }]
+                : [{ label: "", clients: bookingProgress.active.concat(bookingProgress.confirmed) }]
               ).map(group => <div key={group.label} className="space-y-2">
                 {group.label && <h4 className="text-xs font-semibold text-purple-900 border-b border-purple-200 pb-1">{group.label} ({group.clients.length})</h4>}
                 {group.clients.map(client => {
+                const isSeparatelyArranged = arrangedHistoricIds.has(client.id) && client.status !== "BookingConfirmed";
+                const writeuppActionVisible = multiClinicianAllocationEnabled
+                  && historicReconciliationEnabled
+                  && ["AwaitingConfirmation", "RegistrationPending"].includes(client.status)
+                  && (historicInventory.isError || historicInventory.data?.some(row => row.id === client.id && !row.portalSnapshot));
                 const apptConfirmed = (client as any).writeuppAppointmentConfirmed === true;
                 const dataTransferred = (client as any).writeuppDataTransferred === true;
                 const bothTicked = apptConfirmed && dataTransferred;
@@ -2543,8 +2593,84 @@ export default function Clients() {
                   registrationEnabled: tenant?.registrationFormEnabled === true,
                   allocationValid: !!assignedSlot && assignedSlot.isBooked === true && !assignedSlot.retiredAt,
                 }) : null;
+                const portalBlockerContent = confirmationRecoveryEnabled && blocker
+                  ? client.status === "AwaitingConfirmation"
+                    ? <div className="mt-2 text-[10px] text-amber-800" role="status" data-testid={`confirmation-blocker-${client.id}`}>
+                        {confirmationBlockerCopy[blocker]}
+                        {(blocker === "allocation_missing" || blocker === "allocation_invalid") && isAdmin && (
+                          <Button variant="outline" size="sm" className="mt-1 w-full text-xs"
+                            onClick={() => handleOpenEditStatus(client)}>Repair allocation</Button>
+                        )}
+                      </div>
+                    : client.status === "RegistrationPending"
+                      ? <div className="text-[10px] text-amber-800 mt-2" role="status" data-testid={`confirmation-blocker-${client.id}`}>
+                          <p>{confirmationBlockerCopy[blocker]}</p>
+                          {(!client.assignedClinicianId || !client.assignedSlotId) && (
+                            <>
+                              <p>{confirmationBlockerCopy.allocation_missing} Keep the current registration and payment evidence.</p>
+                              {isAdmin && <Button variant="outline" size="sm" className="mt-1 w-full text-xs"
+                                onClick={() => handleOpenEditStatus(client)}>Repair allocation</Button>}
+                            </>
+                          )}
+                        </div>
+                      : null
+                  : null;
+                const markPortalConfirmed = client.status === "AwaitingConfirmation"
+                  && (!confirmationRecoveryEnabled || !blocker)
+                  && !externalReviewedIds.has(client.id)
+                  ? <Button
+                      size="sm"
+                      className="w-full gap-1 text-xs mt-2 bg-green-600 hover:bg-green-700"
+                      disabled={updateClientMutation.isPending}
+                      onClick={() => {
+                        updateClientMutation.mutate({
+                          id: client.id,
+                          updates: { status: "Scheduled", confirmedAt: new Date().toISOString() }
+                        });
+                      }}
+                    >
+                      <CheckCircle2 className="h-3 w-3" /> Mark as Confirmed
+                    </Button>
+                  : null;
+                const portalToolsDescription = <p className="mb-2 text-[11px] text-slate-600">
+                  These controls are only for confirming the appointment in this portal. They are not required to record a staff-verified WriteUpp arrangement.
+                </p>;
                 return (
-                  <Card key={client.id} className="bg-white shadow-sm hover:shadow-md transition-shadow cursor-pointer overflow-hidden" data-testid={`kanban-card-${client.id}`}>
+                  <div key={`booking-${client.id}`}>
+                  {multiClinicianAllocationEnabled && <CompactClientCard
+                    clientId={client.id}
+                    displayId={client.displayId}
+                    clientName={intakeClientSummaryEnabled ? getSummaryClientName(client.notes) : null}
+                    status={isSeparatelyArranged ? "Booked in WriteUpp · external" :
+                      client.status === "RegistrationPending" ? (client.registrationFormSubmissionId ? "Payment pending" : "Registration pending") :
+                        client.status === "BookingConfirmed" ? "Portal booking confirmed" : "Awaiting portal confirmation"}
+                    selectedDetails={allocationVisibilityEnabled && client.allocationVisibility?.appointment?.clinicianName
+                      ? `Selected · ${client.allocationVisibility.appointment.clinicianName}` : null}
+                    onOpen={() => setSelectedPortalClientId(client.id)}
+                  />}
+                  <ClientDetailPanel
+                    enabled={multiClinicianAllocationEnabled}
+                    open={selectedPortalClientId === client.id}
+                    onOpenChange={open => { if (!open) setSelectedPortalClientId(null); }}
+                    displayId={client.displayId}
+                    clientName={intakeClientSummaryEnabled ? getSummaryClientName(client.notes) : null}
+                    status={client.status}
+                  >
+                  {writeuppActionVisible && <section className="rounded-md border border-teal-200 bg-teal-50/60 p-3">
+                    <p className="mb-2 text-xs text-teal-900">
+                      Verify or record the external appointment in WriteUpp. This records external staff verification only; it does not confirm a portal booking or trigger portal payment or booking emails.
+                    </p>
+                    <WriteuppAppointmentAction
+                      clientId={client.id}
+                      enabled={historicReconciliationEnabled}
+                      onRecorded={() => { void historicInventory.refetch(); }}
+                    />
+                  </section>}
+                  {isSeparatelyArranged && <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900" role="status">
+                    Staff recorded an external WriteUpp arrangement. This does not mean the portal booking is confirmed.
+                  </p>}
+                  <Card className="bg-white shadow-sm hover:shadow-md transition-shadow cursor-pointer overflow-hidden"
+                    data-testid={multiClinicianAllocationEnabled ? `client-details-${client.id}` : `kanban-card-${client.id}`}>
                     <CardContent className="p-3">
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex flex-col gap-1">
@@ -2643,28 +2769,16 @@ export default function Clients() {
                             <div className="mt-1">{paymentStatusBadge(client)}</div>
                           )}
                           {contactPreferenceBadge(client)}
-                          {confirmationRecoveryEnabled && blocker && (
-                            <div className="mt-2 text-[10px] text-amber-800" role="status" data-testid={`confirmation-blocker-${client.id}`}>
-                              {confirmationBlockerCopy[blocker]}
-                              {(blocker === "allocation_missing" || blocker === "allocation_invalid") && isAdmin && (
-                                <Button variant="outline" size="sm" className="mt-1 w-full text-xs"
-                                  onClick={() => handleOpenEditStatus(client)}>Repair allocation</Button>
-                              )}
-                            </div>
-                          )}
-                          {(!confirmationRecoveryEnabled || !blocker) && !externalReviewedIds.has(client.id) && <Button
-                            size="sm"
-                            className="w-full gap-1 text-xs mt-2 bg-green-600 hover:bg-green-700"
-                            disabled={updateClientMutation.isPending}
-                            onClick={() => {
-                              updateClientMutation.mutate({
-                                id: client.id,
-                                updates: { status: "Scheduled", confirmedAt: new Date().toISOString() }
-                              });
-                            }}
-                          >
-                            <CheckCircle2 className="h-3 w-3" /> Mark as Confirmed
-                          </Button>}
+                          {multiClinicianAllocationEnabled ? (
+                            <details className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                              <summary className="cursor-pointer text-xs font-medium text-slate-700">Portal booking tools</summary>
+                              <div className="mt-2">
+                                {portalToolsDescription}
+                                {portalBlockerContent}
+                                {markPortalConfirmed}
+                              </div>
+                            </details>
+                          ) : <>{portalBlockerContent}{markPortalConfirmed}</>}
                         </>
                       ) : (
                         <>
@@ -2675,18 +2789,15 @@ export default function Clients() {
                           {client.status === "RegistrationPending" && !client.registrationFormSubmissionId && (
                             <p className="text-[10px] text-violet-600 mt-2 flex items-center gap-1"><Clock className="h-3 w-3" /> Awaiting registration</p>
                           )}
-                          {confirmationRecoveryEnabled && blocker && (
-                            <div className="text-[10px] text-amber-800 mt-2" role="status" data-testid={`confirmation-blocker-${client.id}`}>
-                              <p>{confirmationBlockerCopy[blocker]}</p>
-                              {client.status === "RegistrationPending" && (!client.assignedClinicianId || !client.assignedSlotId) && (
-                                <>
-                                  <p>{confirmationBlockerCopy.allocation_missing} Keep the current registration and payment evidence.</p>
-                                  {isAdmin && <Button variant="outline" size="sm" className="mt-1 w-full text-xs"
-                                    onClick={() => handleOpenEditStatus(client)}>Repair allocation</Button>}
-                                </>
-                              )}
-                            </div>
-                          )}
+                          {client.status === "RegistrationPending" && portalBlockerContent && (multiClinicianAllocationEnabled ? (
+                            <details className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                              <summary className="cursor-pointer text-xs font-medium text-slate-700">Portal booking tools</summary>
+                              <div className="mt-2">
+                                {portalToolsDescription}
+                                {portalBlockerContent}
+                              </div>
+                            </details>
+                          ) : portalBlockerContent)}
                           {client.status === "BookingConfirmed" && (
                             <>
                               {writeuppChecklistEnabled && (
@@ -2747,6 +2858,8 @@ export default function Clients() {
                       {workflowProgress(client)}
                     </CardContent>
                   </Card>
+                  </ClientDetailPanel>
+                  </div>
                 );
                 })}
               </div>)}

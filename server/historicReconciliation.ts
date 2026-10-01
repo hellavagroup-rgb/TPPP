@@ -1,4 +1,4 @@
-import { and, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "./db";
 import { ACTIVE_ALLOCATION_STATUSES } from "@shared/clientWorkflow";
 import { auditLogs, bookingSnapshots, clients, formSubmissions, paymentCharges, timeSlots } from "@shared/schema";
@@ -14,14 +14,15 @@ export const externalBookingReview = z.object({
   startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
   familyMessageReview: z.string().trim().min(10).max(2000),
   diaryVerified: z.literal(true),
+  arrangedInWriteupp: z.boolean().default(false),
 });
 
 export function appointmentKey(value: z.infer<typeof externalBookingReview>): string {
   return [value.clinicianReference.trim().toLowerCase(), value.appointmentDate, value.startTime].join("|");
 }
 
-// This audit-only action does not change workflow status, payment, consent, allocation,
-// snapshots or email timestamps. It is NOT the portal's confirmBooking transition.
+// These audit-only actions do not change workflow status, payment, consent, allocation,
+// snapshots or email timestamps. They are NOT the portal's confirmBooking transition.
 export async function recordExternalBookingReview(
   tenantId: string, clientId: string, actorId: string, ipAddress: string | null,
   review: z.infer<typeof externalBookingReview>,
@@ -34,26 +35,18 @@ export async function recordExternalBookingReview(
     const [snapshot] = await tx.select({ id: bookingSnapshots.id }).from(bookingSnapshots)
       .where(and(eq(bookingSnapshots.tenantId, tenantId), eq(bookingSnapshots.clientId, clientId))).limit(1);
     if (snapshot) throw new Error("This client already has a portal booking snapshot");
-    if (client.assignedSlotId) {
-      const [slot] = await tx.select().from(timeSlots).where(and(eq(timeSlots.id, client.assignedSlotId), eq(timeSlots.tenantId, tenantId))).limit(1);
-      if (!slot || slot.clinicianId !== client.assignedClinicianId || !slot.isBooked || slot.retiredAt)
-        throw new Error("The assigned appointment is invalid; repair its allocation before review");
-      const [conflict] = await tx.select({ id: clients.id }).from(clients).where(and(
-        eq(clients.tenantId, tenantId), eq(clients.assignedSlotId, slot.id), ne(clients.id, clientId),
-        eq(clients.isArchived, false), inArray(clients.status, [...ACTIVE_ALLOCATION_STATUSES]),
-      )).limit(1);
-      const [confirmedConflict] = await tx.select({ id: bookingSnapshots.id }).from(bookingSnapshots).where(and(
-        eq(bookingSnapshots.tenantId, tenantId), eq(bookingSnapshots.slotId, slot.id), ne(bookingSnapshots.clientId, clientId),
-      )).limit(1);
-      if (conflict || confirmedConflict) throw new Error("Another client claims this portal appointment slot");
-    }
     const key = appointmentKey(review);
     const prior = await tx.select().from(auditLogs).where(and(
       eq(auditLogs.tenantId, tenantId), eq(auditLogs.action, "activity_external_booking_reviewed"),
     ));
     for (const item of prior) {
       if (item.resourceId === clientId) {
-        if (item.details?.appointmentKey === key && item.details?.externalReference === review.externalReference) return { alreadyReviewed: true };
+        if (item.details?.appointmentKey === key && item.details?.externalReference === review.externalReference) {
+          if (review.arrangedInWriteupp) {
+            await recordWriteuppArrangement(tx, tenantId, clientId, actorId, ipAddress, client, key, review);
+          }
+          return { alreadyReviewed: true };
+        }
         throw new Error("This client already has an external booking review; ask staff to resolve the discrepancy");
       }
       if (item.details?.appointmentKey === key || item.details?.externalReference === review.externalReference)
@@ -70,14 +63,38 @@ export async function recordExternalBookingReview(
         // No assertion about consent, Stripe payment, or email delivery.
       },
     });
+    if (review.arrangedInWriteupp) {
+      await recordWriteuppArrangement(tx, tenantId, clientId, actorId, ipAddress, client, key, review);
+    }
     return { alreadyReviewed: false };
+  });
+}
+
+async function recordWriteuppArrangement(
+  tx: any, tenantId: string, clientId: string, actorId: string, ipAddress: string | null,
+  client: any, key: string, review: z.infer<typeof externalBookingReview>,
+) {
+  const arrangements = await tx.select().from(auditLogs).where(and(
+    eq(auditLogs.tenantId, tenantId), eq(auditLogs.action, "activity_writeupp_appointment_arranged"),
+  ));
+  if (arrangements.some((item: any) => item.resourceId === clientId
+    && item.details?.appointmentKey === key
+    && item.details?.externalReference === review.externalReference)) return;
+  await tx.insert(auditLogs).values({
+    tenantId, userId: actorId, ipAddress, action: "activity_writeupp_appointment_arranged",
+    resourceType: "client", resourceId: clientId,
+    details: {
+      clientDisplayId: client.displayId, appointmentKey: key, externalReference: review.externalReference,
+      clinicianReference: review.clinicianReference, appointmentDate: review.appointmentDate,
+      startTime: review.startTime, diaryVerified: true,
+    },
   });
 }
 
 export async function historicReconciliationInventory(tenantId: string) {
   const activeClients = await db.select().from(clients).where(and(eq(clients.tenantId, tenantId), eq(clients.isArchived, false)));
   const rows = activeClients.filter(c => ["AwaitingConfirmation", "RegistrationPending", "BookingConfirmed", "Scheduled"].includes(c.status) && !c.completedAt);
-  const [slots, snapshots, submissions, charges, reviews, bookingEvents, selectionEvents] = await Promise.all([
+  const [slots, snapshots, submissions, charges, reviews, arrangements, bookingEvents, selectionEvents] = await Promise.all([
     db.select().from(timeSlots).where(eq(timeSlots.tenantId, tenantId)),
     db.select().from(bookingSnapshots).where(eq(bookingSnapshots.tenantId, tenantId)),
     db.select({ id: formSubmissions.id, clientId: formSubmissions.clientId, isDraft: formSubmissions.isDraft,
@@ -86,6 +103,7 @@ export async function historicReconciliationInventory(tenantId: string) {
     db.select({ clientId: paymentCharges.clientId, status: paymentCharges.status })
       .from(paymentCharges).where(eq(paymentCharges.tenantId, tenantId)),
     db.select().from(auditLogs).where(and(eq(auditLogs.tenantId, tenantId), eq(auditLogs.action, "activity_external_booking_reviewed"))),
+    db.select().from(auditLogs).where(and(eq(auditLogs.tenantId, tenantId), eq(auditLogs.action, "activity_writeupp_appointment_arranged"))),
     db.select({ resourceId: auditLogs.resourceId }).from(auditLogs)
       .where(and(eq(auditLogs.tenantId, tenantId), eq(auditLogs.action, "activity_booking_confirmed"))),
     db.select({ resourceId: auditLogs.resourceId }).from(auditLogs)
@@ -114,7 +132,9 @@ export async function historicReconciliationInventory(tenantId: string) {
         : registration?.termsAt || client.termsAcceptedAt ? "legacy_terms_only" : "not_recorded",
       paymentType: client.paymentType, paymentStatus: client.paymentStatus,
       chargeStatuses: charges.filter(c => c.clientId === client.id).map(c => c.status),
+      writeuppArranged: arrangements.some(e => e.resourceId === client.id),
       externalReview: review ? { reviewedAt: review.timestamp, externalReference: review.details?.externalReference,
+        clinicianReference: review.details?.clinicianReference,
         appointmentDate: review.details?.appointmentDate, startTime: review.details?.startTime,
         familyMessageReview: review.details?.familyMessageReview } : null,
     };

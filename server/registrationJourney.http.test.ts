@@ -144,6 +144,19 @@ const h = vi.hoisted(() => {
           if (sql.includes('"form_submissions"')) {
             return submissionRowsMatching(condition).filter(row => rows.includes(row));
           }
+          if (sql.includes('"audit_logs"')) {
+            // Arrangement evidence has a distinct audit action. Evaluating
+            // these predicates avoids treating an ordinary review as arranged.
+            const { params } = new PgDialect().sqlToQuery(condition);
+            return rows.filter(row => Object.entries({
+              tenantId: "tenant_id", resourceId: "resource_id", action: "action",
+            }).every(([property, column]) => {
+              for (const match of sql.matchAll(new RegExp(`"${column}"\\s*=\\s*\\$(\\d+)`, "g"))) {
+                if (row[property] !== params[Number(match[1]) - 1]) return false;
+              }
+              return true;
+            }));
+          }
           if (sql.includes('"booking_snapshots"."tenant_id"')) {
             return rows.filter(row => row.tenantId === state.tenant.id);
           }
@@ -894,6 +907,73 @@ describe("registration journey HTTP routes", () => {
     expect(response.status).toBe(409);
     expect(response.body.code).toBe("payment_unverified");
     expect(h.state.bookingSnapshots).toHaveLength(0);
+  });
+
+  it("records a WriteUpp arrangement without repairing or confirming the portal allocation", async () => {
+    resetState({
+      tenant: { registrationFormEnabled: true, paymentsEnabled: true },
+      client: { status: "AwaitingConfirmation", paymentType: "self_pay", paymentStatus: "setup_pending" },
+    });
+    h.state.slot.retiredAt = new Date();
+    const originalClient = structuredClone(h.state.client);
+    const originalSlot = structuredClone(h.state.slot);
+    const review = {
+      externalReference: "writeupp-appointment-1", clinicianReference: "External clinician",
+      appointmentDate: "2026-10-12", startTime: "10:00",
+      familyMessageReview: "Original message unavailable; staff verified appointment in WriteUpp.",
+      diaryVerified: true, arrangedInWriteupp: true,
+    };
+    const first = await request("/api/historic-reconciliation/client-a/external-review", {
+      method: "POST", body: JSON.stringify(review),
+    });
+    expect(first.status).toBe(200);
+    expect(h.state.client).toEqual(originalClient);
+    expect(h.state.slot).toEqual(originalSlot);
+    expect(h.state.charges).toHaveLength(0);
+    expect(h.state.bookingSnapshots).toHaveLength(0);
+    expect(h.state.emails).toHaveLength(0);
+    expect(h.state.paymentLinks).toHaveLength(0);
+    expect(h.state.activities).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "activity_external_booking_reviewed", tenantId: "tenant-a", userId: "admin-1", resourceId: "client-a" }),
+      expect.objectContaining({ action: "activity_writeupp_appointment_arranged", tenantId: "tenant-a", userId: "admin-1", resourceId: "client-a" }),
+    ]));
+    const inventory = await request("/api/historic-reconciliation");
+    expect(inventory.body).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "client-a", writeuppArranged: true, portalSnapshot: false, paymentStatus: "setup_pending", allocation: "invalid" }),
+    ]));
+    expect((await request("/api/historic-reconciliation/client-a/external-review", {
+      method: "POST", body: JSON.stringify(review),
+    })).status).toBe(200);
+    expect(h.state.activities.filter(item => item.action === "activity_writeupp_appointment_arranged")).toHaveLength(1);
+  });
+
+  it("does not infer a WriteUpp arrangement from an ordinary historic review", async () => {
+    resetState({ client: { status: "RegistrationPending" } });
+    const response = await request("/api/historic-reconciliation/client-a/external-review", {
+      method: "POST", body: JSON.stringify({
+        externalReference: "external-reference", clinicianReference: "External clinician",
+        appointmentDate: "2026-10-12", startTime: "10:00",
+        familyMessageReview: "Staff reviewed the external diary and original message.", diaryVerified: true,
+      }),
+    });
+    expect(response.status).toBe(200);
+    const inventory = await request("/api/historic-reconciliation");
+    expect(inventory.body[0].writeuppArranged).toBe(false);
+    expect(h.state.client.status).toBe("RegistrationPending");
+  });
+
+  it("rejects a WriteUpp arrangement for a client belonging to another practice", async () => {
+    resetState({ client: { status: "AwaitingConfirmation", tenantId: "tenant-b" } });
+    const response = await request("/api/historic-reconciliation/client-a/external-review", {
+      method: "POST", body: JSON.stringify({
+        externalReference: "foreign-reference", clinicianReference: "External clinician",
+        appointmentDate: "2026-10-12", startTime: "10:00",
+        familyMessageReview: "Staff verified the external appointment.", diaryVerified: true, arrangedInWriteupp: true,
+      }),
+    });
+    expect(response.status).toBe(409);
+    expect(h.state.activities).toHaveLength(0);
+    expect(h.state.emails).toHaveLength(0);
   });
 
   it("does not create a second portal booking after an external appointment review", async () => {

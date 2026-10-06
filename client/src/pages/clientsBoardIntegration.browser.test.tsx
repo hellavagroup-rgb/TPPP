@@ -7,6 +7,11 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import Clients from "./clients";
 
+const uiSignals = vi.hoisted(() => ({ toast: vi.fn() }));
+vi.mock("@/hooks/use-toast", () => ({
+  useToast: () => ({ toast: uiSignals.toast }),
+}));
+
 vi.mock("@/lib/auth", () => ({
   useAuth: () => ({
     user: { id: "admin-test", name: "Board Admin", role: "admin" },
@@ -15,7 +20,9 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 vi.mock("@/lib/operationalRefresh", () => ({
-  invalidateOperationalData: vi.fn(async () => {}),
+  invalidateOperationalData: vi.fn(async (client: QueryClient) => {
+    await client.invalidateQueries({ queryKey: ["/api/clients"] });
+  }),
   useOperationalRefresh: () => ({ refresh: vi.fn(), lastUpdated: null }),
 }));
 
@@ -149,6 +156,7 @@ describe("Clients page compact board integration", () => {
   const queryClients: QueryClient[] = [];
 
   beforeEach(() => {
+    uiSignals.toast.mockClear();
     apiFixtures.tenant = makeTenant();
     apiFixtures.clients = [];
     apiFixtures.historicRows = [];
@@ -196,6 +204,53 @@ describe("Clients page compact board integration", () => {
     queryClients.splice(0).forEach(client => client.clear());
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("keeps legacy confirmation pending state per client, shows failures and moves successful confirmations", async () => {
+    apiFixtures.tenant = makeTenant({ multiClinicianAllocationEnabled: false });
+    const first = makeClient("legacy-first", "LEG-101", "AwaitingConfirmation");
+    const second = makeClient("legacy-second", "LEG-102", "AwaitingConfirmation");
+    apiFixtures.clients = [first, second];
+    const pending = new Map<string, (response: Response) => void>();
+    const submitted: { id: string; body: unknown }[] = [];
+    const ordinaryFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const pathname = new URL(String(input), window.location.origin).pathname;
+      if (init?.method === "PATCH" && pathname.startsWith("/api/clients/legacy-")) {
+        const id = pathname.split("/").at(-1)!;
+        submitted.push({ id, body: JSON.parse(String(init.body)) });
+        return new Promise<Response>(resolve => pending.set(id, resolve));
+      }
+      return ordinaryFetch(input, init);
+    });
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const user = userEvent.setup();
+    const firstCard = await screen.findByTestId("kanban-card-legacy-first");
+    const secondCard = await screen.findByTestId("kanban-card-legacy-second");
+    await user.click(within(firstCard).getByRole("button", { name: "Mark as Confirmed" }));
+    await waitFor(() => expect(pending.has(first.id)).toBe(true));
+    expect((within(firstCard).getByRole("button", { name: "Confirming…" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(secondCard).getByRole("button", { name: "Mark as Confirmed" }) as HTMLButtonElement).disabled).toBe(false);
+    await user.click(within(secondCard).getByRole("button", { name: "Mark as Confirmed" }));
+    await waitFor(() => expect(pending.has(second.id)).toBe(true));
+    expect((within(firstCard).getByRole("button", { name: "Confirming…" }) as HTMLButtonElement).disabled).toBe(true);
+    pending.get(first.id)!(json({ error: "The appointment could not be confirmed. Please try again." }, 500));
+    await waitFor(() => expect(uiSignals.toast).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Client not confirmed", variant: "destructive",
+      description: "The appointment could not be confirmed. Please try again.",
+    })));
+    expect((within(firstCard).getByRole("button", { name: "Mark as Confirmed" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((within(secondCard).getByRole("button", { name: "Confirming…" }) as HTMLButtonElement).disabled).toBe(true);
+    second.status = "Scheduled";
+    pending.get(second.id)!(json(second));
+    await waitFor(() => expect(within(screen.getByTestId("kanban-card-legacy-second"))
+      .queryByRole("button", { name: "Mark as Confirmed" })).toBeNull());
+    expect(submitted).toEqual([
+      { id: first.id, body: { status: "Scheduled" } },
+      { id: second.id, body: { status: "Scheduled" } },
+    ]);
+    expect(uiSignals.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Client confirmed" }));
   });
 
   it("renders one BookingConfirmed card and counts it once, with one detail sheet", async () => {

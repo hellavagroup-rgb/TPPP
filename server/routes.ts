@@ -1423,10 +1423,21 @@ export async function registerRoutes(
         }
         req.body.status = transition.status;
       }
+      // A retry from a stale legacy card is a read-only success. Do not release
+      // another slot, replace confirmation time, or repeat confirmation effects.
+      if (oldStatus === "Scheduled" && req.body.status === oldStatus
+        && !req.tenant?.multiClinicianAllocationEnabled
+        && !req.tenant?.registrationFormEnabled
+        && !req.tenant?.confirmationRecoveryEnabled
+        && Object.keys(req.body).every(key => key === "status" || key === "confirmedAt")) {
+        return res.json(currentClient);
+      }
       if (shouldValidateIntakeCompletion(
         req.body.status,
         oldStatus,
-        req.tenant?.intakeClientSummaryEnabled === true,
+        req.tenant?.intakeClientSummaryEnabled === true
+          || req.tenant?.multiClinicianAllocationEnabled === true
+          || req.tenant?.registrationFormEnabled === true,
       )) {
         const intakeId = req.tenant?.intakeFormTemplateId;
         if (!intakeId) return res.status(409).json({ error: "Designated intake form requires setup" });
@@ -1474,6 +1485,9 @@ export async function registerRoutes(
         "termsAcceptedVersion",
         "termsAcceptedContent",
         "zoomLinkSentAt",
+        // Confirmation time is a server-owned workflow milestone, not a raw
+        // browser timestamp (Drizzle requires Date values for timestamp fields).
+        "confirmedAt",
       ]) {
         delete updateData[protectedField];
       }
@@ -1560,7 +1574,7 @@ export async function registerRoutes(
             idempotencyKey: String(req.get("Idempotency-Key") || `manual-confirmation-${req.params.id}`),
           })
         : null;
-      const updated = confirmation?.client || ((isDeallocation || req.body.status === "Scheduled")
+      const updated = confirmation?.client || ((isDeallocation || (req.body.status === "Scheduled" && req.body.status !== oldStatus))
         ? await storage.updateClientAndReleaseSlot(
             req.params.id,
             updateData,

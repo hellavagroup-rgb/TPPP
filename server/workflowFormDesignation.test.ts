@@ -18,10 +18,11 @@ describe("intake completion on admin edits", () => {
     expect(designatedIntakeCompletionBlocker(intake, false, true, "completed")?.blocker?.state).toBe("not_submitted");
   });
 
-  it("preserves the opted-out status validation path", () => {
-    expect(shouldValidateIntakeCompletion("Forms Completed", "Forms Completed", false)).toBe(true);
+  it("allows legacy manual completion without claiming a portal submission or delivery", () => {
+    expect(shouldValidateIntakeCompletion("Forms Completed", "Forms Completed", false)).toBe(false);
     expect(shouldValidateIntakeCompletion(undefined, "Forms Completed", false)).toBe(false);
-    expect(shouldValidateIntakeCompletion("Forms Completed", "Forms Sent", false)).toBe(true);
+    expect(shouldValidateIntakeCompletion("Forms Completed", "Forms Sent", false)).toBe(false);
+    expect(shouldValidateIntakeCompletion("Forms Completed", "New", false)).toBe(false);
   });
 });
 

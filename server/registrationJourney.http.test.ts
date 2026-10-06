@@ -771,6 +771,65 @@ describe("registration journey HTTP routes", () => {
     expect(h.state.emails).toHaveLength(0);
   });
 
+  it("confirms a fully opted-out legacy client once and safely accepts stale timestamp retries", async () => {
+    resetState({
+      tenant: {
+        multiClinicianAllocationEnabled: false, intakeClientSummaryEnabled: false,
+        registrationFormEnabled: false, confirmationRecoveryEnabled: false,
+        bookingConfirmedEmailEnabled: false, paymentsEnabled: false,
+      },
+      client: { status: "AwaitingConfirmation", confirmedAt: null },
+    });
+    h.state.slot.isBooked = true;
+    const first = await request("/api/clients/client-a", {
+      method: "PATCH",
+      body: JSON.stringify({ status: "Scheduled", confirmedAt: "2000-01-01T00:00:00Z" }),
+    });
+    expect(first.status).toBe(200);
+    expect(first.body.status).toBe("Scheduled");
+    expect(first.body.confirmedAt).not.toBe("2000-01-01T00:00:00Z");
+    const clientBefore = structuredClone(h.state.client);
+    const slotBefore = structuredClone(h.state.slot);
+    const activitiesBefore = structuredClone(h.state.activities);
+    const snapshotsBefore = structuredClone(h.state.bookingSnapshots);
+    const emailCount = h.state.emails.length;
+    const retries = await Promise.all([
+      request("/api/clients/client-a", { method: "PATCH", body: JSON.stringify({ status: "Scheduled" }) }),
+      request("/api/clients/client-a", { method: "PATCH",
+        body: JSON.stringify({ status: "Scheduled", confirmedAt: "not-a-date" }) }),
+    ]);
+    expect(retries.map(result => result.status)).toEqual([200, 200]);
+    expect(retries[0].body.confirmedAt).toBe(first.body.confirmedAt);
+    expect(h.state.client).toEqual(clientBefore);
+    expect(h.state.slot).toEqual(slotBefore);
+    expect(h.state.activities).toEqual(activitiesBefore);
+    expect(h.state.bookingSnapshots).toEqual(snapshotsBefore);
+    expect(h.state.emails).toHaveLength(emailCount);
+    expect(h.state.paymentLinks).toHaveLength(0);
+    expect(h.state.charges).toHaveLength(0);
+  });
+
+  it("allows ordinary legacy edits with an unchanged confirmed status without accepting browser confirmation time", async () => {
+    const confirmedAt = new Date("2026-01-10T12:00:00Z");
+    resetState({
+      tenant: { multiClinicianAllocationEnabled: false, registrationFormEnabled: false,
+        confirmationRecoveryEnabled: false, bookingConfirmedEmailEnabled: false },
+      client: { status: "Scheduled", assignedClinicianId: null, assignedSlotId: null, confirmedAt },
+    });
+    const slotBefore = structuredClone(h.state.slot);
+    const response = await request("/api/clients/client-a", {
+      method: "PATCH", body: JSON.stringify({
+        status: "Scheduled", confirmedAt: "not-a-date", notes: "Staff updated the administrative notes.",
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(h.state.client.confirmedAt).toEqual(confirmedAt);
+    expect(h.state.client.notes).toBe("Staff updated the administrative notes.");
+    expect(h.state.slot).toEqual(slotBefore);
+    expect(h.storage.updateClient.mock.calls.at(-1)?.[1]).not.toHaveProperty("confirmedAt");
+    expect(h.state.emails).toHaveLength(0);
+  });
+
   it("requires an administrator for manual confirmation, without affecting the legacy practice path", async () => {
     resetState({
       tenant: { confirmationRecoveryEnabled: false, paymentsEnabled: false },
@@ -1693,6 +1752,41 @@ describe("registration journey HTTP routes", () => {
     expect(h.storage.prepareFormDeliveries).not.toHaveBeenCalled();
     expect(h.state.client.status).toBe("Forms Completed");
     expect(h.state.client.formsCompletedAt).toBeInstanceOf(Date);
+  });
+
+  it.each(["New", "Forms Sent"])("allows legacy manual forms completion from %s without portal evidence", async (status) => {
+    resetState({
+      tenant: { multiClinicianAllocationEnabled: false, registrationFormEnabled: false,
+        intakeClientSummaryEnabled: false, formsEnabled: true, intakeFormTemplateId: null },
+      client: { status, assignedClinicianId: null, assignedSlotId: null, formsCompletedAt: null },
+    });
+    h.state.options = [];
+    const response = await request("/api/clients/client-a", {
+      method: "PATCH", body: JSON.stringify({ status: "Forms Completed" }),
+    });
+    expect(response.status).toBe(200);
+    expect(h.state.client.status).toBe("Forms Completed");
+    expect(h.state.client.formsCompletedAt).toBeInstanceOf(Date);
+    expect(h.state.submissions).toHaveLength(0);
+    expect(h.state.deliveries).toHaveLength(0);
+    // Preserve ordinary staff notifications, but do not resend forms to the
+    // client merely because staff recorded an externally completed intake.
+    expect(h.state.emails.some(email => email.to === h.state.client.email)).toBe(false);
+    expect(h.state.paymentLinks).toHaveLength(0);
+    expect(h.state.bookingSnapshots).toHaveLength(0);
+  });
+
+  it("still requires portal intake evidence when the new workflow is enabled but its name display is off", async () => {
+    configureIntakeCompletion("phone");
+    h.state.tenant.intakeClientSummaryEnabled = false;
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.submissions = [];
+    const response = await request("/api/clients/client-a", {
+      method: "PATCH", body: JSON.stringify({ status: "Forms Completed" }),
+    });
+    expect(response.status).toBe(400);
+    expect(response.body.blocker.state).toBe("not_submitted");
+    expect(h.state.client.status).toBe("New");
   });
 
   it("keeps requiring completed delivery for an email-intake client", async () => {

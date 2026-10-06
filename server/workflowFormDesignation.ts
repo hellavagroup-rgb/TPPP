@@ -4,14 +4,15 @@ export type WorkflowTemplate = {
   title: string;
 };
 
-/** Opted-in clients need a new transition, not a repeated status value, to recheck delivery. */
+/** Only the opted-in portal intake workflow requires recorded submission/delivery evidence. */
 export function shouldValidateIntakeCompletion(
   requestedStatus: unknown,
   currentStatus: string,
-  intakeClientSummaryEnabled: boolean,
+  portalIntakeWorkflowEnabled: boolean,
 ): boolean {
-  return requestedStatus === "Forms Completed"
-    && (!intakeClientSummaryEnabled || currentStatus !== "Forms Completed");
+  return portalIntakeWorkflowEnabled
+    && requestedStatus === "Forms Completed"
+    && currentStatus !== "Forms Completed";
 }
 
 export function validateWorkflowFormDesignations(input: {

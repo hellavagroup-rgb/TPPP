@@ -395,6 +395,43 @@ export default function Clients() {
     onSuccess: () => {
       invalidateOperationalData(queryClient);
     },
+    onError: (error: Error) => {
+      toast({
+        title: "Client not updated",
+        description: mutationErrorMessage(error, "The change could not be saved. Please try again."),
+        variant: "destructive",
+      });
+    },
+  });
+
+  const [confirmingClientIds, setConfirmingClientIds] = useState<Set<string>>(() => new Set());
+  const confirmLegacyClientMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const response = await apiRequest("PATCH", `/api/clients/${id}`, { status: "Scheduled" });
+      return response.json();
+    },
+    onMutate: (id: string) => {
+      setConfirmingClientIds(previous => new Set(previous).add(id));
+    },
+    onSuccess: async () => {
+      await invalidateOperationalData(queryClient);
+      toast({ title: "Client confirmed", description: "The client has moved to confirmed bookings." });
+    },
+    onError: (error: Error) => {
+      invalidateOperationalData(queryClient);
+      toast({
+        title: "Client not confirmed",
+        description: mutationErrorMessage(error, "Confirmation failed. Please refresh and try again."),
+        variant: "destructive",
+      });
+    },
+    onSettled: (_data, _error, id) => {
+      setConfirmingClientIds(previous => {
+        const next = new Set(previous);
+        next.delete(id);
+        return next;
+      });
+    },
   });
 
   const assignClientMutation = useMutation({
@@ -2757,15 +2794,12 @@ export default function Clients() {
                   ? <Button
                       size="sm"
                       className="w-full gap-1 text-xs mt-2 bg-green-600 hover:bg-green-700"
-                      disabled={updateClientMutation.isPending}
+                      disabled={confirmingClientIds.has(client.id)}
                       onClick={() => {
-                        updateClientMutation.mutate({
-                          id: client.id,
-                          updates: { status: "Scheduled", confirmedAt: new Date().toISOString() }
-                        });
+                        confirmLegacyClientMutation.mutate(client.id);
                       }}
                     >
-                      <CheckCircle2 className="h-3 w-3" /> Mark as Confirmed
+                      <CheckCircle2 className="h-3 w-3" /> {confirmingClientIds.has(client.id) ? "Confirming…" : "Mark as Confirmed"}
                     </Button>
                   : null;
                 const portalToolsDescription = <p className="mb-2 text-[11px] text-slate-600">

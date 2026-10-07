@@ -10,9 +10,17 @@ export function shouldValidateIntakeCompletion(
   currentStatus: string,
   portalIntakeWorkflowEnabled: boolean,
 ): boolean {
+  // Returning from allocation/booking is a repair of an existing journey,
+  // not a claim that a newly delivered intake form has just been completed.
+  // Historic submissions may predate the designated delivery records.
+  const returningFromAllocation = [
+    "Assigned", "OptionsSent", "OptionSelected", "RegistrationPending",
+    "AwaitingConfirmation", "BookingConfirmed", "Scheduled",
+  ].includes(currentStatus);
   return portalIntakeWorkflowEnabled
     && requestedStatus === "Forms Completed"
-    && currentStatus !== "Forms Completed";
+    && currentStatus !== "Forms Completed"
+    && !returningFromAllocation;
 }
 
 export function validateWorkflowFormDesignations(input: {

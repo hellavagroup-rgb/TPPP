@@ -18,6 +18,17 @@ describe("intake completion on admin edits", () => {
     expect(designatedIntakeCompletionBlocker(intake, false, true, "completed")?.blocker?.state).toBe("not_submitted");
   });
 
+  it.each([
+    "Assigned", "OptionsSent", "OptionSelected", "RegistrationPending",
+    "AwaitingConfirmation", "BookingConfirmed", "Scheduled",
+  ])("allows a return from %s for reallocation without replaying intake delivery checks", (status) => {
+    expect(shouldValidateIntakeCompletion("Forms Completed", status, true)).toBe(false);
+  });
+
+  it.each(["New", "Forms Sent", "Waitlist"])("still checks first-time intake completion from %s", (status) => {
+    expect(shouldValidateIntakeCompletion("Forms Completed", status, true)).toBe(true);
+  });
+
   it("allows legacy manual completion without claiming a portal submission or delivery", () => {
     expect(shouldValidateIntakeCompletion("Forms Completed", "Forms Completed", false)).toBe(false);
     expect(shouldValidateIntakeCompletion(undefined, "Forms Completed", false)).toBe(false);

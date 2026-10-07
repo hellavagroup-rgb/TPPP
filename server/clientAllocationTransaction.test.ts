@@ -14,7 +14,7 @@ import {
 } from "./storage";
 
 type State = {
-  slot: { id: string; isBooked: boolean };
+  slot: { id: string; isBooked: boolean; retiredAt?: Date; retirementReason?: string };
   clinician: { id: string; currentLoad: number };
   client: {
     id: string;
@@ -133,6 +133,22 @@ describe("DatabaseStorage.updateClientAndReleaseSlot", () => {
       expect(state).toEqual(original);
     },
   );
+
+  it("does not reactivate a retired slot when returning a selected client for reallocation", async () => {
+    state.client.status = "OptionSelected";
+    state.slot.retiredAt = new Date("2026-09-01T12:00:00Z");
+    state.slot.retirementReason = "No longer available";
+    const retiredAt = state.slot.retiredAt;
+    transactionalState(state, null);
+    const storage = new DatabaseStorage();
+    await storage.updateClientAndReleaseSlot(state.client.id, {
+      status: "Forms Completed", assignedSlotId: null, assignedSlot: null, assignedClinicianId: null,
+    }, state.slot.id, state.clinician.id, "tenant-a");
+    expect(state.slot.isBooked).toBe(false);
+    expect(state.slot.retiredAt).toEqual(retiredAt);
+    expect(state.slot.retirementReason).toBe("No longer available");
+    expect(state.client.status).toBe("Forms Completed");
+  });
 
   it("commits the slot release and cleared client assignment together", async () => {
     transactionalState(state, null);

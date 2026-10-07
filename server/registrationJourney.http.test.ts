@@ -455,6 +455,16 @@ const h = vi.hoisted(() => {
       Object.assign(state.client, patch);
       return { ...state.client };
     }),
+    updateClientAndReleaseSlot: vi.fn(async (id: string, patch: any, slotId: string | null, _clinicianId: string | null, tenantId: string) => {
+      if (state.client.id !== id || state.client.tenantId !== tenantId) return undefined;
+      if (slotId === state.slot.id) state.slot.isBooked = false;
+      for (const option of state.options) {
+        if (option.clientId === id && option.tenantId === tenantId
+          && ["pending", "selected"].includes(option.status)) option.status = "unavailable";
+      }
+      Object.assign(state.client, patch);
+      return { ...state.client };
+    }),
     assignClinicianToClient: vi.fn(async (clientId: string, clinicianId: string, slotId: string, tenantId: string) => {
       if (state.client.id !== clientId || state.client.tenantId !== tenantId) {
         throw new Error("client not found");
@@ -2865,6 +2875,66 @@ describe("registration journey HTTP routes", () => {
     expect(response.status).toBe(410);
     expect(response.body.error).toMatch(/no longer active/i);
     expect(h.state.options.find(option => option.id === "current-option")?.status).toBe("pending");
+  });
+
+  it.each(["OptionSelected", "RegistrationPending"])("returns %s to Forms Completed despite missing historic intake delivery", async (status) => {
+    const completedAt = new Date("2026-08-01T12:00:00Z");
+    resetState({
+      tenant: { intakeFormTemplateId: "intake-a", intakeClientSummaryEnabled: true },
+      client: {
+        status, formsCompletedAt: completedAt, registrationToken: "old-registration-token",
+        registrationTokenExpiresAt: new Date(Date.now() + 60_000),
+        registrationEmailSentAt: new Date(), registrationEmailAttemptKey: "old-attempt",
+        registrationEmailClaimId: "old-claim", registrationEmailPendingToken: "pending-token",
+      },
+    });
+    h.state.slot.isBooked = true;
+    h.state.options[0].status = "selected";
+    h.state.submissions = [{
+      id: "historic-intake", clientId: "client-a", formTemplateId: "intake-a", isDraft: false,
+    }];
+    const response = await request("/api/clients/client-a", {
+      method: "PATCH", body: JSON.stringify({ status: "Forms Completed" }),
+    });
+    expect(response.status).toBe(200);
+    expect(h.state.client).toMatchObject({
+      status: "Forms Completed", assignedSlotId: null, assignedClinicianId: null,
+      assignedSlot: null, formsCompletedAt: completedAt, registrationToken: null,
+      registrationTokenExpiresAt: null, registrationEmailSentAt: null,
+      registrationEmailAttemptKey: null, registrationEmailClaimId: null,
+      registrationEmailPendingToken: null,
+    });
+    expect(h.state.client.registrationTokenRevokedAt).toBeInstanceOf(Date);
+    expect(h.state.slot.isBooked).toBe(false);
+    expect(h.state.options[0].status).toBe("unavailable");
+    expect(h.state.submissions[0].id).toBe("historic-intake");
+    expect(h.state.deliveries).toEqual([]);
+    expect(h.state.emails.filter(email => email.to === "client@example.test")).toEqual([]);
+    const oldRegistration = await request("/api/public/register/client-a/old-registration-token");
+    expect(oldRegistration.status).toBe(403);
+    expect(oldRegistration.body.error).toBe("Invalid or expired token");
+    const oldSelection = await request("/api/public/options/selection-token-a/select", {
+      method: "POST", body: JSON.stringify({ clinicianOptionId: "option-a" }),
+    });
+    expect(oldSelection.status).toBe(410);
+    expect(h.state.slot.isBooked).toBe(false);
+  });
+
+  it("still blocks first-time intake completion when the designated intake was not delivered", async () => {
+    resetState({
+      tenant: { intakeFormTemplateId: "intake-a", intakeClientSummaryEnabled: true },
+      client: { status: "Forms Sent" },
+    });
+    h.state.registrationTemplate = { id: "intake-a", tenantId: "tenant-a", title: "Intake" };
+    h.state.submissions = [{
+      id: "intake-submission", clientId: "client-a", formTemplateId: "intake-a", isDraft: false,
+    }];
+    const response = await request("/api/clients/client-a", {
+      method: "PATCH", body: JSON.stringify({ status: "Forms Completed" }),
+    });
+    expect(response.status).toBe(400);
+    expect(response.body.blocker.state).toBe("not_delivered");
+    expect(h.state.client.status).toBe("Forms Sent");
   });
 
   it("automatically delivers registration after option selection exactly once", async () => {

@@ -1510,7 +1510,7 @@ export async function registerRoutes(
         if (req.body.status === "Forms Sent") {
           updateData.formsSentAt = now;
         } else if (req.body.status === "Forms Completed") {
-          updateData.formsCompletedAt = now;
+          updateData.formsCompletedAt = currentClient.formsCompletedAt || now;
         } else if (req.body.status === "Assigned") {
           updateData.allocatedAt = now;
         } else if (req.body.status === "AwaitingConfirmation") {
@@ -1564,6 +1564,18 @@ export async function registerRoutes(
         updateData.assignedSlotId = null;
         updateData.assignedSlot = null;
         updateData.assignedClinicianId = null;
+        // An old registration email must not resume the discarded selection.
+        // Invalidate in-flight delivery claims as well as the published token.
+        updateData.registrationToken = null;
+        updateData.registrationTokenExpiresAt = null;
+        updateData.registrationTokenRevokedAt = new Date();
+        updateData.registrationEmailSentAt = null;
+        updateData.registrationEmailSendingAt = null;
+        updateData.registrationEmailFailedAt = null;
+        updateData.registrationEmailFailureReason = null;
+        updateData.registrationEmailAttemptKey = null;
+        updateData.registrationEmailClaimId = null;
+        updateData.registrationEmailPendingToken = null;
       }
       
       const confirmation = isConfirmation

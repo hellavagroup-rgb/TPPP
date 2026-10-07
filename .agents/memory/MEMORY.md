@@ -35,3 +35,4 @@
 - [Offer recovery concurrency](offer-recovery-concurrency.md) — serialize decline, replacement, selection and resend; best-effort delivery evidence must not abort accepted offers.
 - [Staff board summary clarity](staff-board-summary-clarity.md) — compact cards still need real client context and next-action or waiting-party guidance without opening a panel.
 - [Code execution globals](code-execution-globals.md) — Buffer is impure-only here; file writes can survive a failed notebook block even when its variables do not.
+- [Original enquiry provenance](enquiry-source-provenance.md) — a matching contact email on an unconverted inbox message is a review candidate, not proof of a client's original source.

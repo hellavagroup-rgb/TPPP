@@ -219,6 +219,37 @@ describe("Clients page compact board integration", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([404, 500, 200])("shows the correct original enquiry state for HTTP %s", async (status) => {
+    apiFixtures.clients = [makeClient("enquiry-client", "ENQ-101", "New")];
+    const ordinaryFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const pathname = new URL(String(input), window.location.origin).pathname;
+      if (pathname === "/api/clients/enquiry-client/intake-message") {
+        return json(status === 200
+          ? { id: "enquiry-1", fromAddress: "sender@example.com", body: "Original fixture enquiry" }
+          : { error: status === 404 ? "No linked intake message" : "Failed to fetch intake message" }, status);
+      }
+      return ordinaryFetch(input, init);
+    });
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const user = userEvent.setup();
+    const card = await screen.findByTestId("kanban-card-enquiry-client");
+    await user.click(within(card).getByRole("button", { expanded: false }));
+    await user.click(await screen.findByRole("menuitem", { name: "View Original Enquiry" }));
+    const dialog = await screen.findByRole("dialog");
+    if (status === 404) {
+      await within(dialog).findByText(/No original enquiry is linked to this client/);
+      expect(within(dialog).queryByText("Failed to load original enquiry.")).toBeNull();
+    } else if (status === 500) {
+      await within(dialog).findByText("Failed to load original enquiry.");
+      expect(within(dialog).queryByText(/No original enquiry is linked/)).toBeNull();
+    } else {
+      await within(dialog).findByText("Original fixture enquiry");
+      expect(within(dialog).queryByText(/No original enquiry is linked/)).toBeNull();
+    }
+  });
+
   it("keeps legacy confirmation pending state per client, shows failures and moves successful confirmations", async () => {
     apiFixtures.tenant = makeTenant({ multiClinicianAllocationEnabled: false });
     const first = makeClient("legacy-first", "LEG-101", "AwaitingConfirmation");

@@ -95,6 +95,7 @@ import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { format, parseISO, isSameDay } from "date-fns";
 import { apiRequest } from "@/lib/queryClient";
+import { fetchOriginalEnquiry, MISSING_ORIGINAL_ENQUIRY } from "@/lib/originalEnquiry";
 import type { Client as ClientType, Clinician, FormTemplate as FormTemplateType, TimeSlot } from "@shared/schema";
 import { useInsurers, useAddInsurer } from "@/hooks/use-insurers";
 import { useAuth } from "@/lib/auth";
@@ -909,14 +910,9 @@ export default function Clients() {
     setEnquiryError(null);
     setEnquiryLoading(true);
     try {
-      const res = await apiRequest("GET", `/api/clients/${client.id}/intake-message`);
-      if (res.status === 404) {
-        setEnquiryError("No original enquiry found for this client.");
-      } else if (!res.ok) {
-        setEnquiryError("Failed to load original enquiry.");
-      } else {
-        setEnquiryMessage(await res.json());
-      }
+      const message = await fetchOriginalEnquiry(client.id);
+      if (!message) setEnquiryError(MISSING_ORIGINAL_ENQUIRY);
+      else setEnquiryMessage(message);
     } catch {
       setEnquiryError("Failed to load original enquiry.");
     } finally {
@@ -1645,8 +1641,8 @@ export default function Clients() {
     setEditEnquiryMessage(null);
     setEditEnquiryOpen(false);
     setEditEnquiryLoading(true);
-    apiRequest("GET", `/api/clients/${client.id}/intake-message`)
-      .then(async (res) => { if (res.ok) setEditEnquiryMessage(await res.json()); })
+    fetchOriginalEnquiry(client.id)
+      .then((message) => setEditEnquiryMessage(message))
       .catch(() => {})
       .finally(() => setEditEnquiryLoading(false));
     setIsEditClientOpen(true);
@@ -4897,7 +4893,7 @@ export default function Clients() {
                 Original Enquiry — {viewEnquiryClient.displayId}
               </DialogTitle>
               <DialogDescription>
-                The original intake message this client was converted from.
+                The linked original intake message, if one is recorded.
               </DialogDescription>
             </DialogHeader>
 

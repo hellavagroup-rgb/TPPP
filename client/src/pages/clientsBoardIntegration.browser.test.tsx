@@ -190,6 +190,9 @@ describe("Clients page compact board integration", () => {
       disconnect() {}
     };
     Element.prototype.scrollIntoView = vi.fn();
+    Element.prototype.hasPointerCapture = vi.fn(() => false);
+    Element.prototype.setPointerCapture = vi.fn();
+    Element.prototype.releasePointerCapture = vi.fn();
 
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), window.location.origin);
@@ -245,6 +248,96 @@ describe("Clients page compact board integration", () => {
     queryClients.push(view.queryClient);
     await screen.findByTestId("compact-client-card-ordinary-client");
     expect(screen.queryByRole("button", { name: "Manager confirm" })).toBeNull();
+  });
+
+  async function openConfirmedEdit(clientId: string, user: ReturnType<typeof userEvent.setup>) {
+    await user.click(await screen.findByTestId(`compact-client-card-${clientId}`));
+    const card = await screen.findByTestId(`client-details-${clientId}`);
+    const menu = within(card).getAllByRole("button").find(button => button.getAttribute("aria-haspopup") === "menu");
+    expect(menu).toBeTruthy();
+    await user.click(menu!);
+    await user.click(await screen.findByRole("menuitem", { name: "Edit Status" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit Status" });
+    await user.click(within(dialog).getByRole("combobox"));
+    await user.click(await screen.findByRole("option", { name: "Confirmed", exact: true }));
+    return dialog;
+  }
+
+  it("opens the PIN flow for this client from Edit Status instead of attempting ordinary reassignment", async () => {
+    apiFixtures.managerEnabled = true;
+    const client = makeClient("manager-edit", "MGR-EDIT", "AwaitingConfirmation");
+    Object.assign(client, { assignedClinicianId: "clinician-original", assignedSlotId: "slot-original", assignedSlot: "Tuesday 13:00" });
+    apiFixtures.clients = [client];
+    const originalFetch = fetch;
+    const writes: Array<{ path: string; body: any }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input, init) => {
+      const path = new URL(String(input), window.location.origin).pathname;
+      if (path === "/api/clinicians") return json([{
+        id: "clinician-new", name: "Fixture Clinician", specialties: [], insurers: [],
+        capacity: 10, currentLoad: 0, isActive: true,
+        availability: [{ id: "slot-new", tenantId: "tenant-1", clinicianId: "clinician-new",
+          type: "Recurring", day: "Monday", startTime: "10:00", endTime: "11:00",
+          isBooked: false, locationType: "online" }],
+      }]);
+      if (init?.method === "POST") {
+        writes.push({ path, body: JSON.parse(init.body) });
+        if (path.endsWith("/manager-confirm")) {
+          Object.assign(client, { status: "Scheduled", managerConfirmedAt: "2026-10-07T12:00:00Z" });
+          return json({ confirmed: true, alreadyConfirmed: false });
+        }
+      }
+      return originalFetch(input, init);
+    }));
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const user = userEvent.setup();
+    const edit = await openConfirmedEdit(client.id, user);
+    await user.click(within(edit).getByRole("button", { name: /Monday/ }));
+    expect(within(edit).getByRole("button", { name: "Continue with manager PIN" })).toHaveProperty("disabled", true);
+    expect(within(edit).getByRole("alert").textContent).toContain("Clear the new slot selection");
+    expect(writes).toEqual([]);
+    await user.click(within(edit).getByRole("button", { name: "Clear selection (keep current slot)" }));
+    await user.click(within(edit).getByRole("button", { name: "Continue with manager PIN" }));
+    const pinDialog = await screen.findByRole("dialog", { name: "Manager confirmation" });
+    expect(within(pinDialog).getByRole("combobox").textContent).toContain("MGR-EDIT");
+    expect(writes).toEqual([]);
+    await user.type(within(pinDialog).getByLabelText("Manager PIN"), "864209");
+    await user.type(within(pinDialog).getByLabelText("Reason for manager confirmation"), "Already arranged in the practice diary.");
+    await user.click(within(pinDialog).getByRole("button", { name: "Move to Confirmed" }));
+    await screen.findByText("MGR-EDIT moved to Confirmed. Your manager override has been recorded.");
+    expect(writes).toEqual([{ path: "/api/clients/manager-edit/manager-confirm",
+      body: { pin: "864209", reason: "Already arranged in the practice diary." } }]);
+    expect(client.assignedClinicianId).toBe("clinician-original");
+    expect(client.assignedSlotId).toBe("slot-original");
+  });
+
+  it.each([false, true])("keeps normal checks for unapproved admins when manager setup is configured=%s", async configured => {
+    const client = makeClient("ordinary-edit", "ADMIN-EDIT", "AwaitingConfirmation");
+    apiFixtures.clients = [client];
+    const originalFetch = fetch;
+    const paths: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input, init) => {
+      const path = new URL(String(input), window.location.origin).pathname;
+      if (path === "/api/manager-confirmation/settings") return json({
+        configured, canConfigure: !configured, canOverride: false, managerUserIds: [], updatedAt: null,
+      });
+      if (init?.method === "POST") {
+        paths.push(path);
+        return json({ error: "Payment is not independently verified." }, 403);
+      }
+      return originalFetch(input, init);
+    }));
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const user = userEvent.setup();
+    const edit = await openConfirmedEdit(client.id, user);
+    expect(within(edit).getByText(configured
+      ? /Normal booking checks apply. Only selected managers/
+      : /Manager PIN confirmation has not been set up/)).toBeTruthy();
+    await user.click(within(edit).getByRole("button", { name: "Save Changes" }));
+    await waitFor(() => expect(paths).toEqual(["/api/clients/ordinary-edit/reassign"]));
+    expect(screen.queryByRole("dialog", { name: "Manager confirmation" })).toBeNull();
+    expect(client.status).toBe("AwaitingConfirmation");
   });
 
   it.each([404, 500, 200])("shows the correct original enquiry state for HTTP %s", async (status) => {

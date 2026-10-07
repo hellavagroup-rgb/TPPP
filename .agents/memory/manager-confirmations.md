@@ -18,3 +18,9 @@ A manager confirmation is an administrative declaration, not proof of payment, r
 First-time configuration requires an authenticated admin's own password and includes that account among the selected managers. After setup, only selected managers may change the PIN or approvals.
 
 **Why:** The project has no separate practice-owner role; this permits initial setup without enabling unselected admins to reset the PIN or grant themselves override permission afterwards.
+
+The normal Edit Status → Confirmed action must expose the manager PIN flow to approved managers, not leave it available only through a separate toolbar button.
+
+**Why:** The user tried that existing action and encountered the normal payment blocker without a PIN prompt.
+
+**How to apply:** Carry the current client into the protected confirmation dialog. Explain setup or approval requirements when unavailable; never bypass checks for other admins or silently discard a proposed reassignment.

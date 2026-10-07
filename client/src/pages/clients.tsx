@@ -283,6 +283,7 @@ export default function Clients() {
   const [selectedClient, setSelectedClient] = useState<ClientType | null>(null);
   const [selectedPortalClientId, setSelectedPortalClientId] = useState<string | null>(null);
   const [managerConfirmationOpen, setManagerConfirmationOpen] = useState(false);
+  const [managerConfirmationClientId, setManagerConfirmationClientId] = useState<string | null>(null);
   const [closedOfferClientIds, setClosedOfferClientIds] = useState<Set<string>>(() => new Set());
 
   // Custom insurer management
@@ -849,6 +850,20 @@ export default function Clients() {
     clinicianId: null as string | null,
     slotId: null as string | null
   });
+  const changingToConfirmed = !!editStatusClient
+    && !["Scheduled", "BookingConfirmed"].includes(editStatusClient.status)
+    && ["Scheduled", "BookingConfirmed"].includes(editStatusData.status);
+  const managerStatusConfirmation = changingToConfirmed && managerAccess.data?.canOverride === true;
+  const editStatusOptions = editStatusClient
+    ? getAdminStatusOptions(editStatusClient.status, workflowFeatures)
+      .filter(option => !confirmationRecoveryEnabled || editStatusClient.status !== "RegistrationPending"
+        || option.value === "RegistrationPending")
+    : [];
+  if (managerAccess.data?.canOverride && editStatusClient
+    && !["Scheduled", "BookingConfirmed"].includes(editStatusClient.status)
+    && !editStatusOptions.some(option => option.value === "Scheduled")) {
+    editStatusOptions.push({ value: "Scheduled", label: "Confirmed" });
+  }
 
   const reassignClientMutation = useMutation({
     mutationFn: async ({ clientId, clinicianId, slotId, status }: { clientId: string; clinicianId: string | null; slotId: string | null; status: string }) => {
@@ -882,6 +897,15 @@ export default function Clients() {
 
   const handleSaveEditStatus = () => {
     if (!editStatusClient) return;
+    if (managerStatusConfirmation) {
+      // A manager confirmation preserves the existing allocation. Never silently
+      // discard a slot selection or apply an unverified reassignment along with it.
+      if (editStatusData.slotId) return;
+      setManagerConfirmationClientId(editStatusClient.id);
+      setIsEditStatusOpen(false);
+      setManagerConfirmationOpen(true);
+      return;
+    }
     reassignClientMutation.mutate({
       clientId: editStatusClient.id,
       clinicianId: editStatusData.clinicianId,
@@ -2018,10 +2042,13 @@ export default function Clients() {
         )}
         
         {managerAccess.data?.canOverride && (
-          <Button variant="outline" onClick={() => setManagerConfirmationOpen(true)}>Manager confirm</Button>
+          <Button variant="outline" onClick={() => {
+            setManagerConfirmationClientId(selectedPortalClientId);
+            setManagerConfirmationOpen(true);
+          }}>Manager confirm</Button>
         )}
         <ManagerConfirmationDialog open={managerConfirmationOpen} onOpenChange={setManagerConfirmationOpen}
-          clients={clients} initialClientId={selectedPortalClientId} />
+          clients={clients} initialClientId={managerConfirmationClientId} />
         <Dialog open={isNewClientOpen} onOpenChange={handleNewClientOpenChange}>
             <DialogTrigger asChild>
                 <Button className="gap-2">
@@ -4023,9 +4050,7 @@ export default function Clients() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {getAdminStatusOptions(editStatusClient.status, workflowFeatures)
-                      .filter(option => !confirmationRecoveryEnabled || editStatusClient.status !== "RegistrationPending" || option.value === "RegistrationPending")
-                      .map(option => (
+                    {editStatusOptions.map(option => (
                       <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
                     ))}
                   </SelectContent>
@@ -4035,6 +4060,22 @@ export default function Clients() {
                     ? "Changing away from Options Sent will cancel the pending options and invalidate the client's selection link."
                     : "Changing to Pending Intake, Screen Booked/Sent, Forms Completed, or Waitlist will release the current time slot."}
                 </p>
+                {managerStatusConfirmation && <p className="text-sm text-amber-800" role={editStatusData.slotId ? "alert" : undefined}>
+                  {editStatusData.slotId
+                    ? "Clear the new slot selection before continuing with the manager PIN. Change the allocation separately."
+                    : "Continue to enter your manager PIN and reason. This keeps the current allocation, does not verify payment or registration, and sends no booking email."}
+                </p>}
+                {changingToConfirmed && !managerAccess.isLoading && !managerAccess.isError
+                  && !managerAccess.data?.canOverride && <p className="text-sm text-muted-foreground">
+                    {managerAccess.data?.configured
+                      ? "Normal booking checks apply. Only selected managers can bypass them using the practice PIN."
+                      : <>Manager PIN confirmation has not been set up. Configure it in{" "}
+                        <a className="underline" href="/settings?tab=team">Settings → Team Members</a>.
+                        {" "}Until then, normal booking checks apply.</>}
+                  </p>}
+                {changingToConfirmed && managerAccess.isError && <p role="alert" className="text-sm text-destructive">
+                  Manager permissions could not be loaded. Refresh before confirming.
+                </p>}
               </div>
 
               {(editStatusData.status === "Assigned" || editStatusData.status === "AwaitingConfirmation" || editStatusData.status === "Scheduled"
@@ -4122,10 +4163,13 @@ export default function Clients() {
             <Button variant="outline" onClick={() => setIsEditStatusOpen(false)}>Cancel</Button>
             <Button 
               onClick={handleSaveEditStatus}
-              disabled={reassignClientMutation.isPending || (confirmationRecoveryEnabled && editStatusClient?.status === "RegistrationPending"
+              disabled={reassignClientMutation.isPending
+                || (changingToConfirmed && (managerAccess.isLoading || managerAccess.isError))
+                || (managerStatusConfirmation && !!editStatusData.slotId)
+                || (!managerStatusConfirmation && confirmationRecoveryEnabled && editStatusClient?.status === "RegistrationPending"
                 && !editStatusClient.assignedSlotId && !editStatusData.slotId)}
             >
-              {reassignClientMutation.isPending ? "Saving..." : "Save Changes"}
+              {reassignClientMutation.isPending ? "Saving..." : managerStatusConfirmation ? "Continue with manager PIN" : "Save Changes"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -57,7 +57,8 @@ const apiFixtures: {
   tenant: Record<string, unknown>;
   clients: ClientFixture[];
   historicRows: HistoricFixture[];
-} = { tenant: {}, clients: [], historicRows: [] };
+  managerEnabled: boolean;
+} = { tenant: {}, clients: [], historicRows: [], managerEnabled: false };
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -173,6 +174,7 @@ describe("Clients page compact board integration", () => {
     apiFixtures.tenant = makeTenant();
     apiFixtures.clients = [];
     apiFixtures.historicRows = [];
+    apiFixtures.managerEnabled = false;
 
     window.matchMedia = vi.fn().mockReturnValue({
       matches: false,
@@ -194,6 +196,11 @@ describe("Clients page compact board integration", () => {
       switch (url.pathname) {
         case "/api/tenant":
           return json(apiFixtures.tenant);
+        case "/api/manager-confirmation/settings":
+          return json({
+            configured: apiFixtures.managerEnabled, canConfigure: true,
+            canOverride: apiFixtures.managerEnabled, managerUserIds: [], updatedAt: null,
+          });
         case "/api/clients":
           return json(apiFixtures.clients);
         case "/api/clinicians":
@@ -217,6 +224,27 @@ describe("Clients page compact board integration", () => {
     queryClients.splice(0).forEach(client => client.clear());
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("shows manager confirmation only after the server grants this admin permission", async () => {
+    apiFixtures.managerEnabled = true;
+    apiFixtures.clients = [makeClient("manager-client", "MGR-101", "RegistrationPending")];
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Manager confirm" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("heading", { name: "Manager confirmation" })).toBeTruthy();
+    expect(within(dialog).getByLabelText("Manager PIN")).toHaveProperty("type", "password");
+    expect(within(dialog).getByRole("button", { name: "Move to Confirmed" })).toHaveProperty("disabled", true);
+  });
+
+  it("does not show the manager override to an ordinary admin", async () => {
+    apiFixtures.clients = [makeClient("ordinary-client", "ADM-101", "RegistrationPending")];
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    await screen.findByTestId("compact-client-card-ordinary-client");
+    expect(screen.queryByRole("button", { name: "Manager confirm" })).toBeNull();
   });
 
   it.each([404, 500, 200])("shows the correct original enquiry state for HTTP %s", async (status) => {

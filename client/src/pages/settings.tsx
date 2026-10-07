@@ -13,6 +13,7 @@ import { Loader2, Save, Mail, Trash2, UserPlus, Link2, ShieldCheck, Download, Da
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useAuth } from "@/lib/auth";
+import { ManagerConfirmationSettings } from "@/components/ManagerConfirmationSettings";
 import { useLocation } from "wouter";
 import { useManagedInsurers, useAddInsurer, useDeleteInsurer } from "@/hooks/use-insurers";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -1830,6 +1831,7 @@ export default function Settings() {
         </TabsContent>
 
         <TabsContent value="team">
+          <ManagerConfirmationSettings />
           <AdminUsersTab />
         </TabsContent>
 

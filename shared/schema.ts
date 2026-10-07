@@ -86,6 +86,16 @@ export const insertUserSchema = createInsertSchema(users).omit({ id: true, creat
 export const selectUserSchema = createSelectSchema(users).omit({ password: true });
 
 export type InsertUser = z.infer<typeof insertUserSchema>;
+ 
+// Separate from tenants so PIN hashes cannot leak through general practice APIs.
+export const managerConfirmationSettings = pgTable("manager_confirmation_settings", {
+  tenantId: varchar("tenant_id").primaryKey().references(() => tenants.id, { onDelete: "cascade" }),
+  pinHash: text("pin_hash").notNull(),
+  managerUserIds: json("manager_user_ids").$type<string[]>().notNull(),
+  failedPinAttempts: json("failed_pin_attempts").$type<Record<string, { count: number; lockedUntil: string | null }>>().notNull().default({}),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  updatedBy: varchar("updated_by").references(() => users.id, { onDelete: "set null" }),
+});
 export type User = typeof users.$inferSelect;
 export type SafeUser = z.infer<typeof selectUserSchema>;
 
@@ -200,6 +210,9 @@ export const clients = pgTable("clients", {
   archiveReason: text("archive_reason"),
   archiveCategory: text("archive_category"),
   completedAt: timestamp("completed_at"),
+  managerConfirmedAt: timestamp("manager_confirmed_at"),
+  managerConfirmedBy: varchar("manager_confirmed_by").references(() => users.id, { onDelete: "set null" }),
+  managerConfirmationReason: text("manager_confirmation_reason"),
   // Workflow Stage Timestamps
   formsSentAt: timestamp("forms_sent_at"), // When forms were sent to client
   formsCompletedAt: timestamp("forms_completed_at"), // When client completed forms
@@ -275,7 +288,10 @@ export const insertClientSchema = createInsertSchema(clients, {
 }).omit({ 
   id: true, 
   createdAt: true, 
-  updatedAt: true
+  updatedAt: true,
+  managerConfirmedAt: true,
+  managerConfirmedBy: true,
+  managerConfirmationReason: true,
 });
 export const selectClientSchema = createSelectSchema(clients);
 

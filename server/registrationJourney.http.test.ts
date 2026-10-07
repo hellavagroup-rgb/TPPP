@@ -1073,6 +1073,47 @@ describe("registration journey HTTP routes", () => {
     },
   );
 
+  it("does not manufacture a portal booking after a manager's manual confirmation", async () => {
+    resetState({
+      tenant: { confirmationRecoveryEnabled: true, paymentsEnabled: false },
+      client: { status: "AwaitingConfirmation", paymentType: "insurer", managerConfirmedAt: new Date() },
+    });
+    h.state.slot.isBooked = true;
+    const response = await request("/api/clients/client-a", {
+      method: "PATCH", body: JSON.stringify({ status: "Scheduled" }),
+    });
+    expect(response.status).toBe(409);
+    expect(h.state.bookingSnapshots).toEqual([]);
+    expect(h.state.emails).toEqual([]);
+  });
+
+  it("does not accept manager override metadata through ordinary client edits", async () => {
+    resetState({ client: { status: "RegistrationPending" } });
+    const response = await request("/api/clients/client-a", {
+      method: "PATCH", body: JSON.stringify({
+        status: "RegistrationPending", managerConfirmedAt: "2026-10-07T12:00:00Z",
+        managerConfirmedBy: "admin-1", managerConfirmationReason: "Attempt to skip manager PIN.",
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(h.state.client.managerConfirmedAt).toBeFalsy();
+    expect(h.state.client.managerConfirmedBy).toBeFalsy();
+    expect(h.state.client.managerConfirmationReason).toBeFalsy();
+  });
+
+  it("clears the current manual confirmation when a manager-confirmed client is explicitly reopened", async () => {
+    resetState({ client: { status: "Scheduled", managerConfirmedAt: new Date(),
+      managerConfirmedBy: "admin-1", managerConfirmationReason: "Historic booking." } });
+    const response = await request("/api/clients/client-a", {
+      method: "PATCH", body: JSON.stringify({ status: "Forms Completed" }),
+    });
+    expect(response.status).toBe(200);
+    expect(h.state.client.status).toBe("Forms Completed");
+    expect(h.state.client.managerConfirmedAt).toBeNull();
+    expect(h.state.client.managerConfirmedBy).toBeNull();
+    expect(h.state.client.managerConfirmationReason).toBeNull();
+  });
+
   it.each(["activity_external_booking_reviewed", "activity_writeupp_appointment_arranged"])("does not create a second portal booking after %s", async (action) => {
     resetState({
       tenant: { confirmationRecoveryEnabled: true, paymentsEnabled: false },

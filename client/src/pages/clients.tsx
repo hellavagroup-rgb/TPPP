@@ -7,6 +7,8 @@ import { CompactClientCard, ClientDetailPanel, hasRecordedAppointmentSelection }
 import { BookingPaymentReview } from "@/components/BookingPaymentReview";
 import { ConfirmPortalReconcile } from "@/components/ConfirmPortalReconcile";
 import { WriteuppAppointmentAction } from "@/components/WriteuppAppointmentAction";
+import { ManagerConfirmationDialog, ManagerConfirmedBadge } from "@/components/ManagerConfirmationDialog";
+import { useManagerConfirmationAccess } from "@/lib/managerConfirmation";
 import { classifyBookingProgress, getWriteUppArrangedIds } from "@/lib/clientBoardClassification";
 import { mergePaymentInspection, paymentInspectionOutcome, type PaymentInspectionResult } from "@/lib/paymentInspectionState";
 import { bookingCompletionBlockerCode, bookingCompletionBlockerCopy } from "@shared/bookingCompletion";
@@ -207,6 +209,7 @@ export default function Clients() {
   const { toast } = useToast();
   const registrationAttemptKeysRef = useRef(new Map<string, string>());
   const { user } = useAuth();
+  const managerAccess = useManagerConfirmationAccess(user?.role === "admin");
   const { refresh, lastUpdated } = useOperationalRefresh(user?.role === "admin");
   const isAdmin = user?.role === "admin";
   const [, setLocation] = useLocation();
@@ -279,6 +282,7 @@ export default function Clients() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedClient, setSelectedClient] = useState<ClientType | null>(null);
   const [selectedPortalClientId, setSelectedPortalClientId] = useState<string | null>(null);
+  const [managerConfirmationOpen, setManagerConfirmationOpen] = useState(false);
   const [closedOfferClientIds, setClosedOfferClientIds] = useState<Set<string>>(() => new Set());
 
   // Custom insurer management
@@ -1306,6 +1310,7 @@ export default function Clients() {
   const paymentStatusBadge = (client: ClientType) => {
     if (!stripeEnabled) return null;
     if (arrangedHistoricIds.has(client.id)) return null;
+    if (client.managerConfirmedAt && !(client as any).hasFailedPayment && client.paymentStatus !== "active") return null;
     if ((client as any).hasFailedPayment) {
       const reason = (client as any).latestFailureReason;
       return (
@@ -2012,6 +2017,11 @@ export default function Clients() {
           </div>
         )}
         
+        {managerAccess.data?.canOverride && (
+          <Button variant="outline" onClick={() => setManagerConfirmationOpen(true)}>Manager confirm</Button>
+        )}
+        <ManagerConfirmationDialog open={managerConfirmationOpen} onOpenChange={setManagerConfirmationOpen}
+          clients={clients} initialClientId={selectedPortalClientId} />
         <Dialog open={isNewClientOpen} onOpenChange={handleNewClientOpenChange}>
             <DialogTrigger asChild>
                 <Button className="gap-2">
@@ -3218,7 +3228,8 @@ export default function Clients() {
                 {contactPreferenceBadge(client) && (
                   <div className="mt-2">{contactPreferenceBadge(client)}</div>
                 )}
-                {workflowProgress(client)}
+                {!client.managerConfirmedAt && workflowProgress(client)}
+                <ManagerConfirmedBadge at={client.managerConfirmedAt} reason={client.managerConfirmationReason} />
                 {showCompletedState && (
                   <div className="mt-2 text-xs text-muted-foreground space-y-1">
                     <p>Completed: {client.completedAt ? formatDateUK(client.completedAt) : "—"}</p>

@@ -1140,6 +1140,13 @@ export class DatabaseStorage implements IStorage {
       if (existingClient.completedAt) {
         throw new Error("Reopen this completed booking before editing its status or allocation.");
       }
+      if (existingClient.managerConfirmedAt && !["Scheduled", "BookingConfirmed"].includes(newStatus)) {
+        await tx.update(clients).set({
+          managerConfirmedAt: null,
+          managerConfirmedBy: null,
+          managerConfirmationReason: null,
+        }).where(and(eq(clients.id, clientId), eq(clients.tenantId, tenantId)));
+      }
 
       const oldClinicianId = existingClient.assignedClinicianId;
       const oldSlotIdToRelease = existingClient.assignedSlotId;

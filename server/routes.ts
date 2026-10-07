@@ -10,6 +10,7 @@ import { getAllocationVisibility } from "./allocationVisibility";
 import { getAllocationOfferStates } from "./allocationOfferState";
 import { withTenantAllocationVisibility } from "@shared/allocationVisibility";
 import { setupAuth, requireAuth, requireAdmin, requireClinician, hashPassword, auditLog, destroySessionsForUser } from "./auth";
+import { registerManagerConfirmationRoutes } from "./managerConfirmation";
 import passport from "passport";
 import { 
   insertClientSchema, insertClinicianSchema, insertTimeSlotSchema, 
@@ -1176,6 +1177,7 @@ export async function registerRoutes(
   });
 
   // ============ CLIENT ROUTES (GDPR Protected) ============
+  registerManagerConfirmationRoutes(app);
   app.get("/api/historic-reconciliation", requireAdmin, async (req, res) => {
     if (!req.tenant?.id) return res.status(403).json({ error: "Practice context is required" });
     try {
@@ -1489,6 +1491,7 @@ export async function registerRoutes(
       // Add workflow timestamps based on status change
       const updateData = { ...req.body };
       for (const protectedField of [
+        "managerConfirmedAt", "managerConfirmedBy", "managerConfirmationReason",
         "completedAt", "isArchived", "archivedAt", "archiveReason", "archiveCategory",
         "registrationFormSubmissionId",
         "registrationPaymentAttemptKey",
@@ -1517,6 +1520,11 @@ export async function registerRoutes(
         updateData.zoomLinkSentAt = null;
       }
       if (req.body.status && req.body.status !== oldStatus) {
+        if (currentClient.managerConfirmedAt) {
+          updateData.managerConfirmedAt = null;
+          updateData.managerConfirmedBy = null;
+          updateData.managerConfirmationReason = null;
+        }
         const now = new Date();
         if (req.body.status === "Forms Sent") {
           updateData.formsSentAt = now;

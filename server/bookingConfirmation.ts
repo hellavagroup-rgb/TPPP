@@ -95,7 +95,7 @@ export async function confirmBookingInTransaction(tx: any, input: BookingConfirm
         eq(auditLogs.resourceId, client.id),
         inArray(auditLogs.action, ["activity_external_booking_reviewed", "activity_writeupp_appointment_arranged"]),
       ));
-    if (externalReviews.some((row: { action: string }) =>
+    if (client.managerConfirmedAt || externalReviews.some((row: { action: string }) =>
       ["activity_external_booking_reviewed", "activity_writeupp_appointment_arranged"].includes(row.action))) {
       throw new ExternalBookingReviewConflictError();
     }

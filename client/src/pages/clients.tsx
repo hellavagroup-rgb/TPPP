@@ -237,7 +237,7 @@ export default function Clients() {
   const confirmationRecoveryEnabled = tenant?.confirmationRecoveryEnabled === true || tenant?.registrationFormEnabled === true;
   const historicReconciliationEnabled = isAdmin && tenant?.registrationFormEnabled === true;
   const historicInventory = useHistoricReconciliation(historicReconciliationEnabled);
-  const externalReviewedIds = new Set(historicInventory.data?.filter(row => row.externalReview).map(row => row.id) || []);
+  const externalReviewedIds = new Set(historicInventory.data?.filter(row => row.externalReview || row.writeuppArranged).map(row => row.id) || []);
   const { data: webhookFailures = [], isError: webhookFailuresUnavailable } = useQuery<Array<{
     eventId: string; eventType: string; reason: string; attempts: number;
     lastFailedAt: string; clientId: string | null; displayId: string | null;
@@ -1305,6 +1305,7 @@ export default function Clients() {
 
   const paymentStatusBadge = (client: ClientType) => {
     if (!stripeEnabled) return null;
+    if (arrangedHistoricIds.has(client.id)) return null;
     if ((client as any).hasFailedPayment) {
       const reason = (client as any).latestFailureReason;
       return (
@@ -2752,6 +2753,7 @@ export default function Clients() {
                 const isSeparatelyArranged = arrangedHistoricIds.has(client.id) && client.status !== "BookingConfirmed";
                 const writeuppActionVisible = multiClinicianAllocationEnabled
                   && historicReconciliationEnabled
+                  && !isSeparatelyArranged
                   && ["AwaitingConfirmation", "RegistrationPending"].includes(client.status)
                   && (historicInventory.isError || historicInventory.data?.some(row => row.id === client.id && !row.portalSnapshot));
                 const apptConfirmed = (client as any).writeuppAppointmentConfirmed === true;
@@ -2861,7 +2863,7 @@ export default function Clients() {
                   )}
                   {writeuppActionVisible && <section className="rounded-md border border-teal-200 bg-teal-50/60 p-3">
                     <p className="mb-2 text-xs text-teal-900">
-                      Verify or record the external appointment in WriteUpp. This records external staff verification only; it does not confirm a portal booking or trigger portal payment or booking emails.
+                      Select below to record that the appointment is already arranged in WriteUpp. No appointment details are required.
                     </p>
                     <WriteuppAppointmentAction
                       clientId={client.id}
@@ -2870,7 +2872,7 @@ export default function Clients() {
                     />
                   </section>}
                   {isSeparatelyArranged && <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900" role="status">
-                    Staff recorded an external WriteUpp arrangement. This does not mean the portal booking is confirmed.
+                    Appointment arranged in WriteUpp. No further booking action needed.
                   </p>}
                   <Card className="bg-white shadow-sm hover:shadow-md transition-shadow cursor-pointer overflow-hidden"
                     data-testid={multiClinicianAllocationEnabled ? `client-details-${client.id}` : `kanban-card-${client.id}`}>
@@ -2878,7 +2880,7 @@ export default function Clients() {
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex flex-col gap-1">
                           <span className="font-mono font-semibold text-sm">{client.displayId}</span>
-                          {client.status === "RegistrationPending" && (
+                          {!isSeparatelyArranged && client.status === "RegistrationPending" && (
                             <span className="inline-flex items-center text-[9px] px-1.5 py-0 rounded-full bg-violet-100 text-violet-700 border border-violet-200 w-fit">
                               {client.registrationFormSubmissionId ? "Payment Pending" : "Registration Pending"}
                             </span>
@@ -2972,7 +2974,7 @@ export default function Clients() {
                             <div className="mt-1">{paymentStatusBadge(client)}</div>
                           )}
                           {contactPreferenceBadge(client)}
-                          {multiClinicianAllocationEnabled ? (
+                          {!isSeparatelyArranged && (multiClinicianAllocationEnabled ? (
                             <details className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
                               <summary className="cursor-pointer text-xs font-medium text-slate-700">Portal booking tools</summary>
                               <div className="mt-2">
@@ -2981,7 +2983,7 @@ export default function Clients() {
                                 {markPortalConfirmed}
                               </div>
                             </details>
-                          ) : <>{portalBlockerContent}{markPortalConfirmed}</>}
+                          ) : <>{portalBlockerContent}{markPortalConfirmed}</>)}
                         </>
                       ) : (
                         <>
@@ -2989,10 +2991,10 @@ export default function Clients() {
                           {client.insurer && client.insurer !== "Private" && <Badge variant="outline" className="text-[10px] mb-2">{client.insurer}</Badge>}
                           {contactPreferenceBadge(client)}
                           {paymentStatusBadge(client) && <div className="mt-1">{paymentStatusBadge(client)}</div>}
-                          {client.status === "RegistrationPending" && !client.registrationFormSubmissionId && (
+                          {!isSeparatelyArranged && client.status === "RegistrationPending" && !client.registrationFormSubmissionId && (
                             <p className="text-[10px] text-violet-600 mt-2 flex items-center gap-1"><Clock className="h-3 w-3" /> Awaiting registration</p>
                           )}
-                          {client.status === "RegistrationPending" && portalBlockerContent && (multiClinicianAllocationEnabled ? (
+                          {!isSeparatelyArranged && client.status === "RegistrationPending" && portalBlockerContent && (multiClinicianAllocationEnabled ? (
                             <details className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
                               <summary className="cursor-pointer text-xs font-medium text-slate-700">Portal booking tools</summary>
                               <div className="mt-2">

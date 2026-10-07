@@ -21,6 +21,42 @@ export function appointmentKey(value: z.infer<typeof externalBookingReview>): st
   return [value.clinicianReference.trim().toLowerCase(), value.appointmentDate, value.startTime].join("|");
 }
 
+export const writeuppArrangementAssertion = z.object({
+  arrangedInWriteupp: z.literal(true),
+}).strict();
+
+/** Staff's explicit acknowledgement, without inventing appointment or payment evidence. */
+export async function acknowledgeWriteuppArrangement(
+  tenantId: string, clientId: string, actorId: string, ipAddress: string | null,
+) {
+  return db.transaction(async tx => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${tenantId}), hashtext('historic-booking-review'))`);
+    const [client] = await tx.select().from(clients).where(and(
+      eq(clients.id, clientId), eq(clients.tenantId, tenantId),
+    )).for("update");
+    if (!client || client.isArchived || client.completedAt) throw new Error("Client is not active in this practice");
+    if (!["AwaitingConfirmation", "RegistrationPending"].includes(client.status))
+      throw new Error("Only unconfirmed clients can be marked as arranged in WriteUpp");
+    const [snapshot] = await tx.select({ id: bookingSnapshots.id }).from(bookingSnapshots).where(and(
+      eq(bookingSnapshots.tenantId, tenantId), eq(bookingSnapshots.clientId, clientId),
+    )).limit(1);
+    if (snapshot) throw new Error("This client already has a portal booking snapshot");
+    const arrangements = await tx.select().from(auditLogs).where(and(
+      eq(auditLogs.tenantId, tenantId), eq(auditLogs.resourceId, clientId),
+      eq(auditLogs.action, "activity_writeupp_appointment_arranged"),
+    ));
+    if (arrangements.some(item => item.resourceId === clientId)) return { arrangedInWriteupp: true, alreadyRecorded: true };
+    await tx.insert(auditLogs).values({
+      tenantId, userId: actorId, ipAddress, action: "activity_writeupp_appointment_arranged",
+      resourceType: "client", resourceId: clientId,
+      details: {
+        clientDisplayId: client.displayId, staffAcknowledged: true, portalStatusAtReview: client.status,
+      },
+    });
+    return { arrangedInWriteupp: true, alreadyRecorded: false };
+  });
+}
+
 // These audit-only actions do not change workflow status, payment, consent, allocation,
 // snapshots or email timestamps. They are NOT the portal's confirmBooking transition.
 export async function recordExternalBookingReview(

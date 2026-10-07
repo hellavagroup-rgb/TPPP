@@ -187,7 +187,7 @@ describe("getClientNextStep", () => {
     expect(result).toMatchObject({
       kind: "action",
       title: "No further booking action",
-      detail: "Appointment arrangement recorded in WriteUpp. Check payment separately if needed; no portal allocation repair is required.",
+      detail: "The appointment is arranged in WriteUpp. No further booking action is needed.",
     });
     expect(result.action).toBeUndefined();
   });
@@ -205,7 +205,7 @@ describe("getClientNextStep", () => {
     expect(result).toMatchObject({
       kind: "action",
       title: "No further booking action",
-      detail: "Appointment arrangement recorded in WriteUpp. Check payment separately if needed; no portal allocation repair is required.",
+      detail: "The appointment is arranged in WriteUpp. No further booking action is needed.",
     });
     expect(result.action).toBeUndefined();
   });

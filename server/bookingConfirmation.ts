@@ -93,9 +93,10 @@ export async function confirmBookingInTransaction(tx: any, input: BookingConfirm
       .from(auditLogs).where(and(
         eq(auditLogs.tenantId, input.tenantId),
         eq(auditLogs.resourceId, client.id),
-        eq(auditLogs.action, "activity_external_booking_reviewed"),
+        inArray(auditLogs.action, ["activity_external_booking_reviewed", "activity_writeupp_appointment_arranged"]),
       ));
-    if (externalReviews.some((row: { action: string }) => row.action === "activity_external_booking_reviewed")) {
+    if (externalReviews.some((row: { action: string }) =>
+      ["activity_external_booking_reviewed", "activity_writeupp_appointment_arranged"].includes(row.action))) {
       throw new ExternalBookingReviewConflictError();
     }
     if (!client.assignedSlotId || !client.assignedClinicianId) {

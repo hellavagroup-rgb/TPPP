@@ -57,7 +57,8 @@ vi.mock("./db", () => {
 });
 
 import {
-  appointmentKey, externalBookingReview, historicReconciliationInventory, recordExternalBookingReview,
+  acknowledgeWriteuppArrangement, appointmentKey, externalBookingReview, historicReconciliationInventory, recordExternalBookingReview,
+  writeuppArrangementAssertion,
 } from "./historicReconciliation";
 
 const review = {
@@ -88,6 +89,50 @@ beforeEach(() => {
 });
 
 describe("audited external booking review", () => {
+  it("accepts only an explicit arrangement assertion, without appointment details", () => {
+    expect(writeuppArrangementAssertion.safeParse({ arrangedInWriteupp: true }).success).toBe(true);
+    expect(writeuppArrangementAssertion.safeParse({ arrangedInWriteupp: false }).success).toBe(false);
+    expect(writeuppArrangementAssertion.safeParse({}).success).toBe(false);
+    expect(writeuppArrangementAssertion.safeParse({ arrangedInWriteupp: true, paymentStatus: "active" }).success).toBe(false);
+  });
+
+  it("acknowledges an arrangement once without changing or inventing portal evidence", async () => {
+    const before = structuredClone(fixture.client);
+    expect(await acknowledgeWriteuppArrangement("tenant-a", "client-a", "admin", null))
+      .toEqual({ arrangedInWriteupp: true, alreadyRecorded: false });
+    expect(await acknowledgeWriteuppArrangement("tenant-a", "client-a", "admin", null))
+      .toEqual({ arrangedInWriteupp: true, alreadyRecorded: true });
+    expect(fixture.client).toEqual(before);
+    expect(fixture.audit).toHaveLength(1);
+    expect(fixture.audit[0]).toMatchObject({
+      action: "activity_writeupp_appointment_arranged", userId: "admin", resourceId: "client-a",
+      details: { staffAcknowledged: true },
+    });
+    expect(fixture.audit[0].details).not.toHaveProperty("appointmentKey");
+    expect(fixture.audit[0].details).not.toHaveProperty("diaryVerified");
+    const inventory = await historicReconciliationInventory("tenant-a");
+    expect(inventory[0].writeuppArranged).toBe(true);
+    expect(inventory[0].externalReview).toBeNull();
+  });
+
+  it("rejects a foreign client on a direct acknowledgement", async () => {
+    await expect(acknowledgeWriteuppArrangement("tenant-b", "client-a", "admin", null)).rejects.toThrow();
+    expect(fixture.audit).toHaveLength(0);
+  });
+
+  it.each([
+    { isArchived: true }, { completedAt: new Date() }, { status: "BookingConfirmed" },
+  ])("rejects inactive or already confirmed clients on a direct acknowledgement", async (patch) => {
+    Object.assign(fixture.client, patch);
+    await expect(acknowledgeWriteuppArrangement("tenant-a", "client-a", "admin", null)).rejects.toThrow();
+    expect(fixture.audit).toHaveLength(0);
+  });
+
+  it("does not replace a portal snapshot with an external acknowledgement", async () => {
+    fixture.snapshot = true;
+    await expect(acknowledgeWriteuppArrangement("tenant-a", "client-a", "admin", null)).rejects.toThrow(/snapshot/);
+    expect(fixture.audit).toHaveLength(0);
+  });
   it("rejects invalid dates or missing external verification and defaults arrangement to false", () => {
     expect(externalBookingReview.safeParse({ ...review, appointmentDate: "2026-02-31" }).success).toBe(false);
     expect(externalBookingReview.safeParse({ ...review, diaryVerified: false }).success).toBe(false);

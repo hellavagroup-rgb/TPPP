@@ -1045,13 +1045,41 @@ describe("registration journey HTTP routes", () => {
     expect(h.state.emails).toHaveLength(0);
   });
 
-  it("does not create a second portal booking after an external appointment review", async () => {
+  it("records a WriteUpp arrangement directly and idempotently without appointment fields or portal changes", async () => {
+    resetState({ client: { status: "AwaitingConfirmation" } });
+    const before = structuredClone(h.state.client);
+    const input = { method: "POST", body: JSON.stringify({ arrangedInWriteupp: true }) };
+    const first = await request("/api/historic-reconciliation/client-a/writeupp-arranged", input);
+    const retry = await request("/api/historic-reconciliation/client-a/writeupp-arranged", input);
+    expect(first.status).toBe(200);
+    expect(first.body).toMatchObject({ arrangedInWriteupp: true, alreadyRecorded: false });
+    expect(retry.body).toMatchObject({ arrangedInWriteupp: true, alreadyRecorded: true });
+    expect(h.state.client).toEqual(before);
+    expect(h.state.activities.filter(row => row.action === "activity_writeupp_appointment_arranged")).toHaveLength(1);
+    expect(h.state.emails).toEqual([]);
+    expect(h.state.bookingSnapshots).toEqual([]);
+    expect(h.state.charges).toEqual([]);
+  });
+
+  it.each([{}, { arrangedInWriteupp: false }, { arrangedInWriteupp: true, paymentStatus: "active" }])(
+    "rejects a missing assertion or extra evidence on the simple WriteUpp action",
+    async body => {
+      resetState({ client: { status: "AwaitingConfirmation" } });
+      const response = await request("/api/historic-reconciliation/client-a/writeupp-arranged", {
+        method: "POST", body: JSON.stringify(body),
+      });
+      expect(response.status).toBe(400);
+      expect(h.state.activities).toEqual([]);
+    },
+  );
+
+  it.each(["activity_external_booking_reviewed", "activity_writeupp_appointment_arranged"])("does not create a second portal booking after %s", async (action) => {
     resetState({
       tenant: { confirmationRecoveryEnabled: true, paymentsEnabled: false },
       client: { status: "AwaitingConfirmation", paymentType: "insurer" },
     });
     h.state.slot.isBooked = true;
-    h.state.activities.push({ action: "activity_external_booking_reviewed", tenantId: "tenant-a",
+    h.state.activities.push({ action, tenantId: "tenant-a",
       resourceId: "client-a", details: { externalReference: "diary-1" } });
     const response = await request("/api/clients/client-a", {
       method: "PATCH", body: JSON.stringify({ status: "Scheduled" }),

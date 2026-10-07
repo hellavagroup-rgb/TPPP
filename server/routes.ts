@@ -63,7 +63,7 @@ import { isValidZoomLink, onlineBookingNeedsZoomLink, shouldResetZoomDelivery } 
 import { zoomDeliveryIdempotencyKey } from "./bookingZoomWorkflow";
 import { confirmBooking, confirmBookingInTransaction, ExternalBookingReviewConflictError } from "./bookingConfirmation";
 import { confirmationBlocker, confirmationBlockerCopy } from "@shared/confirmationRecovery";
-import { externalBookingReview, historicReconciliationInventory, recordExternalBookingReview } from "./historicReconciliation";
+import { acknowledgeWriteuppArrangement, externalBookingReview, historicReconciliationInventory, recordExternalBookingReview, writeuppArrangementAssertion } from "./historicReconciliation";
 import { inspectRegistrationPayment, reconcileRegistrationPayment } from "./paymentReconciliation";
 import { listStripeWebhookFailures, recordStripeWebhookFailure, resolveStripeWebhookFailure } from "./stripeWebhookFailures";
 import Stripe from "stripe";
@@ -1183,6 +1183,17 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Historic reconciliation inventory failed", error);
       res.status(500).json({ error: "Could not load reconciliation evidence" });
+    }
+  });
+
+  app.post("/api/historic-reconciliation/:id/writeupp-arranged", requireAdmin, async (req, res) => {
+    if (!req.tenant?.id || !req.user?.id) return res.status(403).json({ error: "Practice administrator required" });
+    if (!writeuppArrangementAssertion.safeParse(req.body).success)
+      return res.status(400).json({ error: "Confirm that the appointment is arranged in WriteUpp." });
+    try {
+      res.json(await acknowledgeWriteuppArrangement(req.tenant.id, req.params.id, req.user.id, req.ip || null));
+    } catch (error) {
+      res.status(409).json({ error: error instanceof Error ? error.message : "WriteUpp arrangement could not be recorded" });
     }
   });
 

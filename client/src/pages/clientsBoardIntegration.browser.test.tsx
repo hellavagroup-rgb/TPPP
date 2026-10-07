@@ -513,8 +513,25 @@ describe("Clients page compact board integration", () => {
     const arrangeButton = await within(detail).findByRole("button", { name: "Appointment arranged in WriteUpp" });
     expect(within(detail).queryByText("MAT-201")).toBeNull();
 
+    const ordinaryFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const pathname = new URL(String(input), window.location.origin).pathname;
+      if (pathname === "/api/historic-reconciliation/awaiting-1/writeupp-arranged" && init?.method === "POST") {
+        expect(JSON.parse(String(init.body))).toEqual({ arrangedInWriteupp: true });
+        apiFixtures.historicRows = apiFixtures.historicRows.map(row =>
+          row.id === "awaiting-1" ? { ...row, writeuppArranged: true } : row);
+        return json({ arrangedInWriteupp: true });
+      }
+      return ordinaryFetch(input, init);
+    });
     await user.click(arrangeButton);
-    expect(await screen.findByRole("heading", { name: /Record WriteUpp arrangement · AWT-301/ })).toBeTruthy();
+    await waitFor(() => expect(within(screen.getByRole("dialog")).getByText(
+      "Appointment arranged in WriteUpp. No further booking action needed.",
+    )).toBeTruthy());
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.queryByLabelText("External diary appointment reference")).toBeNull();
+    expect(within(screen.getByRole("dialog")).queryByRole("button", { name: "Appointment arranged in WriteUpp" })).toBeNull();
+    expect(within(screen.getByRole("dialog")).queryByText("Portal booking tools")).toBeNull();
   });
 
   it("separates explicitly arranged WriteUpp clients from reviewed-but-not-arranged clients", async () => {
@@ -558,7 +575,7 @@ describe("Clients page compact board integration", () => {
     await user.click(screen.getByTestId("compact-client-card-arranged-1"));
     const arrangedPanel = await screen.findByRole("dialog");
     expect(arrangedPanel.textContent).toContain("WUP-401");
-    expect(within(arrangedPanel).getByText(/Staff recorded an external WriteUpp arrangement/)).toBeTruthy();
+    expect(within(arrangedPanel).getByText(/Appointment arranged in WriteUpp. No further booking action needed/)).toBeTruthy();
 
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());

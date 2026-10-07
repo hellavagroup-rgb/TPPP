@@ -3,11 +3,17 @@ name: External bookings are not portal confirmations
 description: How to keep historic external diary evidence separate from internal booking state.
 ---
 
-For historically booked clients, record a staff-verified external diary appointment as separate audited evidence, not a portal booking confirmation. A reviewed external appointment must block later automatic or manual portal confirmation until the discrepancy is resolved. The portal status can remain pending while the staff view classifies the case as externally booked.
+For historically booked clients, record a staff acknowledgement that the appointment is arranged in WriteUpp as separate audited evidence, not a portal booking confirmation. Both an external review and a WriteUpp arrangement acknowledgement must block later automatic or manual portal confirmation. The portal status can remain pending while the staff view classifies the case as arranged.
 
 **Why:** The external diary, original family-facing message and payment provider can disagree with the portal. Converting a note or badge into a booking snapshot, consent answer, Stripe charge or email timestamp would invent evidence and could create a second appointment.
 
-**How to apply:** In future reconciliation flows, require the actual external diary reference and appointment identity, prevent duplicate claims across active clients, and never infer provider payment or delivery from staff notes. Investigate external facts separately before changing live booking status.
+**How to apply:** Keep detailed external diary reviews separate from the simple arrangement acknowledgement. Where a detailed review records appointment identity, retain its duplicate-claim checks. Never infer provider payment or delivery from either staff notes or the acknowledgement.
+
+Selecting "Appointment arranged in WriteUpp" should immediately confirm that staff recorded the arrangement, with no further form or action needed.
+
+**Why:** The user explicitly rejected the mandatory external diary reference, clinician, date/time and verification form; the button itself is their acknowledgement that WriteUpp is arranged.
+
+**How to apply:** Record the staff actor and server time, show a saved arrangement state, and remove pending booking prompts. Do not invent appointment details, payment, consent, delivery evidence or a portal booking snapshot. Preserve existing evidence and reservations.
 
 Recording independently verified WriteUpp arrangements must not require repairing a historic portal allocation. Keep portal repair as an optional, separate workflow, not the primary instruction for an appointment already arranged outside the portal.
 

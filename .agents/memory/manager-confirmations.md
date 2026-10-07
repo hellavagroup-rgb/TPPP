@@ -24,3 +24,7 @@ The normal Edit Status → Confirmed action must expose the manager PIN flow to 
 **Why:** The user tried that existing action and encountered the normal payment blocker without a PIN prompt.
 
 **How to apply:** Carry the current client into the protected confirmation dialog. Explain setup or approval requirements when unavailable; never bypass checks for other admins or silently discard a proposed reassignment.
+
+Successful manager confirmations must leave the remaining active board usable without a page refresh. Clear an active client search if the confirmed record was its only match; retain searches that still match other active records. Failed confirmations must not clear filters.
+
+**Why:** A retained single-client search made every Kanban column appear empty after confirmation even though the client-list request succeeded.

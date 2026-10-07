@@ -263,11 +263,11 @@ describe("Clients page compact board integration", () => {
     return dialog;
   }
 
-  it("opens the PIN flow for this client from Edit Status instead of attempting ordinary reassignment", async () => {
+  it.each(["", "MGR-EDIT", "MGR-"])("keeps the board populated after manager confirmation with search '%s'", async search => {
     apiFixtures.managerEnabled = true;
     const client = makeClient("manager-edit", "MGR-EDIT", "AwaitingConfirmation");
     Object.assign(client, { assignedClinicianId: "clinician-original", assignedSlotId: "slot-original", assignedSlot: "Tuesday 13:00" });
-    apiFixtures.clients = [client];
+    apiFixtures.clients = [client, makeClient("remaining-client", "MGR-NEXT", "New")];
     const originalFetch = fetch;
     const writes: Array<{ path: string; body: any }> = [];
     vi.stubGlobal("fetch", vi.fn(async (input, init) => {
@@ -291,6 +291,7 @@ describe("Clients page compact board integration", () => {
     const view = renderBoard();
     queryClients.push(view.queryClient);
     const user = userEvent.setup();
+    if (search) await user.type(screen.getByPlaceholderText("Search by Client ID (W...)"), search);
     const edit = await openConfirmedEdit(client.id, user);
     await user.click(within(edit).getByRole("button", { name: /Monday/ }));
     expect(within(edit).getByRole("button", { name: "Continue with manager PIN" })).toHaveProperty("disabled", true);
@@ -309,6 +310,11 @@ describe("Clients page compact board integration", () => {
       body: { pin: "864209", reason: "Already arranged in the practice diary." } }]);
     expect(client.assignedClinicianId).toBe("clinician-original");
     expect(client.assignedSlotId).toBe("slot-original");
+    await user.click(within(pinDialog).getByRole("button", { name: "Done" }));
+    await screen.findByTestId("kanban-card-remaining-client");
+    expect(screen.queryByTestId("compact-client-card-manager-edit")).toBeNull();
+    expect(screen.getByPlaceholderText("Search by Client ID (W...)")).toHaveProperty("value",
+      search === "MGR-EDIT" ? "" : search);
   });
 
   it.each([false, true])("keeps normal checks for unapproved admins when manager setup is configured=%s", async configured => {

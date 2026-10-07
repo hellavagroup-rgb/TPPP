@@ -11,8 +11,9 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 
 type ClientChoice = { id: string; displayId: string; status: string; isArchived?: boolean; completedAt?: unknown };
 
-export function ManagerConfirmationDialog({ open, onOpenChange, clients, initialClientId }: {
+export function ManagerConfirmationDialog({ open, onOpenChange, clients, initialClientId, onConfirmed }: {
   open: boolean; onOpenChange: (open: boolean) => void; clients: ClientChoice[]; initialClientId: string | null;
+  onConfirmed?: (clientId: string) => void;
 }) {
   const [clientId, setClientId] = useState("");
   const [pin, setPin] = useState("");
@@ -33,6 +34,7 @@ export function ManagerConfirmationDialog({ open, onOpenChange, clients, initial
       setSavedReference(selected?.displayId || clientId);
       setAlreadyConfirmed(result?.alreadyConfirmed === true);
       setPin("");
+      onConfirmed?.(selected?.id || clientId);
       cache.invalidateQueries({ queryKey: ["/api/clients"] });
       cache.invalidateQueries({ queryKey: ["/api/historic-reconciliation"] });
       cache.invalidateQueries({ queryKey: ["/api/timeslots"] });

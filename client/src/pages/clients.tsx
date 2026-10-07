@@ -2051,7 +2051,17 @@ export default function Clients() {
           }}>Manager confirm</Button>
         )}
         <ManagerConfirmationDialog open={managerConfirmationOpen} onOpenChange={setManagerConfirmationOpen}
-          clients={clients} initialClientId={managerConfirmationClientId} />
+          clients={clients} initialClientId={managerConfirmationClientId}
+          onConfirmed={confirmedClientId => {
+            setSelectedPortalClientId(null);
+            // The successful confirmation removes this record from active work.
+            // Keep useful batch searches, but don't strand staff on an empty
+            // board just because the completed client was the only search match.
+            if (!showConfirmedState && !showArchivedState && !showCompletedState
+              && searchTerm && !filteredClients.some(client => client.id !== confirmedClientId)) {
+              setSearchTerm("");
+            }
+          }} />
         <Dialog open={isNewClientOpen} onOpenChange={handleNewClientOpenChange}>
             <DialogTrigger asChild>
                 <Button className="gap-2">

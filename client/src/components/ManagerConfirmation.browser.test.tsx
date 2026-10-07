@@ -50,7 +50,8 @@ describe("manager confirmation dialog", () => {
       return new Response(JSON.stringify({ confirmed: true }), { status: 200 });
     }));
     const close = vi.fn();
-    wrap(<ManagerConfirmationDialog open onOpenChange={close} clients={choices} initialClientId="client-a" />);
+    const confirmed = vi.fn();
+    wrap(<ManagerConfirmationDialog open onOpenChange={close} clients={choices} initialClientId="client-a" onConfirmed={confirmed} />);
     const save = screen.getByRole("button", { name: "Move to Confirmed" });
     expect(save).toHaveProperty("disabled", true);
     expect(screen.getByLabelText("Manager PIN")).toHaveProperty("type", "password");
@@ -61,6 +62,7 @@ describe("manager confirmation dialog", () => {
     fireEvent.click(save);
     await screen.findByRole("status");
     expect(posts).toEqual([{ pin: "864209", reason: "Confirmed in practice records." }]);
+    expect(confirmed).toHaveBeenCalledExactlyOnceWith("client-a");
     expect(screen.getByRole("status").textContent).toContain("WU-FIXTURE moved to Confirmed");
     expect(screen.queryByLabelText("Manager PIN")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
@@ -70,7 +72,8 @@ describe("manager confirmation dialog", () => {
   it("keeps a failed confirmation open, clears the PIN and preserves the reason", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "Incorrect manager PIN." }), { status: 403 })));
     const close = vi.fn();
-    wrap(<ManagerConfirmationDialog open onOpenChange={close} clients={choices} initialClientId="client-a" />);
+    const confirmed = vi.fn();
+    wrap(<ManagerConfirmationDialog open onOpenChange={close} clients={choices} initialClientId="client-a" onConfirmed={confirmed} />);
     fireEvent.change(screen.getByLabelText("Manager PIN"), { target: { value: "000000" } });
     fireEvent.change(screen.getByLabelText("Reason for manager confirmation"), { target: { value: "Confirmed in practice records." } });
     fireEvent.click(screen.getByRole("button", { name: "Move to Confirmed" }));
@@ -79,6 +82,7 @@ describe("manager confirmation dialog", () => {
     expect(screen.getByLabelText("Reason for manager confirmation")).toHaveProperty("value", "Confirmed in practice records.");
     expect(screen.queryByRole("status")).toBeNull();
     expect(close).not.toHaveBeenCalled();
+    expect(confirmed).not.toHaveBeenCalled();
   });
 
   it("does not claim a new manager override if the client was confirmed concurrently", async () => {

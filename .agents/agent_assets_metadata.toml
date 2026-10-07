@@ -6,3 +6,32 @@ id = "ubW2z33ZWKIfnVZCI7mCh"
 uri = "file://attached_assets/xPerinatalPP-logo-large-digital.png.pagespeed.ic.wAjk_RUOnf_1766008188694.png"
 type = "image"
 title = "Perinatal Psychology Practice Logo"
+logical_id = "e4ebab56-45e5-4ed3-a2e6-91fe667e2f0f"
+
+[[outputs]]
+id = "_aCNAOwzxTshbDOlAvFRM"
+uri = "file://.local/outputs/cya-admin-actions-2026-10-07.html"
+type = "html"
+title = "CY&A admin action list — searchable report"
+description = "Investigation of WU4087139 and an evidence-based action list for all 47 non-archived records from Matched onward. Snapshot: 7 October 2026."
+logical_id = "0d649053-351d-4750-8be3-baf8780c5cf2"
+content_hash = "sha256:ed5664c654d3164de873406f4370a5fde396f288ab1f3313cef16b77cbb1271a"
+size = 44144
+mtime_ms = 1791363556145
+storage_uri = "gcs://replit-rams-assets-worf/rams/assets/repl:be621556-16d6-48ab-b5d9-7b8984d0e138/0d649053-351d-4750-8be3-baf8780c5cf2/b88bb5bd-1094-4bc6-b542-ae079b88319d"
+storage_version_token = "1791363753675386"
+content_type = "text/html"
+
+[[outputs]]
+id = "Z1v0ABix2aViigTytJCZ_"
+uri = "file://.local/outputs/cya-admin-actions-2026-10-07.csv"
+type = "table"
+title = "CY&A admin action list — spreadsheet"
+description = "One row per client with responsibility, priority, next action, recorded evidence and safety cautions. Includes the three already completed records."
+logical_id = "e611f494-ff72-4c37-a82d-9f04016e1261"
+content_hash = "sha256:cc1af1592fc3af6808ea43f2964d2e0fb42b28944a88401088243b2f39431d32"
+size = 40656
+mtime_ms = 1791363457302
+storage_uri = "gcs://replit-rams-assets-worf/rams/assets/repl:be621556-16d6-48ab-b5d9-7b8984d0e138/e611f494-ff72-4c37-a82d-9f04016e1261/233e83ff-695e-4ce1-868c-66ca8521241c"
+storage_version_token = "1791363754173279"
+content_type = "text/csv"

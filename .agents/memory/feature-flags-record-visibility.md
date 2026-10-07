@@ -7,4 +7,4 @@ Feature flags may enable controls, automation, labels, and alternate workflow pa
 
 **Why:** Clients already in OptionSelected, RegistrationPending, or BookingConfirmed disappeared from the board when Multi-Clinician Allocation was disabled because those statuses were conditionally removed from every column.
 
-**How to apply:** Derive record visibility and column membership from persisted status alone. Apply feature flags inside the visible record to actions or presentation. Test every feature-specific persisted status with the flag both enabled and disabled.
+**How to apply:** Derive record visibility from persisted status and explicit booking evidence, not feature flags. Confirmed records belong in the Confirmed view rather than active Kanban; explicit WriteUpp arrangements are staff-confirmed without inventing portal verification. Apply feature flags to actions or presentation. Test visibility with flags enabled and disabled, and keep unconfirmed or reopened work accessible.

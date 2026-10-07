@@ -9,7 +9,7 @@ import { ConfirmPortalReconcile } from "@/components/ConfirmPortalReconcile";
 import { WriteuppAppointmentAction } from "@/components/WriteuppAppointmentAction";
 import { ManagerConfirmationDialog, ManagerConfirmedBadge } from "@/components/ManagerConfirmationDialog";
 import { useManagerConfirmationAccess } from "@/lib/managerConfirmation";
-import { classifyBookingProgress, getWriteUppArrangedIds } from "@/lib/clientBoardClassification";
+import { classifyBookingProgress, getWriteUppArrangedIds, isStaffConfirmed } from "@/lib/clientBoardClassification";
 import { mergePaymentInspection, paymentInspectionOutcome, type PaymentInspectionResult } from "@/lib/paymentInspectionState";
 import { bookingCompletionBlockerCode, bookingCompletionBlockerCopy } from "@shared/bookingCompletion";
 import { practiceToday, slotUnavailableReason } from "@shared/slotEligibility";
@@ -239,7 +239,7 @@ export default function Clients() {
   const paymentReconciliationEnabled = tenant?.paymentReconciliationEnabled === true;
   const confirmationRecoveryEnabled = tenant?.confirmationRecoveryEnabled === true || tenant?.registrationFormEnabled === true;
   const historicReconciliationEnabled = isAdmin && tenant?.registrationFormEnabled === true;
-  const historicInventory = useHistoricReconciliation(historicReconciliationEnabled);
+  const historicInventory = useHistoricReconciliation(isAdmin);
   const externalReviewedIds = new Set(historicInventory.data?.filter(row => row.externalReview || row.writeuppArranged).map(row => row.id) || []);
   const { data: webhookFailures = [], isError: webhookFailuresUnavailable } = useQuery<Array<{
     eventId: string; eventType: string; reason: string; attempts: number;
@@ -1489,6 +1489,18 @@ export default function Clients() {
     ? clients.filter(client => !client.isArchived && !client.completedAt && isPendingZoomDelivery(client as any))
     : [];
 
+  const arrangedHistoricIds = getWriteUppArrangedIds(
+    historicInventory.data as Array<{ id: string; writeuppArranged?: boolean }> | undefined,
+    {
+      compactEnabled: multiClinicianAllocationEnabled,
+      historicEnabled: isAdmin,
+      loading: historicInventory.isLoading,
+      error: historicInventory.isError,
+    },
+  );
+  const staffConfirmed = (client: ClientType) => isStaffConfirmed({
+    status: client.status, writeuppArranged: arrangedHistoricIds.has(client.id),
+  });
   const filteredClients = clients.filter(client => {
     const matchesSearch = searchTerm === "" || client.displayId.toLowerCase().includes(searchTerm.toLowerCase());
     
@@ -1498,22 +1510,13 @@ export default function Clients() {
     }
     if (showCompletedState) return matchesSearch && !client.isArchived && !!client.completedAt;
     if (showConfirmedState) {
-      const isConfirmed = client.status === "Scheduled" || client.status === "BookingConfirmed";
+      const isConfirmed = staffConfirmed(client);
       const matchesPendingZoomFilter = !showPendingZoomLinksOnly || isPendingZoomDelivery(client as any);
       return matchesSearch && isConfirmed && !client.isArchived && !client.completedAt && matchesPendingZoomFilter;
     }
-    // Kanban view: show non-archived clients (all statuses for Kanban columns)
-    return matchesSearch && !client.isArchived && !client.completedAt;
+    // The Kanban is the active booking queue. Confirmed records remain in their own view.
+    return matchesSearch && !client.isArchived && !client.completedAt && !staffConfirmed(client);
   });
-  const arrangedHistoricIds = getWriteUppArrangedIds(
-    historicInventory.data as Array<{ id: string; writeuppArranged?: boolean }> | undefined,
-    {
-      compactEnabled: multiClinicianAllocationEnabled,
-      historicEnabled: historicReconciliationEnabled,
-      loading: historicInventory.isLoading,
-      error: historicInventory.isError,
-    },
-  );
   const bookingProgress = classifyBookingProgress(filteredClients.map(client => ({
     ...client,
     writeuppArranged: arrangedHistoricIds.has(client.id),
@@ -2772,7 +2775,7 @@ export default function Clients() {
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-semibold text-purple-800 text-sm">{historicReconciliationEnabled ? "Booking progress" : "Awaiting Confirmation"}</h3>
               <Badge variant="secondary" className="bg-purple-100 text-purple-700">
-                {bookingProgress.active.length + bookingProgress.confirmed.length}
+                {bookingProgress.active.length}
               </Badge>
             </div>
             <div className="space-y-2">
@@ -2780,10 +2783,8 @@ export default function Clients() {
                 ? [
                     { label: "Registration / payment pending", clients: bookingProgress.active.filter(c => c.status === "RegistrationPending") },
                     { label: "Awaiting portal confirmation", clients: bookingProgress.active.filter(c => c.status === "AwaitingConfirmation") },
-                    { label: "Confirmed in portal", clients: bookingProgress.confirmed },
-                    { label: "Booked in WriteUpp · external appointment", clients: bookingProgress.arranged },
                   ]
-                : [{ label: "", clients: bookingProgress.active.concat(bookingProgress.confirmed) }]
+                : [{ label: "", clients: bookingProgress.active }]
               ).map(group => <div key={group.label} className="space-y-2">
                 {group.label && <h4 className="text-xs font-semibold text-purple-900 border-b border-purple-200 pb-1">{group.label} ({group.clients.length})</h4>}
                 {group.clients.map(client => {
@@ -3116,13 +3117,14 @@ export default function Clients() {
               : showCompletedState ? "Completed Bookings" : "Archived/Didn't Engage"}
           </h3>
           {filteredClients.map(client => (
-            <Card key={client.id} id={`client-${client.id}`} className="shadow-sm">
+            <Card key={client.id} id={`client-${client.id}`} data-testid={`client-record-${client.id}`} className="shadow-sm">
               <CardContent className="p-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <span className="font-mono font-semibold">{client.displayId}</span>
                     <Badge variant="secondary" className={getStatusColor(client.status)}>
-                      {showCompletedState ? "Completed" : getStatusDisplayLabel(client.status)}
+                      {showCompletedState ? "Completed" : showConfirmedState && arrangedHistoricIds.has(client.id)
+                        && client.status !== "BookingConfirmed" ? "Confirmed · WriteUpp" : getStatusDisplayLabel(client.status)}
                     </Badge>
                     {client.insurer && client.insurer !== "Private" && (
                       <Badge variant="outline">{client.insurer}</Badge>
@@ -3255,8 +3257,61 @@ export default function Clients() {
                 {contactPreferenceBadge(client) && (
                   <div className="mt-2">{contactPreferenceBadge(client)}</div>
                 )}
-                {!client.managerConfirmedAt && workflowProgress(client)}
+                {!client.managerConfirmedAt && !arrangedHistoricIds.has(client.id) && workflowProgress(client)}
+                {showConfirmedState && arrangedHistoricIds.has(client.id) && client.status !== "BookingConfirmed" && (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Appointment arranged in WriteUpp. No further booking action needed.
+                    Payment and registration evidence have not been changed.
+                  </p>
+                )}
                 <ManagerConfirmedBadge at={client.managerConfirmedAt} reason={client.managerConfirmationReason} />
+                {showConfirmedState && client.status === "BookingConfirmed" && (() => {
+                  const code = completedBookingsEnabled ? bookingCompletionBlockerCode(client, {
+                    hasSnapshot: !!client.bookingSnapshot, checklistEnabled: writeuppChecklistEnabled,
+                  }) : null;
+                  const checklistIncomplete = writeuppChecklistEnabled
+                    && (!client.writeuppAppointmentConfirmed || !client.writeuppDataTransferred);
+                  return <div className="mt-3 space-y-2">
+                    {writeuppChecklistEnabled && <div className="flex flex-wrap gap-4 text-xs">
+                      <label className="flex items-center gap-2">
+                        <Checkbox checked={!!client.writeuppAppointmentConfirmed}
+                          onCheckedChange={checked => updateClientMutation.mutate({
+                            id: client.id, updates: { writeuppAppointmentConfirmed: !!checked },
+                          })} /> Appointment confirmed in WriteUpp
+                      </label>
+                      <label className="flex items-center gap-2">
+                        <Checkbox checked={!!client.writeuppDataTransferred}
+                          onCheckedChange={checked => updateClientMutation.mutate({
+                            id: client.id, updates: { writeuppDataTransferred: !!checked },
+                          })} /> Data transferred to WriteUpp
+                      </label>
+                    </div>}
+                    <Button variant="outline" size="sm"
+                      disabled={completeBookingMutation.isPending || (completedBookingsEnabled ? !!code : checklistIncomplete)}
+                      onClick={() => completedBookingsEnabled
+                        ? completeBookingMutation.mutate(client.id) : handleOpenArchiveDialog(client)}>
+                      {code ? "Completion blocked" : checklistIncomplete ? "Complete WriteUpp first" : "Move to Completed"}
+                    </Button>
+                    {code && <p className="text-xs text-amber-800" role="status">{bookingCompletionBlockerCopy[code]}</p>}
+                    {code === "payment_setup_unverified" && <>
+                      <p className="text-xs font-medium">Staff action: Review payment record</p>
+                      <Button variant="outline" size="sm" onClick={() => setSelectedPortalClientId(client.id)}>Review payment record</Button>
+                      {selectedPortalClientId === client.id && <BookingPaymentReview
+                        clientId={client.id} displayId={client.displayId} paymentStatus={client.paymentStatus}
+                        canInspect={isAdmin && paymentReconciliationEnabled && canInspectRegistrationPayment(client)}
+                        unavailableReason={!paymentReconciliationEnabled
+                          ? "Stripe verification is not enabled for this practice. An administrator should review the existing payment records."
+                          : "This older record has no complete current portal payment reference. Check its existing payment in Stripe or the practice’s payment records; this review cannot verify it automatically."}
+                        checking={checkingPayment} inspection={paymentInspections[client.id]}
+                        onInspect={() => {
+                          void checkPayment(client.id).then(() => queryClient.invalidateQueries({ queryKey: ["/api/clients"] }));
+                        }}
+                      />}
+                    </>}
+                    {code === "payment_type_missing" && <Button variant="outline" size="sm"
+                      onClick={() => { setClientForPaymentReview(client); setReviewedPaymentType(""); }}>Review payment type</Button>}
+                  </div>;
+                })()}
                 {showCompletedState && (
                   <div className="mt-2 text-xs text-muted-foreground space-y-1">
                     <p>Completed: {client.completedAt ? formatDateUK(client.completedAt) : "—"}</p>

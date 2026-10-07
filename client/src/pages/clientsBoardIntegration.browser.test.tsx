@@ -259,7 +259,7 @@ describe("Clients page compact board integration", () => {
     await user.click(await screen.findByRole("menuitem", { name: "Edit Status" }));
     const dialog = await screen.findByRole("dialog", { name: "Edit Status" });
     await user.click(within(dialog).getByRole("combobox"));
-    await user.click(await screen.findByRole("option", { name: "Confirmed", exact: true }));
+    await user.click(await screen.findByRole("option", { name: /^Confirmed$/ }));
     return dialog;
   }
 
@@ -441,7 +441,8 @@ describe("Clients page compact board integration", () => {
     const view = renderBoard();
     queryClients.push(view.queryClient);
     const user = userEvent.setup();
-    const card = await screen.findByTestId("kanban-card-payment-review");
+    await user.click(screen.getByLabelText("Show Confirmed"));
+    const card = await screen.findByTestId("client-record-payment-review");
     expect(card.textContent).toContain("Staff action");
     expect(card.textContent).not.toContain("Waiting for booking requirements");
     await user.click(within(card).getByRole("button", { name: "Review payment record" }));
@@ -475,7 +476,8 @@ describe("Clients page compact board integration", () => {
     const view = renderBoard();
     queryClients.push(view.queryClient);
     const user = userEvent.setup();
-    const card = await screen.findByTestId("kanban-card-payment-review");
+    await user.click(screen.getByLabelText("Show Confirmed"));
+    const card = await screen.findByTestId("client-record-payment-review");
     await user.click(within(card).getByRole("button", { name: "Review payment record" }));
     const review = await screen.findByTestId("payment-review-payment-review");
     // Simulate a separate authorised process having verified the payment while
@@ -483,7 +485,8 @@ describe("Clients page compact board integration", () => {
     client.paymentStatus = "active";
     const serverBeforeReview = structuredClone(client);
     await user.click(within(review).getByRole("button", { name: "Check Stripe payment (read-only)" }));
-    await waitFor(() => expect(screen.getByTestId("next-step-payment-review").textContent).toContain("Complete the booking"));
+    await waitFor(() => expect(within(screen.getByTestId("client-record-payment-review"))
+      .getByRole("button", { name: "Move to Completed" })).toHaveProperty("disabled", false));
     expect(screen.queryByTestId("payment-review-payment-review")).toBeNull();
     expect(apiFixtures.clients[0]).toEqual(serverBeforeReview);
     expect(vi.mocked(fetch).mock.calls.some(([, init]) => ["POST", "PATCH", "DELETE", "PUT"].includes(init?.method || "GET"))).toBe(false);
@@ -500,7 +503,8 @@ describe("Clients page compact board integration", () => {
     const view = renderBoard();
     queryClients.push(view.queryClient);
     const user = userEvent.setup();
-    const card = await screen.findByTestId("kanban-card-payment-review");
+    await user.click(screen.getByLabelText("Show Confirmed"));
+    const card = await screen.findByTestId("client-record-payment-review");
     await user.click(within(card).getByRole("button", { name: "Review payment record" }));
     const review = await screen.findByTestId("payment-review-payment-review");
     expect(review.textContent).toContain(scenario === "missing-reference"
@@ -510,7 +514,50 @@ describe("Clients page compact board integration", () => {
     expect(client.paymentStatus).toBe("setup_pending");
   });
 
-  it("renders one BookingConfirmed card and counts it once, with one detail sheet", async () => {
+  it("retains completion from the Confirmed view without putting confirmed clients back on Kanban", async () => {
+    const client = paymentReviewFixture();
+    client.paymentStatus = "active";
+    apiFixtures.tenant = makeTenant({ completedBookingsEnabled: true });
+    apiFixtures.clients = [client];
+    const ordinaryFetch = fetch;
+    const writes: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input, init) => {
+      const path = new URL(String(input), window.location.origin).pathname;
+      if (path === "/api/clients/payment-review/complete" && init?.method === "POST") {
+        writes.push(path);
+        client.completedAt = "2026-10-07T12:00:00Z";
+        return json({ completed: true });
+      }
+      return ordinaryFetch(input, init);
+    }));
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText("Show Confirmed"));
+    await user.click(await screen.findByRole("button", { name: "Move to Completed" }));
+    await waitFor(() => expect(screen.queryByTestId("client-record-payment-review")).toBeNull());
+    expect(writes).toEqual(["/api/clients/payment-review/complete"]);
+    await user.click(screen.getByLabelText("Show Completed"));
+    expect((await screen.findByTestId("client-record-payment-review")).textContent).toContain("Completed");
+  });
+
+  it("keeps payment-type recovery available in Confirmed without treating missing payment evidence as complete", async () => {
+    const client = paymentReviewFixture();
+    client.paymentType = null;
+    apiFixtures.tenant = makeTenant({ completedBookingsEnabled: true });
+    apiFixtures.clients = [client];
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText("Show Confirmed"));
+    expect(await screen.findByRole("button", { name: "Completion blocked" })).toHaveProperty("disabled", true);
+    await user.click(screen.getByRole("button", { name: "Review payment type" }));
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    expect(client.paymentType).toBeNull();
+    expect(client.paymentStatus).toBe("setup_pending");
+  });
+
+  it("keeps a portal-confirmed client off the active Kanban and accessible once in Confirmed", async () => {
     const confirmed = makeClient("confirmed-1", "CNF-101", "BookingConfirmed");
     apiFixtures.tenant = makeTenant({ registrationFormEnabled: true });
     apiFixtures.clients = [confirmed];
@@ -527,16 +574,15 @@ describe("Clients page compact board integration", () => {
     queryClients.push(view.queryClient);
 
     expect(await screen.findByRole("heading", { name: "Booking progress" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Confirmed in portal (1)" })).toBeTruthy();
-    expect(screen.getAllByTestId("compact-client-card-confirmed-1")).toHaveLength(1);
-    expect(screen.getAllByTestId("kanban-card-confirmed-1")).toHaveLength(1);
+    expect(screen.queryByRole("heading", { name: /Confirmed in portal/ })).toBeNull();
+    expect(screen.queryByTestId("compact-client-card-confirmed-1")).toBeNull();
+    expect(screen.queryByTestId("kanban-card-confirmed-1")).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
 
-    await user.click(screen.getByTestId("compact-client-card-confirmed-1"));
-    const detail = await screen.findByRole("dialog");
-    expect(within(detail).getByRole("heading", { name: "CNF-101" })).toBeTruthy();
-    expect(screen.getAllByRole("dialog")).toHaveLength(1);
-    expect(screen.getAllByTestId("client-details-confirmed-1")).toHaveLength(1);
+    await user.click(screen.getByLabelText("Show Confirmed"));
+    expect(await screen.findByTestId("client-record-confirmed-1")).toBeTruthy();
+    expect(screen.getAllByText("CNF-101")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Move to Completed" })).toBeTruthy();
   });
 
   it("does not claim the family is choosing when current offer delivery is unrecorded", async () => {
@@ -646,16 +692,17 @@ describe("Clients page compact board integration", () => {
       return ordinaryFetch(input, init);
     });
     await user.click(arrangeButton);
-    await waitFor(() => expect(within(screen.getByRole("dialog")).getByText(
-      "Appointment arranged in WriteUpp. No further booking action needed.",
-    )).toBeTruthy());
-    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    await waitFor(() => expect(screen.queryByTestId("compact-client-card-awaiting-1")).toBeNull());
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByLabelText("External diary appointment reference")).toBeNull();
-    expect(within(screen.getByRole("dialog")).queryByRole("button", { name: "Appointment arranged in WriteUpp" })).toBeNull();
-    expect(within(screen.getByRole("dialog")).queryByText("Portal booking tools")).toBeNull();
+    await user.click(screen.getByLabelText("Show Confirmed"));
+    const saved = await screen.findByTestId("client-record-awaiting-1");
+    expect(saved.textContent).toContain("Confirmed · WriteUpp");
+    expect(saved.textContent).toContain("No further booking action needed");
+    expect(apiFixtures.clients.find(client => client.id === "awaiting-1")?.status).toBe("AwaitingConfirmation");
   });
 
-  it("separates explicitly arranged WriteUpp clients from reviewed-but-not-arranged clients", async () => {
+  it("moves explicit arrangements to Confirmed while keeping reviewed-but-not-arranged clients active", async () => {
     const arranged = makeClient("arranged-1", "WUP-401", "AwaitingConfirmation");
     const reviewed = makeClient("reviewed-1", "REV-402", "AwaitingConfirmation");
     apiFixtures.tenant = makeTenant({ registrationFormEnabled: true });
@@ -689,24 +736,23 @@ describe("Clients page compact board integration", () => {
     queryClients.push(view.queryClient);
 
     expect(await screen.findByRole("heading", { name: "Awaiting portal confirmation (1)" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Booked in WriteUpp · external appointment (1)" })).toBeTruthy();
-    expect(screen.getByTestId("compact-client-card-arranged-1")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: /Booked in WriteUpp/ })).toBeNull();
+    expect(screen.queryByTestId("compact-client-card-arranged-1")).toBeNull();
     expect(screen.getByTestId("compact-client-card-reviewed-1")).toBeTruthy();
 
-    await user.click(screen.getByTestId("compact-client-card-arranged-1"));
-    const arrangedPanel = await screen.findByRole("dialog");
-    expect(arrangedPanel.textContent).toContain("WUP-401");
-    expect(within(arrangedPanel).getByText(/Appointment arranged in WriteUpp. No further booking action needed/)).toBeTruthy();
-
-    await user.keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await user.click(screen.getByLabelText("Show Confirmed"));
+    const arrangedRecord = await screen.findByTestId("client-record-arranged-1");
+    expect(arrangedRecord.textContent).toContain("WUP-401");
+    expect(arrangedRecord.textContent).toContain("Confirmed · WriteUpp");
+    expect(screen.queryByTestId("client-record-reviewed-1")).toBeNull();
+    await user.click(screen.getByLabelText("Show Confirmed"));
     await user.click(screen.getByTestId("compact-client-card-reviewed-1"));
     const reviewedPanel = await screen.findByRole("dialog");
     expect(reviewedPanel.textContent).toContain("REV-402");
     expect(await within(reviewedPanel).findByRole("button", { name: "Appointment arranged in WriteUpp" })).toBeTruthy();
   });
 
-  it("keeps a pending Tenant 1 client inline when cached historic arrangement evidence is feature-disabled", async () => {
+  it("keeps verified arrangements in Confirmed even when compact and registration controls are disabled", async () => {
     const pending = makeClient("legacy-pending", "T1-501", "AwaitingConfirmation");
     const cachedHistoricEvidence = [
       makeHistoricRow(pending, {
@@ -731,10 +777,12 @@ describe("Clients page compact board integration", () => {
     const view = renderBoard({ historicCache: cachedHistoricEvidence });
     queryClients.push(view.queryClient);
 
-    const inlineClient = await screen.findByTestId("kanban-card-legacy-pending");
-    expect(inlineClient.textContent).toContain("T1-501");
+    await screen.findByRole("heading", { name: "Awaiting Confirmation" });
+    expect(screen.queryByTestId("kanban-card-legacy-pending")).toBeNull();
     expect(screen.queryByTestId("compact-client-card-legacy-pending")).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("heading", { name: "Awaiting Confirmation" })).toBeTruthy();
+    await userEvent.setup().click(screen.getByLabelText("Show Confirmed"));
+    expect((await screen.findByTestId("client-record-legacy-pending")).textContent).toContain("Confirmed · WriteUpp");
   });
 });

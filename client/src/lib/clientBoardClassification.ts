@@ -6,8 +6,16 @@ export function getWriteUppArrangedIds(
   rows: Array<{ id: string; writeuppArranged?: boolean | null }> | undefined,
   state: { compactEnabled: boolean; historicEnabled: boolean; loading: boolean; error: boolean },
 ): Set<string> {
-  if (!state.compactEnabled || !state.historicEnabled || state.loading || state.error || !rows) return new Set();
+  if (!state.historicEnabled || state.loading || state.error || !rows) return new Set();
   return new Set(rows.filter(isExplicitlyWriteUppArranged).map(row => row.id));
+}
+
+// This is a staff-view classification, not a portal booking/payment assertion.
+// An explicit reopen into intake or matching stays active despite old diary evidence.
+export function isStaffConfirmed(client: { status: string; writeuppArranged?: boolean | null }): boolean {
+  return ["Scheduled", "BookingConfirmed"].includes(client.status)
+    || (["AwaitingConfirmation", "RegistrationPending"].includes(client.status)
+      && isExplicitlyWriteUppArranged(client));
 }
 
 export function classifyBookingProgress<T extends { status: string; writeuppArranged?: boolean | null }>(clients: T[]) {

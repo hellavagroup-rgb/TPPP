@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { CompactClientCard, ClientDetailPanel, hasRecordedAppointmentSelection } from "@/components/CompactClientCard";
 import { ConfirmPortalReconcile } from "@/components/ConfirmPortalReconcile";
-import { classifyBookingProgress, getWriteUppArrangedIds } from "@/lib/clientBoardClassification";
+import { classifyBookingProgress, getWriteUppArrangedIds, isStaffConfirmed } from "@/lib/clientBoardClassification";
 import { mergePaymentInspection, paymentInspectionOutcome } from "@/lib/paymentInspectionState";
 import { getClientNextStep, getCompactClientDescription } from "@/lib/clientNextStep";
 
@@ -199,17 +199,27 @@ describe("compact multi-clinician client board", () => {
     expect(new Set(allGroups).size).toBe(4);
   });
 
-  it("ignores cached arrangement evidence when the feature is disabled or the inventory failed", () => {
+  it("keeps verified arrangement classification independent of layout but ignores failed or loading evidence", () => {
     const cached = [{ id: "client-a", writeuppArranged: true }];
     expect(getWriteUppArrangedIds(cached, {
       compactEnabled: false, historicEnabled: true, loading: false, error: false,
-    }).size).toBe(0);
+    }).size).toBe(1);
     expect(getWriteUppArrangedIds(cached, {
       compactEnabled: true, historicEnabled: true, loading: false, error: true,
     }).size).toBe(0);
     expect(getWriteUppArrangedIds(cached, {
       compactEnabled: true, historicEnabled: true, loading: true, error: false,
     }).size).toBe(0);
+  });
+
+  it("moves real confirmations and explicit WriteUpp arrangements to Confirmed, not mere reviews or reopened work", () => {
+    expect(isStaffConfirmed({ status: "BookingConfirmed" })).toBe(true);
+    expect(isStaffConfirmed({ status: "Scheduled" })).toBe(true);
+    expect(isStaffConfirmed({ status: "AwaitingConfirmation", writeuppArranged: true })).toBe(true);
+    expect(isStaffConfirmed({ status: "RegistrationPending", writeuppArranged: true })).toBe(true);
+    expect(isStaffConfirmed({ status: "AwaitingConfirmation", writeuppArranged: false })).toBe(false);
+    expect(isStaffConfirmed({ status: "Assigned", writeuppArranged: true })).toBe(false);
+    expect(isStaffConfirmed({ status: "Forms Completed", writeuppArranged: true })).toBe(false);
   });
 
   it("retains prior payment inspection results when another client is checked", () => {

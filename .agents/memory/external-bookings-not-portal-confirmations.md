@@ -3,6 +3,12 @@ name: External bookings are not portal confirmations
 description: How to keep historic external diary evidence separate from internal booking state.
 ---
 
+Clients explicitly marked as arranged in WriteUpp belong in the staff Confirmed view, not a separate active Kanban column. Portal-confirmed clients also stay off the active Kanban. A mere diary review is not an arrangement acknowledgement.
+
+**Why:** The user said that cases with no further booking action clog the dashboard and should move to Confirmed rather than remain on the Kanban.
+
+**How to apply:** Keep the external-booking label and evidence; do not fabricate portal status, payment, consent or appointment snapshots. No extra manager PIN action is needed just to classify an already-recorded arrangement. Preserve payment review and completion controls in the Confirmed view. An explicit reopen into intake or matching is active work again.
+
 For historically booked clients, record a staff acknowledgement that the appointment is arranged in WriteUpp as separate audited evidence, not a portal booking confirmation. Both an external review and a WriteUpp arrangement acknowledgement must block later automatic or manual portal confirmation. The portal status can remain pending while the staff view classifies the case as arranged.
 
 **Why:** The external diary, original family-facing message and payment provider can disagree with the portal. Converting a note or badge into a booking snapshot, consent answer, Stripe charge or email timestamp would invent evidence and could create a second appointment.

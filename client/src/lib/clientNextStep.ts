@@ -1,7 +1,10 @@
+import { bookingCompletionBlockerCopy, type BookingCompletionBlockerCode } from "@shared/bookingCompletion";
+
 export type ClientNextStepAction =
   | "offer_new_choices"
   | "review_allocation"
   | "check_payment"
+  | "review_payment_record"
   | "recover_payment"
   | "retry_registration"
   | "record_writeupp"
@@ -37,7 +40,25 @@ export type ClientNextStep = {
   title: string;
   detail: string;
   action?: ClientNextStepAction;
+  actionLabel?: string;
 };
+
+export function bookingCompletionNextStep(
+  step: ClientNextStep,
+  blocker: BookingCompletionBlockerCode | null,
+): ClientNextStep {
+  if (!blocker || step.action !== "complete") return step;
+  if (blocker === "payment_setup_unverified") {
+    return {
+      kind: "action",
+      title: "Payment record needs staff review",
+      detail: "Booking confirmed. Portal payment setup is not verified. Check the existing payment before finishing booking administration; do not request another payment.",
+      action: "review_payment_record",
+      actionLabel: "Review payment record",
+    };
+  }
+  return { kind: "waiting", title: "Waiting for booking requirements", detail: bookingCompletionBlockerCopy[blocker] };
+}
 
 function action(title: string, detail: string, actionName: ClientNextStepAction): ClientNextStep {
   return { kind: "action", title, detail, action: actionName };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bookingCompletionBlocker, bookingCompletionDecision, type BookingCompletionEvidence } from "../shared/bookingCompletion";
+import { bookingCompletionBlocker, bookingCompletionBlockerCode, bookingCompletionDecision, type BookingCompletionEvidence } from "../shared/bookingCompletion";
 
 const confirmed: BookingCompletionEvidence = {
   status: "BookingConfirmed",
@@ -35,6 +35,15 @@ describe("booking completion evidence", () => {
     expect(bookingCompletionBlocker({ ...confirmed, paymentStatus: "setup_pending" }, options)).toMatch(/Verify self-pay/);
     expect(bookingCompletionBlocker({ ...confirmed, paymentStatus: "none" }, options)).toMatch(/Verify self-pay/);
     expect(bookingCompletionBlocker({ ...confirmed, paymentType: null }, options)).toMatch(/Review and set/);
+  });
+
+  it("identifies the payment blocker without overriding missing booking or checklist evidence", () => {
+    const pending = { ...confirmed, paymentStatus: "setup_pending" };
+    expect(bookingCompletionBlockerCode(pending, options)).toBe("payment_setup_unverified");
+    expect(bookingCompletionBlockerCode(pending, { ...options, hasSnapshot: false })).toBe("booking_unverified");
+    expect(bookingCompletionBlockerCode({ ...pending, writeuppDataTransferred: false }, options)).toBe("writeupp_incomplete");
+    expect(bookingCompletionBlockerCode({ ...pending, isArchived: true }, options)).toBe("archived");
+    expect(bookingCompletionBlockerCode(confirmed, options)).toBeNull();
   });
 
   it("keeps completion tenant-scoped, idempotent and separate from historical archive", () => {

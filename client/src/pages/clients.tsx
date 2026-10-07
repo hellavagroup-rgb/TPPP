@@ -4,11 +4,12 @@ import { confirmationBlocker, confirmationBlockerCopy } from "@shared/confirmati
 import { canInspectRegistrationPayment } from "@shared/paymentReconciliationEligibility";
 import { HistoricReconciliation, useHistoricReconciliation } from "@/components/HistoricReconciliation";
 import { CompactClientCard, ClientDetailPanel, hasRecordedAppointmentSelection } from "@/components/CompactClientCard";
+import { BookingPaymentReview } from "@/components/BookingPaymentReview";
 import { ConfirmPortalReconcile } from "@/components/ConfirmPortalReconcile";
 import { WriteuppAppointmentAction } from "@/components/WriteuppAppointmentAction";
 import { classifyBookingProgress, getWriteUppArrangedIds } from "@/lib/clientBoardClassification";
 import { mergePaymentInspection, paymentInspectionOutcome, type PaymentInspectionResult } from "@/lib/paymentInspectionState";
-import { bookingCompletionBlocker } from "@shared/bookingCompletion";
+import { bookingCompletionBlockerCode, bookingCompletionBlockerCopy } from "@shared/bookingCompletion";
 import { practiceToday, slotUnavailableReason } from "@shared/slotEligibility";
 import {
   isAwaitingConfirmationStatus,
@@ -104,7 +105,7 @@ import {
   type ClientStatus as CanonicalClientStatus,
 } from "@shared/clientWorkflow";
 import { paymentProgress, registrationProgress } from "@shared/clientProgress";
-import { getClientNextStep, getCompactClientDescription } from "@/lib/clientNextStep";
+import { getClientNextStep, getCompactClientDescription, bookingCompletionNextStep } from "@/lib/clientNextStep";
 import { invalidateOperationalData, useOperationalRefresh } from "@/lib/operationalRefresh";
 import {
   findAvailabilityInSubmissions,
@@ -261,7 +262,11 @@ export default function Clients() {
       setPaymentInspections(current => mergePaymentInspection(current, clientId, paymentInspectionOutcome(result, reconcile)));
       if (reconcile) await queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
     } catch (error) {
-      setPaymentInspections(current => mergePaymentInspection(current, clientId, { state: "uncertain", detail: (error as Error).message, ...(reconcile ? { reconciled: false } : {}) }));
+      setPaymentInspections(current => mergePaymentInspection(current, clientId, {
+        state: "uncertain",
+        detail: mutationErrorMessage(error as Error, "Payment could not be verified. Review the existing payment records."),
+        ...(reconcile ? { reconciled: false } : {}),
+      }));
     } finally {
       setCheckingPayment(false);
     }
@@ -1587,6 +1592,12 @@ export default function Clients() {
       case "check_payment":
         if (paymentReconciliationEnabled && canInspectRegistrationPayment(client)) void checkPayment(client.id);
         break;
+      case "review_payment_record":
+        setSelectedPortalClientId(client.id);
+        if (!multiClinicianAllocationEnabled) {
+          document.getElementById(`payment-review-${client.id}`)?.scrollIntoView({ block: "start", behavior: "smooth" });
+        }
+        break;
       case "recover_payment":
         if (client.registrationPaymentFailureCode === "stripe_unavailable") setLocation("/settings?tab=payments");
         else handleOpenPaymentLink(client);
@@ -2750,15 +2761,14 @@ export default function Clients() {
                 const apptConfirmed = (client as any).writeuppAppointmentConfirmed === true;
                 const dataTransferred = (client as any).writeuppDataTransferred === true;
                 const bothTicked = apptConfirmed && dataTransferred;
-                const completionBlocker = completedBookingsEnabled && client.status === "BookingConfirmed"
-                  ? bookingCompletionBlocker(client, {
+                const completionCode = completedBookingsEnabled && client.status === "BookingConfirmed"
+                  ? bookingCompletionBlockerCode(client, {
                     hasSnapshot: !!client.bookingSnapshot,
                     checklistEnabled: writeuppChecklistEnabled,
                   }) : null;
+                const completionBlocker = completionCode ? bookingCompletionBlockerCopy[completionCode] : null;
                 const rawBookingStep = clientNextStep(client, { externallyArranged: isSeparatelyArranged });
-                const bookingStep = completionBlocker && rawBookingStep.action === "complete"
-                  ? { kind: "waiting" as const, title: "Waiting for booking requirements", detail: completionBlocker }
-                  : rawBookingStep;
+                const bookingStep = bookingCompletionNextStep(rawBookingStep, completionCode);
                 const assignedSlot = clinicians.find(c => c.id === client.assignedClinicianId)?.availability
                   ?.find((slot: { id: string }) => slot.id === client.assignedSlotId);
                 const blocker = confirmationRecoveryEnabled ? confirmationBlocker(client, {
@@ -2818,6 +2828,8 @@ export default function Clients() {
                     selectedDetails={allocationVisibilityEnabled && client.allocationVisibility?.appointment?.clinicianName
                       ? `Selected · ${client.allocationVisibility.appointment.clinicianName}` : null}
                     nextStep={bookingStep}
+                    onNextAction={bookingStep.action === "review_payment_record"
+                      ? () => runClientNextStep(client, bookingStep) : undefined}
                     onOpen={() => setSelectedPortalClientId(client.id)}
                   />}
                   <ClientDetailPanel
@@ -2828,10 +2840,29 @@ export default function Clients() {
                     clientName={intakeClientSummaryEnabled ? getSummaryClientName(client.notes) : null}
                     status={client.status}
                     guidance={multiClinicianAllocationEnabled ? bookingStep : null}
-                    onGuidanceAction={multiClinicianAllocationEnabled && hasClientNextStepCallback(client, bookingStep, !!completionBlocker)
+                    onGuidanceAction={multiClinicianAllocationEnabled && bookingStep.action !== "review_payment_record"
+                      && hasClientNextStepCallback(client, bookingStep, !!completionBlocker)
                       ? () => runClientNextStep(client, bookingStep)
                       : undefined}
                   >
+                  {completionCode === "payment_setup_unverified" && (
+                    <BookingPaymentReview
+                      clientId={client.id}
+                      displayId={client.displayId}
+                      paymentStatus={client.paymentStatus}
+                      canInspect={isAdmin && paymentReconciliationEnabled && canInspectRegistrationPayment(client)}
+                      unavailableReason={!isAdmin
+                        ? "An administrator must check the existing payment record."
+                        : !paymentReconciliationEnabled
+                          ? "Stripe verification is not enabled for this practice. An administrator should review the existing payment records."
+                          : "This older record has no complete current portal payment reference. Check its existing payment in Stripe or the practice’s payment records; this review cannot verify it automatically."}
+                      checking={checkingPayment}
+                      inspection={paymentInspections[client.id]}
+                      onInspect={() => {
+                        void checkPayment(client.id).then(() => queryClient.invalidateQueries({ queryKey: ["/api/clients"] }));
+                      }}
+                    />
+                  )}
                   {writeuppActionVisible && <section className="rounded-md border border-teal-200 bg-teal-50/60 p-3">
                     <p className="mb-2 text-xs text-teal-900">
                       Verify or record the external appointment in WriteUpp. This records external staff verification only; it does not confirm a portal booking or trigger portal payment or booking emails.
@@ -3017,10 +3048,6 @@ export default function Clients() {
                                   {client.paymentType !== "self_pay" && client.paymentType !== "insurer" && (
                                     <Button size="sm" variant="outline" className="mt-1 text-xs"
                                       onClick={() => { setClientForPaymentReview(client); setReviewedPaymentType(""); }}>Review payment type</Button>
-                                  )}
-                                  {client.paymentType === "self_pay" && client.paymentStatus !== "active" && paymentReconciliationEnabled && (
-                                    <Button size="sm" variant="outline" className="mt-1 text-xs" disabled={checkingPayment}
-                                      onClick={() => checkPayment(client.id)}>Check payment status</Button>
                                   )}
                                 </div>
                               )}

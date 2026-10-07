@@ -120,6 +120,19 @@ function makeHistoricRow(
   };
 }
 
+function paymentReviewFixture() {
+  const client = makeClient("payment-review", "PAY-101", "BookingConfirmed");
+  Object.assign(client, {
+    confirmedAt: "2026-01-12T10:00:00Z",
+    bookingSnapshot: { id: "booking-review", clinicianName: "Fixture clinician" },
+    writeuppAppointmentConfirmed: true, writeuppDataTransferred: true,
+    paymentType: "self_pay", paymentStatus: "setup_pending",
+    stripePaymentLinkId: "plink_fixture", registrationPaymentAttemptKey: "attempt-fixture",
+    notes: "Payment completed outside the current portal workflow.",
+  });
+  return client;
+}
+
 function makeQueryClient() {
   return new QueryClient({
     defaultOptions: {
@@ -251,6 +264,98 @@ describe("Clients page compact board integration", () => {
       { id: second.id, body: { status: "Scheduled" } },
     ]);
     expect(uiSignals.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Client confirmed" }));
+  });
+
+  it.each([
+    ["paid_unrecorded", "Payment found — portal recording needs review"],
+    ["uncertain", "Unable to verify payment"],
+    ["request-error", "Unable to verify payment"],
+  ])("opens payment review and checks %s read-only without completing or charging the client", async (state, label) => {
+    apiFixtures.tenant = makeTenant({
+      completedBookingsEnabled: true, writeuppChecklistEnabled: true, paymentReconciliationEnabled: true,
+    });
+    const client = paymentReviewFixture();
+    apiFixtures.clients = [client];
+    const before = structuredClone(client);
+    const ordinaryFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const path = new URL(String(input), window.location.origin).pathname;
+      if (path === `/api/clients/${client.id}/payment-reconciliation`) {
+        if (state === "request-error") return json({ error: "Stripe verification is unavailable. Review existing payment records." }, 502);
+        return json({ state, detail: "Read-only provider inspection result." });
+      }
+      return ordinaryFetch(input, init);
+    });
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const user = userEvent.setup();
+    const card = await screen.findByTestId("kanban-card-payment-review");
+    expect(card.textContent).toContain("Staff action");
+    expect(card.textContent).not.toContain("Waiting for booking requirements");
+    await user.click(within(card).getByRole("button", { name: "Review payment record" }));
+    const review = await screen.findByTestId("payment-review-payment-review");
+    expect(review.textContent).toContain("This warning does not prove the client is unpaid");
+    expect(review.textContent).toContain("not therapy");
+    expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("payment-reconciliation"))).toHaveLength(0);
+    await user.click(within(review).getByRole("button", { name: "Check Stripe payment (read-only)" }));
+    await waitFor(() => expect(within(review).getByTestId("payment-review-result-payment-review").textContent).toContain(label));
+    const inspections = vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("payment-reconciliation"));
+    expect(inspections).toHaveLength(1);
+    expect(inspections[0][1]?.method).toBe("GET");
+    expect(vi.mocked(fetch).mock.calls.some(([, init]) => ["POST", "PATCH", "DELETE", "PUT"].includes(init?.method || "GET"))).toBe(false);
+    expect(within(review).queryByRole("button", { name: /Reconcile|Send|Complete/i })).toBeNull();
+    expect(apiFixtures.clients[0]).toEqual(before);
+  });
+
+  it("refreshes an already verified portal payment without recording or completing anything", async () => {
+    apiFixtures.tenant = makeTenant({
+      completedBookingsEnabled: true, writeuppChecklistEnabled: true, paymentReconciliationEnabled: true,
+    });
+    const client = paymentReviewFixture();
+    apiFixtures.clients = [client];
+    const ordinaryFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).includes("payment-reconciliation")) {
+        return json({ state: "recorded", detail: "The existing payment is already recorded." });
+      }
+      return ordinaryFetch(input, init);
+    });
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const user = userEvent.setup();
+    const card = await screen.findByTestId("kanban-card-payment-review");
+    await user.click(within(card).getByRole("button", { name: "Review payment record" }));
+    const review = await screen.findByTestId("payment-review-payment-review");
+    // Simulate a separate authorised process having verified the payment while
+    // this browser still has its earlier, pending query result.
+    client.paymentStatus = "active";
+    const serverBeforeReview = structuredClone(client);
+    await user.click(within(review).getByRole("button", { name: "Check Stripe payment (read-only)" }));
+    await waitFor(() => expect(screen.getByTestId("next-step-payment-review").textContent).toContain("Complete the booking"));
+    expect(screen.queryByTestId("payment-review-payment-review")).toBeNull();
+    expect(apiFixtures.clients[0]).toEqual(serverBeforeReview);
+    expect(vi.mocked(fetch).mock.calls.some(([, init]) => ["POST", "PATCH", "DELETE", "PUT"].includes(init?.method || "GET"))).toBe(false);
+  });
+
+  it.each(["missing-reference", "verification-disabled"])("explains %s without offering an invalid Stripe check", async (scenario) => {
+    apiFixtures.tenant = makeTenant({
+      completedBookingsEnabled: true, writeuppChecklistEnabled: true,
+      paymentReconciliationEnabled: scenario !== "verification-disabled",
+    });
+    const client = paymentReviewFixture();
+    if (scenario === "missing-reference") client.registrationPaymentAttemptKey = null;
+    apiFixtures.clients = [client];
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const user = userEvent.setup();
+    const card = await screen.findByTestId("kanban-card-payment-review");
+    await user.click(within(card).getByRole("button", { name: "Review payment record" }));
+    const review = await screen.findByTestId("payment-review-payment-review");
+    expect(review.textContent).toContain(scenario === "missing-reference"
+      ? "no complete current portal payment reference" : "Stripe verification is not enabled");
+    expect(within(review).queryByRole("button", { name: /Check Stripe/i })).toBeNull();
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("payment-reconciliation"))).toBe(false);
+    expect(client.paymentStatus).toBe("setup_pending");
   });
 
   it("renders one BookingConfirmed card and counts it once, with one detail sheet", async () => {

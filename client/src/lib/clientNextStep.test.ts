@@ -1,8 +1,38 @@
 import { describe, expect, it } from "vitest";
 import {
+  bookingCompletionNextStep,
   getClientNextStep,
   getCompactClientDescription,
 } from "./clientNextStep";
+
+describe("booking completion guidance", () => {
+  const complete = { kind: "action" as const, title: "Complete", detail: "Ready", action: "complete" as const };
+
+  it("makes unverified payment setup a staff review action, not a wait for another payment", () => {
+    const next = bookingCompletionNextStep(complete, "payment_setup_unverified");
+    expect(next).toMatchObject({
+      kind: "action", title: "Payment record needs staff review",
+      action: "review_payment_record", actionLabel: "Review payment record",
+    });
+    expect(next.detail).toContain("do not request another payment");
+  });
+
+  it("preserves other blockers and ready completion", () => {
+    expect(bookingCompletionNextStep(complete, null)).toBe(complete);
+    expect(bookingCompletionNextStep(complete, "booking_unverified")).toMatchObject({
+      kind: "waiting", detail: "A confirmed booking with a booking record is required before completion.",
+    });
+  });
+
+  it("does not replace an earlier WriteUpp or registration action", () => {
+    const earlier = getClientNextStep({
+      status: "BookingConfirmed", writeuppChecklistEnabled: true,
+      writeuppAppointmentConfirmed: false, writeuppDataTransferred: true, completedBookingsEnabled: true,
+    });
+    expect(earlier.action).toBe("review_writeupp");
+    expect(bookingCompletionNextStep(earlier, "writeupp_incomplete")).toBe(earlier);
+  });
+});
 
 describe("getClientNextStep", () => {
   it("offers appointment choices for an admin when Assigned has no recorded selection", () => {

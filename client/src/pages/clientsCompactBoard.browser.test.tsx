@@ -27,6 +27,24 @@ function TwoClientBoard() {
 }
 
 describe("compact multi-clinician client board", () => {
+  it("provides a separate keyboard-operable staff review button without nesting it in the card button", async () => {
+    const user = userEvent.setup();
+    const open = vi.fn();
+    const review = vi.fn();
+    render(<CompactClientCard clientId="review-1" displayId="TEST-101" status="Portal booking confirmed"
+      nextStep={{ kind: "action", title: "Payment record needs staff review", detail: "Check the existing payment.",
+        actionLabel: "Review payment record" }}
+      onOpen={open} onNextAction={review} />);
+    expect(screen.getByTestId("next-step-review-1").textContent).toContain("Staff action");
+    const reviewButton = screen.getByRole("button", { name: "Review payment record" });
+    expect(reviewButton.parentElement?.closest("button")).toBeNull();
+    await user.tab();
+    await user.tab();
+    await user.keyboard("{Enter}");
+    expect(review).toHaveBeenCalledTimes(1);
+    expect(open).not.toHaveBeenCalled();
+  });
+
   it("uses keyboard-operable button cards and opens only the selected client's details/actions", async () => {
     const user = userEvent.setup();
     render(<TwoClientBoard />);

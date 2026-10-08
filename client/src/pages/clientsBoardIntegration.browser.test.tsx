@@ -242,6 +242,49 @@ describe("Clients page compact board integration", () => {
     expect(within(dialog).getByRole("button", { name: "Move to Confirmed" })).toHaveProperty("disabled", true);
   });
 
+  it.each([false, true])("lets staff select a pending slot with multi-clinician workflow=%s", async multiClinician => {
+    apiFixtures.tenant = makeTenant({ multiClinicianAllocationEnabled: multiClinician });
+    apiFixtures.clients = [makeClient("pending-book", "PENDING-BOOK", "Forms Completed")];
+    const originalFetch = fetch;
+    const writes: Array<{ path: string; body: any }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input, init) => {
+      const path = new URL(String(input), window.location.origin).pathname;
+      if (path === "/api/clinicians") return json([{
+        id: "pending-clinician", name: "Fixture Clinician", specialties: [], insurers: [],
+        capacity: 10, currentLoad: 0, maxNewClients: 3, isActive: true,
+        availability: [{ id: "pending-slot", tenantId: "tenant-1", clinicianId: "pending-clinician",
+          type: "Recurring", day: "Monday", startTime: "10:00", endTime: "11:00",
+          startDate: "2999-01-01", isBooked: false, locationType: "online" }],
+      }]);
+      if (path === "/api/clients/pending-book/submissions") return json([]);
+      if (init?.method === "POST") {
+        writes.push({ path, body: JSON.parse(init.body) });
+        return json({ success: true });
+      }
+      return originalFetch(input, init);
+    }));
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const user = userEvent.setup();
+    const card = await screen.findByTestId("kanban-card-pending-book");
+    const menu = within(card).getAllByRole("button").find(button => button.getAttribute("aria-haspopup") === "menu");
+    await user.click(menu!);
+    await user.click(await screen.findByRole("menuitem", { name: "Allocate to Clinician" }));
+    const dialog = await screen.findByRole("dialog");
+    const slot = await within(dialog).findByRole("button", { name: /Monday/ });
+    await waitFor(() => expect(slot).toHaveProperty("disabled", false));
+    expect(slot.textContent).toContain("Pending · available from 01/01/2999");
+    await user.click(slot);
+    if (multiClinician) await user.click(within(dialog).getByRole("button", { name: "Send Options (1)" }));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    if (multiClinician) {
+      expect(writes[0].path).toBe("/api/clients/pending-book/allocate-options");
+      expect(writes[0].body.selections).toEqual([{ clinicianId: "pending-clinician", slotId: "pending-slot" }]);
+    } else {
+      expect(writes[0].body).toMatchObject({ clinicianId: "pending-clinician", slotId: "pending-slot" });
+    }
+  });
+
   it("does not show the manager override to an ordinary admin", async () => {
     apiFixtures.clients = [makeClient("ordinary-client", "ADM-101", "RegistrationPending")];
     const view = renderBoard();

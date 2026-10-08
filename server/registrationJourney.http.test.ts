@@ -2698,7 +2698,6 @@ describe("registration journey HTTP routes", () => {
   it.each([
     ["a past one-off appointment", { type: "SpecificDate", date: "2000-01-01" }],
     ["an expired recurring window", { type: "Recurring", date: null, endDate: "2000-01-01" }],
-    ["a recurring slot whose start is in the future", { type: "Recurring", date: null, startDate: "2999-01-01" }],
     ["a vacation", { type: "Vacation", date: null }],
     ["a retired slot", { retiredAt: new Date(), date: null }],
     ["a booked slot", { isBooked: true, date: null }],
@@ -2736,7 +2735,8 @@ describe("registration journey HTTP routes", () => {
     expect(h.state.client.status).toBe("FormsCompleted");
   });
 
-  it("rejects a future recurring window through the portal and stale selection link", async () => {
+  it.each([false, true])("allows a future recurring window through the portal with multi-clinician workflow=%s", async multiClinician => {
+    h.state.tenant.multiClinicianAllocationEnabled = multiClinician;
     Object.assign(h.state.slot, {
       type: "Recurring",
       date: null,
@@ -2746,16 +2746,31 @@ describe("registration journey HTTP routes", () => {
 
     const portal = await request("/api/public/options/selection-token-a");
     expect(portal.status).toBe(200);
-    expect(portal.body.options[0].available).toBe(false);
+    expect(portal.body.options[0].available).toBe(true);
 
     const selection = await request("/api/public/options/selection-token-a/select", {
       method: "POST",
       body: JSON.stringify({ clinicianOptionId: "option-a" }),
     });
 
-    expect(selection.status).toBe(409);
-    expect(h.state.client.status).toBe("OptionsSent");
-    expect(h.state.options[0].status).toBe("pending");
+    expect(selection.status).toBe(200);
+    expect(h.state.client.status).toBe("OptionSelected");
+    expect(h.state.options[0].status).toBe("selected");
+    expect(h.state.slot.isBooked).toBe(true);
+    expect(h.state.slot.startDate).toBe("2999-01-01");
+  });
+
+  it("allows staff to offer a pending recurring slot without bringing forward its availability", async () => {
+    h.state.options = [];
+    h.state.client.status = "FormsCompleted";
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    Object.assign(h.state.slot, { type: "Recurring", date: null, startDate: "2999-01-01" });
+    const response = await request("/api/clients/client-a/allocate-options", {
+      method: "POST", body: JSON.stringify({ selections: [{ clinicianId: "clinician-a", slotId: "slot-a" }] }),
+    });
+    expect(response.status).toBe(200);
+    expect(h.state.options).toHaveLength(1);
+    expect(h.state.slot.startDate).toBe("2999-01-01");
     expect(h.state.slot.isBooked).toBe(false);
   });
 

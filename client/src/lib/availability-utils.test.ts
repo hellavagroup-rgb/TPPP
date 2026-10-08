@@ -125,7 +125,7 @@ describe("allocation availability", () => {
     [{ isBooked: true, isPending: false, hasClinicianCapacity: true, adminOverride: false, zoomLinkRequired: false }, "Booked"],
     [{ isBooked: false, isPending: false, hasClinicianCapacity: false, adminOverride: false, zoomLinkRequired: false }, "No clinician capacity"],
     [{ isBooked: false, isPending: false, hasClinicianCapacity: true, adminOverride: false, zoomLinkRequired: true }, "Zoom link required"],
-    [{ isBooked: false, isPending: true, hasClinicianCapacity: true, adminOverride: false, zoomLinkRequired: false }, "Not yet available"],
+    [{ isBooked: false, isPending: true, hasClinicianCapacity: true, adminOverride: false, zoomLinkRequired: false }, null],
   ])("labels unavailable slots precisely", (input, reason) => {
     expect(getSlotUnavailableReason(input)).toBe(reason);
   });

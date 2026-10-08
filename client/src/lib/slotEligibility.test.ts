@@ -28,9 +28,9 @@ describe("slot eligibility", () => {
     expect(slotUnavailableReason({ type: "Recurring", endDate: "2026-09-10" }, "2026-09-10")).toBeNull();
   });
 
-  it("rejects recurring windows before their start or after their end", () => {
+  it("allows reserving recurring windows before their start but rejects expired windows", () => {
     expect(slotUnavailableReason({ type: "Recurring", startDate: "2026-09-11" }, "2026-09-10"))
-      .toBe("is not yet available");
+      .toBeNull();
     expect(slotUnavailableReason({ type: "Recurring", endDate: "2026-09-09" }, "2026-09-10"))
       .toBe("is no longer available");
   });

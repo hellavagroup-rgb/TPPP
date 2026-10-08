@@ -20,7 +20,7 @@ function validDate(value: string): boolean {
     && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
 }
 
-/** Future one-off appointments are offerable; future recurring windows are not. */
+/** Availability may be reserved in advance; the start date is not brought forward. */
 export function slotUnavailableReason(slot: EligibleSlot, today = practiceToday()): string | null {
   if (slot.retiredAt) return "has been retired";
   if (slot.isBooked) return "is already booked";
@@ -34,7 +34,6 @@ export function slotUnavailableReason(slot: EligibleSlot, today = practiceToday(
     || (slot.startDate && slot.endDate && slot.startDate > slot.endDate)) {
     return "has an invalid availability window";
   }
-  if (slot.startDate && slot.startDate > today) return "is not yet available";
   if (slot.endDate && slot.endDate < today) return "is no longer available";
   return null;
 }

@@ -184,7 +184,7 @@ function getSlotPendingDate(slot: TimeSlot): string | null {
 
 function isSlotActiveGlobal(slot: TimeSlot) {
   const reason = slotUnavailableReason({ ...slot, isBooked: false });
-  return reason === null || reason === "is not yet available";
+  return reason === null;
 }
 
 function getSlotCounts(availability?: TimeSlot[]) {
@@ -1980,7 +1980,7 @@ export default function Clients() {
     if (!clinician.availability) return 0;
     return clinician.availability.filter(slot =>
       slot.type !== "Vacation" && !slot.isBooked && isSlotActive(slot)
-      && !isSlotPending(slot) && slotMatchesAvailability(slot, clientAvail) === true
+      && slotMatchesAvailability(slot, clientAvail) === true
     ).length;
   };
 
@@ -3749,6 +3749,9 @@ export default function Clients() {
                                   {unavailableReason}{unavailableReason === "Not yet available" && pendingDate ? ` · from ${pendingDate}` : ""}
                                 </div>
                               )}
+                              {isPending && pendingDate && (
+                                <div className="text-[9px] text-amber-700">Pending · available from {pendingDate}</div>
+                              )}
                               {!unavailableReason && noMatch && (
                                 <div className="text-[9px] text-slate-600">Outside stated availability</div>
                               )}
@@ -4354,6 +4357,9 @@ export default function Clients() {
                             >
                               <CalendarCheck className="h-3 w-3 mr-2" />
                               <div className="text-left">
+                                {isSlotPending(slot) && (
+                                  <div className="text-[9px] text-amber-700">Pending · available from {getSlotPendingDate(slot)}</div>
+                                )}
                                 <div className="font-medium">
                                   {slot.type === "SpecificDate" && slot.date
                                     ? format(parseISO(slot.date), "d MMM yyyy")

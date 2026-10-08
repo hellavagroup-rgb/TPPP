@@ -223,7 +223,7 @@ export function getSlotUnavailableReason(input: {
   if (input.isBooked) return "Booked";
   if (!input.hasClinicianCapacity && !input.adminOverride) return "No clinician capacity";
   if (input.zoomLinkRequired) return "Zoom link required";
-  if (input.isPending) return "Not yet available";
+  // Pending denotes a future start date, not a booking restriction.
   return null;
 }
 

@@ -14,3 +14,9 @@ An intent marked succeeded and a checkout marked paid establish the original col
 **Why:** A live audit found a fully refunded checkout whose payment intent still showed succeeded. A cancelled/waitlisted client must not be restored or charged again just because historical payment exists.
 
 **How to apply:** Separate current-attempt, unrefunded payments from old attempts, refunds and cancelled bookings. Preserve staff-reviewed external appointments: payment evidence may need repair independently of booking confirmation, rather than clearing diary acknowledgements or creating a second portal booking.
+
+For reconciliation explicitly limited to the active, unconfirmed workflow, leave already-confirmed records entirely untouched. A pending portal status does not establish that a client is active: WriteUpp arrangements, manager confirmation and booking snapshots also identify excluded cases.
+
+**Why:** The user explicitly said they do not want to mess with any already-confirmed records and only want reconciliation for clients currently in the workflow who are not yet confirmed.
+
+**How to apply:** Use the staff workflow classification and confirmation evidence, not payment-pending flags alone. Recheck the target's current attempt and unconfirmed status immediately before recovery, and verify excluded client records remain unchanged. Do not treat an active-only request as permission to repair payment evidence in the Confirmed view.

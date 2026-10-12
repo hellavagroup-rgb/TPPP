@@ -26,6 +26,7 @@
 - [Payment return pages are read-only observers](payment-return-observer.md) — a Stripe redirect never confirms a booking; only verified webhooks may advance durable state.
 - [Public pages must ignore staff-session 401 redirects](public-pages-auth-loss.md) — a public API 401 must not send form, registration, option, or payment visitors to staff login.
 - [Tenant-owned Stripe reconciliation](tenant-stripe-reconciliation.md) — recovery must query the tenant's Stripe account, not a global-key fallback, before changing payment or booking state.
+- [Stripe webhook subscriptions](stripe-webhook-subscriptions.md) — initial payment processing needs checkout.session.completed; valid signatures and HTTP 200s alone do not prove it works.
 - [Tenant-scoped email evidence](tenant-scoped-email-evidence.md) — inspect provider events only through a tenant-owned, stored message ID; never infer mailbox delivery from acceptance.
 - [Booking harness reservation states](booking-harness-reservation-states.md) — automated path fixtures can begin with an unreserved slot; test manual reservation checks separately.
 - [Tenant opt-ins at publish](tenant-opt-in-publish.md) — a schema-only publish does not replay migration data updates that activate specific practices.

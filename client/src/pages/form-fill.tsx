@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import type { FormTemplate, Client } from "@shared/schema";
 import { DynamicFormFields, validateDynamicFields } from "@/components/forms/DynamicFormFields";
+import { formCalendarDate, formatFormDate, selectedFormDate, serializeFormDates } from "@/lib/formDates";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 const TIME_PERIODS = [
@@ -209,7 +210,7 @@ export default function FormFill() {
         body: JSON.stringify({
           formId: params?.formId,
           clientId: params?.clientId,
-          data,
+          data: serializeFormDates((form?.fields || []) as any[], data),
         }),
       });
       if (!response.ok) {
@@ -233,7 +234,7 @@ export default function FormFill() {
         body: JSON.stringify({
           formId: params?.formId,
           clientId: params?.clientId,
-          data,
+          data: serializeFormDates((form?.fields || []) as any[], data),
         }),
       });
       if (!response.ok) {
@@ -527,7 +528,7 @@ export default function FormFill() {
                                                     )}
                                                 >
                                                     {formState[field.id] ? (
-                                                        format(formState[field.id], "dd/MM/yyyy")
+                                                        formatFormDate(formState[field.id])
                                                     ) : (
                                                         <span>Pick a date</span>
                                                     )}
@@ -537,10 +538,10 @@ export default function FormFill() {
                                             <PopoverContent className="w-auto p-0" align="start">
                                                 <Calendar
                                                     mode="single"
-                                                    selected={formState[field.id]}
-                                                    onSelect={(date) => handleValueChange(field.id, date)}
+                                                    selected={formCalendarDate(formState[field.id])}
+                                                    onSelect={(date) => handleValueChange(field.id, selectedFormDate(date))}
                                                     disabled={(date) =>
-                                                        date < new Date("1900-01-01")
+                                                        date < new Date(1900, 0, 1)
                                                     }
                                                     captionLayout="dropdown"
                                                     fromYear={1920}

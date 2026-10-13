@@ -12,9 +12,9 @@ import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CalendarIcon, Eye } from "lucide-react";
-import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
+import { formCalendarDate, formatFormDate, selectedFormDate } from "@/lib/formDates";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 const DAY_ABBREVS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
@@ -195,7 +195,7 @@ export function FormPreview({ form }: FormPreviewProps) {
                                                     )}
                                                 >
                                                     {formState[field.id] ? (
-                                                        format(formState[field.id], "dd/MM/yyyy")
+                                                        formatFormDate(formState[field.id])
                                                     ) : (
                                                         <span>Pick a date</span>
                                                     )}
@@ -205,10 +205,10 @@ export function FormPreview({ form }: FormPreviewProps) {
                                             <PopoverContent className="w-auto p-0" align="start">
                                                 <Calendar
                                                     mode="single"
-                                                    selected={formState[field.id]}
-                                                    onSelect={(date) => handleValueChange(field.id, date)}
+                                                    selected={formCalendarDate(formState[field.id])}
+                                                    onSelect={(date) => handleValueChange(field.id, selectedFormDate(date))}
                                                     disabled={(date) =>
-                                                        date < new Date("1900-01-01")
+                                                        date < new Date(1900, 0, 1)
                                                     }
                                                     captionLayout="dropdown"
                                                     fromYear={1920}

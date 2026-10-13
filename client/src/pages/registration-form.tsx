@@ -9,6 +9,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Loader2, CheckCircle2 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { DynamicFormFields, validateDynamicFields } from "@/components/forms/DynamicFormFields";
+import { serializeFormDates } from "@/lib/formDates";
 import { findRegistrationConsent } from "@shared/registrationConsent";
 
 interface RegistrationData {
@@ -89,7 +90,7 @@ export default function RegistrationForm() {
           termsAccepted: findRegistrationConsent(data.registrationTemplate?.fields, templateValues)?.accepted === true,
           termsVersion: data.termsVersion,
           registrationTemplateUpdatedAt: data.registrationTemplateUpdatedAt,
-          registrationResponses: templateValues,
+          registrationResponses: serializeFormDates((data.registrationTemplate?.fields || []) as any[], templateValues),
         }),
       });
       if (!res.ok) {

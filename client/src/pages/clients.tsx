@@ -96,6 +96,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { format, parseISO, isSameDay } from "date-fns";
+import { formatFormDate } from "@/lib/formDates";
 import { apiRequest } from "@/lib/queryClient";
 import { fetchOriginalEnquiry, MISSING_ORIGINAL_ENQUIRY } from "@/lib/originalEnquiry";
 import type { Client as ClientType, Clinician, FormTemplate as FormTemplateType, TimeSlot } from "@shared/schema";
@@ -1025,7 +1026,9 @@ export default function Clients() {
       const value = responses[field.id];
       if (value !== undefined && value !== null && value !== '') {
         let displayValue: string;
-        if (Array.isArray(value)) {
+        if (field.type === "date") {
+          displayValue = escapeHtml(formatFormDate(value));
+        } else if (Array.isArray(value)) {
           displayValue = escapeHtml(value.join(', '));
         } else if (typeof value === 'boolean') {
           displayValue = value ? 'Yes' : 'No';
@@ -4631,7 +4634,9 @@ export default function Clients() {
                         if (value === undefined || value === null || value === '') return null;
                         
                         let displayValue: React.ReactNode = value;
-                        if (Array.isArray(value)) {
+                        if (field.type === "date") {
+                          displayValue = formatFormDate(value);
+                        } else if (Array.isArray(value)) {
                           displayValue = value.join(', ');
                         } else if (typeof value === 'boolean') {
                           displayValue = value ? 'Yes' : 'No';

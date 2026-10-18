@@ -3,17 +3,19 @@ import { afterEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RetireAvailabilityDialog } from "./RetireAvailabilityDialog";
+import { confirmedSlotRetirementCopy } from "@shared/slotRetirementCopy";
 
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 const caches: QueryClient[] = [];
 afterEach(() => { cleanup(); caches.splice(0).forEach(cache => cache.clear()); vi.unstubAllGlobals(); });
 
-function setup({ eligible = true, booked = true, failed = false, checkFails = false } = {}) {
+function setup({ eligible = true, booked = true, failed = false, checkFails = false, confirmedBooking = false } = {}) {
   const writes: { method: string; path: string; body: any }[] = [];
   const onClose = vi.fn();
   vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
     if (init?.method === "GET") return new Response(JSON.stringify(checkFails ? { error: "unavailable" } :
-      { eligible, clientId: "client-a", clientDisplayId: "WU1", reason: "Active reservation has no recorded WriteUpp arrangement." }),
+      { eligible, confirmedBooking, clientId: "client-a", clientDisplayId: "WU1",
+        reason: confirmedBooking ? confirmedSlotRetirementCopy : "Active reservation has no recorded WriteUpp arrangement." }),
       { status: checkFails ? 500 : 200 });
     writes.push({ method: init?.method || "", path, body: init?.body ? JSON.parse(String(init.body)) : null });
     return new Response(JSON.stringify(failed ? { error: "The slot's client has changed. Refresh and review the slot again." } :
@@ -44,6 +46,16 @@ it("leaves an ordinary booked reservation protected", async () => {
   expect(button.disabled).toBe(true);
   fireEvent.click(button);
   expect(writes).toEqual([]);
+});
+
+it.each([false, true])("explains fresh availability for confirmed history without deleting or re-listing it (booked=%s)", async booked => {
+  const { writes, onClose } = setup({ eligible: false, confirmedBooking: true, booked });
+  await screen.findByText(confirmedSlotRetirementCopy);
+  const button = screen.getByRole("button", { name: "Retire slot" }) as HTMLButtonElement;
+  expect(button.disabled).toBe(true);
+  fireEvent.click(button);
+  expect(writes).toEqual([]);
+  expect(onClose).not.toHaveBeenCalled();
 });
 
 it("keeps normal retirement working for an unoccupied slot", async () => {

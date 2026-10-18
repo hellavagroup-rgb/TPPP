@@ -13,6 +13,6 @@ Confirmation must remove the selected slot from available inventory consistently
 
 Tenant 2 expects staff to be able to publish fresh availability at a previously booked time once the clinician says it is free again, without reopening the original intake or declaring therapy complete.
 
-**Why:** Tenant 2 explained that clinicians may move clients after work starts, while the intake portal does not track the duration or subsequent scheduling of therapy. An old confirmed booking is history, not a permanent ban on offering that clock time again.
+**Why:** Tenant 2 explained that clinicians may move clients after work starts, while the intake portal does not track the duration or subsequent scheduling of therapy. An old confirmed booking is history, not a permanent ban on offering that clock time again. The user approved clearer warnings and regression coverage as the safeguard, without changing booking/payment transitions or automatically re-listing time.
 
 **How to apply:** Distinguish a new availability entry from restoring or deleting the old booking-linked slot. Preserve original confirmation, payment, manager-override and appointment history. Require staff's current availability decision rather than inferring that a time is free from therapy completion or an old message. Keep protections for genuinely pending reservations.

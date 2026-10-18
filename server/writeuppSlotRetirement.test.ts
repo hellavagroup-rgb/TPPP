@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PgDialect } from "drizzle-orm/pg-core";
+import { confirmedSlotRetirementCopy } from "@shared/slotRetirementCopy";
 
 const h = vi.hoisted(() => ({ state: {} as any, failAudit: false }));
 vi.mock("./db", () => {
@@ -55,6 +56,37 @@ import { writeuppSlotRetirement } from "./writeuppSlotRetirement";
 
 const input = { tenantId: "practice-a", clinicianId: "clinician-a", slotId: "slot-a" };
 const confirm = () => writeuppSlotRetirement({ ...input, confirm: true, expectedClientId: "client-a", actorId: "admin-a" });
+
+it.each([
+  ["Scheduled", false], ["Scheduled", true], ["BookingConfirmed", false], ["BookingConfirmed", true],
+])("explains re-listing confirmed history without changing it (status=%s, retired=%s)", async (status, retired) => {
+  h.state.clients[0].status = status;
+  if (retired) h.state.time_slots[0].retiredAt = new Date("2026-10-17T12:00:00Z");
+  const before = structuredClone(h.state);
+  const preview = await writeuppSlotRetirement(input);
+  expect(preview).toMatchObject({ eligible: false, confirmedBooking: true });
+  expect(preview.reason).toContain(confirmedSlotRetirementCopy);
+  if (retired) expect(preview.reason).toContain("already been retired");
+  await expect(confirm()).rejects.toThrow(confirmedSlotRetirementCopy);
+  expect(h.state).toEqual(before);
+});
+
+it("does not suggest re-listing when a second owner has a pending reservation", async () => {
+  h.state.clients[0].status = "Scheduled";
+  h.state.clients.push({ ...h.state.clients[0], id: "pending-client", status: "RegistrationPending" });
+  const preview = await writeuppSlotRetirement(input);
+  expect(preview.eligible).toBe(false);
+  expect(preview).not.toHaveProperty("confirmedBooking");
+  expect(preview.reason).not.toContain("Add Availability");
+});
+
+it("does not infer confirmed history from a foreign practice's reference", async () => {
+  h.state.clients[0].status = "Scheduled";
+  h.state.clients[0].tenantId = "practice-b";
+  const preview = await writeuppSlotRetirement(input);
+  expect(preview.eligible).toBe(false);
+  expect(preview).not.toHaveProperty("confirmedBooking");
+});
 
 beforeEach(() => {
   h.failAudit = false;

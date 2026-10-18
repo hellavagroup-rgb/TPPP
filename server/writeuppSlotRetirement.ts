@@ -2,6 +2,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { auditLogs, bookingSnapshots, clientClinicianOptions, clients, clinicians, timeSlots } from "@shared/schema";
 import { ACTIVE_ALLOCATION_STATUSES } from "@shared/clientWorkflow";
 import { db } from "./db";
+import { confirmedSlotRetirementCopy, hasOnlyConfirmedSlotOwners } from "@shared/slotRetirementCopy";
 
 const RETIREMENT_REASON = "Occupied appointment arranged in WriteUpp";
 
@@ -29,7 +30,10 @@ export async function writeuppSlotRetirement(input: {
       eq(clients.assignedSlotId, slot.id), inArray(clients.status, [...ACTIVE_ALLOCATION_STATUSES]),
     )).for("update");
     const client = owners.length === 1 ? owners[0] : undefined;
+    const confirmedBooking = hasOnlyConfirmedSlotOwners(owners.map(owner => owner.status))
+      && owners.every(owner => owner.tenantId === input.tenantId && owner.assignedClinicianId === input.clinicianId);
     let reason = "An active reservation must be resolved before this slot can be retired.";
+    if (confirmedBooking) reason = confirmedSlotRetirementCopy;
     let eligible = Boolean(client && client.tenantId === input.tenantId &&
       client.assignedClinicianId === input.clinicianId && !client.isArchived && !client.completedAt &&
       ["AwaitingConfirmation", "RegistrationPending"].includes(client.status));
@@ -47,7 +51,13 @@ export async function writeuppSlotRetirement(input: {
     if (!input.confirm) {
       return eligible && !slot.retiredAt && client
         ? { eligible: true, clientId: client.id, clientDisplayId: client.displayId }
-        : { eligible: false, reason: slot.retiredAt ? "This slot has already been retired." : reason };
+        : {
+          eligible: false,
+          ...(confirmedBooking ? { confirmedBooking: true } : {}),
+          reason: slot.retiredAt
+            ? `This slot has already been retired.${confirmedBooking ? ` ${confirmedSlotRetirementCopy}` : ""}`
+            : reason,
+        };
     }
     if (!eligible || !client) throw new WriteuppSlotRetirementError(reason);
     if (!input.actorId || input.expectedClientId !== client.id)

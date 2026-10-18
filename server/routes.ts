@@ -1124,7 +1124,7 @@ export async function registerRoutes(
     } catch (error: any) {
       if (error instanceof SlotRetirementConflictError) {
         return res.status(409).json({
-          error: "This slot cannot be retired while an active client workflow owns it. Reassign or complete that client first.",
+          error: error.message,
           code: "SLOT_ACTIVE_OWNER_CONFLICT",
           clientIds: error.clientIds,
         });

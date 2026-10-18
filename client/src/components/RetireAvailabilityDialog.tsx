@@ -13,7 +13,7 @@ export function RetireAvailabilityDialog({ open, target, onClose }: {
   const cache = useQueryClient();
   const { toast } = useToast();
   const base = target ? `/api/timeslots/${target.clinicianId}/${target.slot.id}` : "";
-  const check = useQuery<{ eligible: boolean; clientId?: string; clientDisplayId?: string; reason?: string }>({
+  const check = useQuery<{ eligible: boolean; confirmedBooking?: boolean; clientId?: string; clientDisplayId?: string; reason?: string }>({
     queryKey: [base + "/writeupp-retirement"],
     queryFn: async () => (await apiRequest("GET", base + "/writeupp-retirement")).json(),
     enabled: open && !!target, staleTime: 0, retry: false,
@@ -48,6 +48,7 @@ export function RetireAvailabilityDialog({ open, target, onClose }: {
         <AlertDialogDescription>
           {external
             ? `${check.data?.clientDisplayId}'s appointment is recorded as arranged in WriteUpp. Remove this slot from portal availability, including future weeks for a recurring slot? The client's appointment links, history, therapy status and payments will stay unchanged. No emails will be sent, and this time will not become available for another client.`
+            : check.data?.confirmedBooking ? check.data.reason
             : target?.slot.isBooked
               ? "This slot is booked. Active client reservations cannot normally be removed. Checking for an eligible appointment already arranged in WriteUpp does not change the client."
               : "Remove this slot from portal availability, including future weeks for a recurring slot? Historical records will be preserved rather than permanently deleted."}
@@ -55,13 +56,13 @@ export function RetireAvailabilityDialog({ open, target, onClose }: {
       </AlertDialogHeader>
       {check.isFetching && <p role="status">Checking slot ownership…</p>}
       {check.isError && <div role="alert">Could not check slot ownership. <Button variant="link" onClick={() => check.refetch()}>Retry check</Button></div>}
-      {!check.isFetching && !external && target?.slot.isBooked && check.data?.reason &&
+      {!check.isFetching && !external && !check.data?.confirmedBooking && target?.slot.isBooked && check.data?.reason &&
         <p role="status">{check.data.reason}</p>}
       {retirement.isError && <p role="alert" className="text-destructive">{retirement.error.message}</p>}
       <AlertDialogFooter>
         <AlertDialogCancel disabled={retirement.isPending}>Cancel</AlertDialogCancel>
         <AlertDialogAction disabled={check.isFetching || check.isError || retirement.isPending ||
-          (!external && !!target?.slot.isBooked)} onClick={event => { event.preventDefault(); retirement.mutate(); }}>
+           (!external && (!!target?.slot.isBooked || check.data?.confirmedBooking === true))} onClick={event => { event.preventDefault(); retirement.mutate(); }}>
           {retirement.isPending ? "Retiring…" : external ? "Retire occupied WriteUpp slot" : "Retire slot"}
         </AlertDialogAction>
       </AlertDialogFooter>

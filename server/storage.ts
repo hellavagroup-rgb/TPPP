@@ -19,6 +19,7 @@ import {
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, or, desc, sql, isNull, inArray, lt } from "drizzle-orm";
+import { slotRetirementConflictCopy } from "@shared/slotRetirementCopy";
 import {
   RECENT_ACTIVITY_ACTIONS,
   RECENT_ACTIVITY_CATEGORY_ACTIONS,
@@ -85,8 +86,8 @@ export class ManualAssignmentError extends Error {
 }
 
 export class SlotRetirementConflictError extends Error {
-  constructor(public readonly clientIds: string[]) {
-    super("This slot is still owned by an active client workflow and cannot be retired");
+  constructor(public readonly clientIds: string[], ownerStatuses: readonly string[] = []) {
+    super(slotRetirementConflictCopy(ownerStatuses));
     this.name = "SlotRetirementConflictError";
   }
 }
@@ -478,12 +479,14 @@ export class DatabaseStorage implements IStorage {
         ...(tenantId ? [or(eq(timeSlots.tenantId, tenantId), isNull(timeSlots.tenantId))!] : []),
       )).for("update");
       if (!slot) return false;
-      const owners = await tx.select({ id: clients.id }).from(clients).where(and(
+      const owners = await tx.select({ id: clients.id, status: clients.status }).from(clients).where(and(
         eq(clients.assignedSlotId, id),
         inArray(clients.status, [...ACTIVE_ALLOCATION_STATUSES]),
         ...(tenantId ? [eq(clients.tenantId, tenantId)] : []),
       ));
-      if (owners.length) throw new SlotRetirementConflictError(owners.map(({ id: clientId }) => clientId));
+      if (owners.length) throw new SlotRetirementConflictError(
+        owners.map(({ id: clientId }) => clientId), owners.map(owner => owner.status),
+      );
       await tx.update(timeSlots).set({
         retiredAt: new Date(),
         retirementReason: reason,

@@ -7,6 +7,7 @@ import multer from "multer";
 import ExcelJS from "exceljs";
 import { ClientAllocationUpdateError, ManualAssignmentError, SlotRetirementConflictError, storage } from "./storage";
 import { getAllocationVisibility } from "./allocationVisibility";
+import { clientCreationConflict } from "./clientCreationError";
 import { getAllocationOfferStates } from "./allocationOfferState";
 import { withTenantAllocationVisibility } from "@shared/allocationVisibility";
 import { setupAuth, requireAuth, requireAdmin, requireClinician, hashPassword, auditLog, destroySessionsForUser } from "./auth";
@@ -1383,15 +1384,9 @@ export async function registerRoutes(
       if (error instanceof z.ZodError) {
         return res.status(400).json({ error: error.errors });
       }
+      const conflict = clientCreationConflict(error);
+      if (conflict) return res.status(409).json({ error: conflict });
       console.error("Failed to create client:", error);
-      // Surface unique constraint violations with a helpful message
-      const msg = error instanceof Error ? error.message : String(error);
-      if (msg.includes("unique") || msg.includes("duplicate") || msg.includes("23505")) {
-        if (msg.includes("display_id")) {
-          return res.status(409).json({ error: "A client with this W-Number already exists." });
-        }
-        return res.status(409).json({ error: "A client with these details already exists." });
-      }
       res.status(500).json({ error: "Failed to create client" });
     }
   });

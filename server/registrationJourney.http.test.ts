@@ -760,6 +760,46 @@ afterEach(async () => {
   if (server?.listening) await new Promise<void>((resolve, reject) => server!.close(error => error ? reject(error) : resolve()));
 });
 
+describe("manual client creation HTTP errors", () => {
+  it.each([false, true])("returns a helpful 409 for duplicate W-numbers (wrapped=%s) without changing a confirmed client", async (wrapped) => {
+    h.state.client.status = "BookingConfirmed";
+    const before = structuredClone(h.state.client);
+    const duplicate = Object.assign(new Error("duplicate key"), {
+      code: "23505", constraint: "clients_display_id_unique",
+    });
+    h.storage.createClientIdempotently.mockRejectedValueOnce(
+      wrapped ? new Error("Failed query: insert; params: confidential", { cause: duplicate }) : duplicate,
+    );
+    const response = await request("/api/clients", {
+      method: "POST",
+      headers: { "Idempotency-Key": "new-manual-client-attempt" },
+      body: JSON.stringify({ displayId: "WU1234567", email: "family@example.test", contactPreference: "email" }),
+    });
+    expect(response.status).toBe(409);
+    expect(response.body.error).toContain("W-number already exists");
+    expect(response.body.error).not.toMatch(/confidential|params|insert;/);
+    expect(h.storage.createClientIdempotently).toHaveBeenCalledWith(
+      expect.objectContaining({ displayId: "WU1234567" }), h.state.tenant.id, "new-manual-client-attempt",
+    );
+    expect(h.state.client).toEqual(before);
+    expect(h.storage.updateClient).not.toHaveBeenCalled();
+    expect(h.state.emails).toEqual([]);
+    expect(h.state.activities).toEqual([]);
+  });
+
+  it("still creates a genuinely new client", async () => {
+    const created = { ...h.state.client, id: "new-manual-client", displayId: "WU7654321", status: "New" };
+    h.storage.createClientIdempotently.mockResolvedValueOnce({ client: created, created: true });
+    const response = await request("/api/clients", {
+      method: "POST",
+      body: JSON.stringify({ displayId: created.displayId, email: "family@example.test", contactPreference: "email" }),
+    });
+    expect(response.status).toBe(200);
+    expect(response.body.id).toBe(created.id);
+    expect(response.body.status).toBe("New");
+  });
+});
+
 describe("registration journey HTTP routes", () => {
   it("refuses a foreign booking snapshot instead of treating it as this tenant's confirmation", async () => {
     resetState({

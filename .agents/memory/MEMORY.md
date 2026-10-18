@@ -23,6 +23,7 @@
 - [Automatic payment link workflow](automatic-payment-links.md) — new-workflow payment links are created automatically; admins do not need an early manual action.
 - [Confirmation state and slot retirement](confirmation-state-slot-retirement.md) — BookingConfirmed is feature-gated; confirmation retires availability but preserves a booking snapshot.
 - [Drizzle query builders are not Promises](drizzle-query-builder-await.md) — await builders inside try/catch; do not chain Promise.catch directly on them.
+- [Wrapped database errors](wrapped-database-errors.md) — inspect PostgreSQL codes in nested causes; outer Drizzle query messages may hide conflicts and contain client data.
 - [Payment return pages are read-only observers](payment-return-observer.md) — a Stripe redirect never confirms a booking; only verified webhooks may advance durable state.
 - [Public pages must ignore staff-session 401 redirects](public-pages-auth-loss.md) — a public API 401 must not send form, registration, option, or payment visitors to staff login.
 - [Tenant-owned Stripe reconciliation](tenant-stripe-reconciliation.md) — recovery must query the tenant's Stripe account, not a global-key fallback, before changing payment or booking state.

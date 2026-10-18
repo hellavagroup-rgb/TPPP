@@ -19,6 +19,7 @@ import {
   registrationProgressCopy,
 } from "@/lib/clientWorkflowColumns";
 import { formatDateUK, formatAssignedSlot } from "@/lib/dateUtils";
+import { ClientCreationError, readClientCreationError } from "@/lib/clientCreationError";
 import { correctSummaryClientName, editClientStatusPatch, getSummaryClientName } from "@shared/clientIdentitySummary";
 import { AllocationCardDetails, type AllocationVisibilityData } from "@/components/AllocationVisibility";
 import { AllocationOfferActions, type AllocationOfferState } from "@/components/AllocationOfferActions";
@@ -345,7 +346,7 @@ export default function Clients() {
         credentials: "include",
         body: JSON.stringify(clientData),
       });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw await readClientCreationError(response);
       const client = await response.json();
       if (formIds.length > 0) {
         try {
@@ -390,7 +391,7 @@ export default function Clients() {
       if (error?.clientId) setRecoveredClientId(error.clientId);
       let description = error?.clientCreated
         ? "Client was created, but one or more forms failed to send. Failed forms remain selected for retry."
-        : "Failed to create client.";
+        : error instanceof ClientCreationError ? error.message : "Failed to create client.";
       try {
         const body = await error?.response?.json?.();
         if (body?.error && typeof body.error === "string") description = body.error;

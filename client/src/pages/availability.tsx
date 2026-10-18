@@ -18,15 +18,10 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { RetireAvailabilityDialog } from "@/components/RetireAvailabilityDialog";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
 import { DatePicker } from "@/components/ui/date-picker";
@@ -142,24 +137,6 @@ export default function Availability() {
     },
     onSuccess: () => {
       invalidateOperationalData(queryClient);
-    },
-  });
-
-  const deleteSlotMutation = useMutation({
-    mutationFn: async ({ clinicianId, slotId }: { clinicianId: string; slotId: string }) => {
-      const response = await apiRequest("DELETE", `/api/timeslots/${clinicianId}/${slotId}`);
-      const body = await response.json();
-      if (!response.ok) throw new Error(body?.error || "Failed to retire slot");
-      return body;
-    },
-    onSuccess: () => {
-      invalidateOperationalData(queryClient);
-      toast({ title: "Slot Retired", description: "Time slot was retired and historical option records were preserved." });
-      setIsDeleteOpen(false);
-      setDeletingSlot(null);
-    },
-    onError: (error: Error) => {
-      toast({ title: "Slot not retired", description: error.message || "Failed to retire slot.", variant: "destructive" });
     },
   });
 
@@ -539,14 +516,6 @@ export default function Availability() {
   const handleDeleteClick = (slot: TimeSlot, clinicianId: string) => {
     setDeletingSlot({ slot, clinicianId });
     setIsDeleteOpen(true);
-  };
-
-  const handleConfirmDelete = () => {
-    if (!deletingSlot) return;
-    deleteSlotMutation.mutate({ 
-      clinicianId: deletingSlot.clinicianId, 
-      slotId: deletingSlot.slot.id 
-    });
   };
 
   const toggleDaySelection = (day: string) => {
@@ -1018,30 +987,8 @@ export default function Availability() {
         </div>
       </Card>
 
-      <AlertDialog open={isDeleteOpen} onOpenChange={setIsDeleteOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete Availability Slot</AlertDialogTitle>
-            <AlertDialogDescription>
-              {deletingSlot?.slot.isBooked 
-                ? "This slot is currently booked. Deleting it will permanently remove it and clear the booking from any associated client. This cannot be undone."
-                : "Are you sure you want to delete this time slot? This will permanently remove it from all future weeks. This action cannot be undone."
-              }
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleConfirmDelete}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              data-testid="button-confirm-delete"
-            >
-              {deleteSlotMutation.isPending ? "Deleting..." : "Delete"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <RetireAvailabilityDialog key={deletingSlot?.slot.id || "none"} open={isDeleteOpen}
+        target={deletingSlot} onClose={() => { setIsDeleteOpen(false); setDeletingSlot(null); }} />
 
       <AlertDialog open={!!inPersonWarning} onOpenChange={(open) => { if (!open) setInPersonWarning(null); }}>
         <AlertDialogContent>

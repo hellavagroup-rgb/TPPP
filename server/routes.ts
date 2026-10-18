@@ -8,6 +8,7 @@ import ExcelJS from "exceljs";
 import { ClientAllocationUpdateError, ManualAssignmentError, SlotRetirementConflictError, storage } from "./storage";
 import { getAllocationVisibility } from "./allocationVisibility";
 import { clientCreationConflict } from "./clientCreationError";
+import { writeuppSlotRetirement, WriteuppSlotRetirementError } from "./writeuppSlotRetirement";
 import { getAllocationOfferStates } from "./allocationOfferState";
 import { withTenantAllocationVisibility } from "@shared/allocationVisibility";
 import { setupAuth, requireAuth, requireAdmin, requireClinician, hashPassword, auditLog, destroySessionsForUser } from "./auth";
@@ -1129,6 +1130,36 @@ export async function registerRoutes(
       }
       console.error("Error deleting time slot:", error);
       res.status(500).json({ error: "Failed to delete time slot" });
+    }
+  });
+
+  // An explicit, audited alternative to deleting an occupied external appointment.
+  app.get("/api/timeslots/:clinicianId/:slotId/writeupp-retirement", requireAdmin, async (req, res) => {
+    if (!req.tenant?.id) return res.status(403).json({ error: "Practice context is required" });
+    try {
+      res.json(await writeuppSlotRetirement({
+        tenantId: req.tenant.id, clinicianId: req.params.clinicianId, slotId: req.params.slotId,
+      }));
+    } catch (error) {
+      res.status(error instanceof WriteuppSlotRetirementError ? error.status : 500).json({
+        error: error instanceof WriteuppSlotRetirementError ? error.message : "Could not check slot retirement.",
+      });
+    }
+  });
+
+  app.post("/api/timeslots/:clinicianId/:slotId/writeupp-retirement", requireAdmin, async (req, res) => {
+    if (!req.tenant?.id || !req.user?.id) return res.status(403).json({ error: "Practice administrator required" });
+    const parsed = z.object({ retireOccupiedSlot: z.literal(true), clientId: z.string().min(1) }).strict().safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Review and confirm retirement of this occupied slot." });
+    try {
+      res.json(await writeuppSlotRetirement({
+        tenantId: req.tenant.id, clinicianId: req.params.clinicianId, slotId: req.params.slotId,
+        confirm: true, expectedClientId: parsed.data.clientId, actorId: req.user.id, ipAddress: req.ip,
+      }));
+    } catch (error) {
+      res.status(error instanceof WriteuppSlotRetirementError ? error.status : 500).json({
+        error: error instanceof WriteuppSlotRetirementError ? error.message : "Could not retire the occupied slot. Refresh and try again.",
+      });
     }
   });
 

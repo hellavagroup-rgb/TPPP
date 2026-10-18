@@ -760,6 +760,52 @@ afterEach(async () => {
   if (server?.listening) await new Promise<void>((resolve, reject) => server!.close(error => error ? reject(error) : resolve()));
 });
 
+describe("occupied WriteUpp slot retirement HTTP routes", () => {
+  const path = "/api/timeslots/clinician-a/slot-a/writeupp-retirement";
+  const arrange = () => {
+    h.state.client.status = "AwaitingConfirmation";
+    h.state.slot.isBooked = true;
+    h.state.activities.push({ id: "arrangement-a", tenantId: "tenant-a", resourceType: "client",
+      resourceId: "client-a", action: "activity_writeupp_appointment_arranged" });
+  };
+
+  it("offers a preview and retires explicitly without client changes or notifications", async () => {
+    arrange();
+    const before = structuredClone(h.state.client);
+    const preview = await request(path);
+    expect(preview.status).toBe(200);
+    expect(preview.body).toMatchObject({ eligible: true, clientId: "client-a" });
+    expect(h.state.slot.retiredAt).toBeFalsy();
+    const response = await request(path, { method: "POST",
+      body: JSON.stringify({ retireOccupiedSlot: true, clientId: "client-a" }) });
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ retired: true });
+    expect(h.state.slot.retiredAt).toBeInstanceOf(Date);
+    expect(h.state.client).toEqual(before);
+    expect(h.state.emails).toEqual([]);
+    expect(h.state.paymentLinks).toEqual([]);
+    expect(h.state.bookingSnapshots).toEqual([]);
+    expect(h.state.activities.some(row => row.action === "activity_writeupp_slot_retired")).toBe(true);
+  });
+
+  it("requires explicit confirmation and current client identity", async () => {
+    arrange();
+    expect((await request(path, { method: "POST", body: "{}" })).status).toBe(400);
+    expect((await request(path, { method: "POST",
+      body: JSON.stringify({ retireOccupiedSlot: true, clientId: "wrong-client" }) })).status).toBe(409);
+    expect(h.state.slot.retiredAt).toBeFalsy();
+  });
+
+  it("rejects a slot from a different clinician", async () => {
+    arrange();
+    h.state.slot.clinicianId = "other-clinician";
+    expect((await request(path)).status).toBe(404);
+    expect((await request(path, { method: "POST",
+      body: JSON.stringify({ retireOccupiedSlot: true, clientId: "client-a" }) })).status).toBe(404);
+    expect(h.state.slot.retiredAt).toBeFalsy();
+  });
+});
+
 describe("manual client creation HTTP errors", () => {
   it.each([false, true])("returns a helpful 409 for duplicate W-numbers (wrapped=%s) without changing a confirmed client", async (wrapped) => {
     h.state.client.status = "BookingConfirmed";

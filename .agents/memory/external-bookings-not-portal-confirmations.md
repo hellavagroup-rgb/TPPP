@@ -26,3 +26,9 @@ Recording independently verified WriteUpp arrangements must not require repairin
 **Why:** Staff need to record the real external appointment, not rebuild obsolete portal selections. Requiring portal repair here adds unnecessary work and risks confusing external verification with payment recovery or a second booking confirmation.
 
 **How to apply:** Move cases out of the active booking queue only after an explicit staff assertion that WriteUpp is arranged; an ordinary historic review is not that assertion. Preserve unresolved portal evidence and reservations without silently repairing or releasing them.
+
+Staff may explicitly retire occupied portal availability for an appointment already recorded as arranged in WriteUpp, while preserving the client's appointment links and history. Do not require completing therapy, deallocation, portal confirmation or payment reconciliation to remove that occupied availability.
+
+**Why:** The user approved a safe removal action for externally arranged appointments whose therapy is already underway. The portal's pending confirmation state must not force staff to misrepresent therapy as completed or release occupied time for another client.
+
+**How to apply:** Keep this an explicit, audited administrative action rather than a side effect of recording a WriteUpp arrangement. Recheck ownership and the recorded arrangement at confirmation, retain the slot as retired history, and leave client, payment and delivery evidence unchanged.

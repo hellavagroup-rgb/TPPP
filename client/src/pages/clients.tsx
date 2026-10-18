@@ -4,6 +4,8 @@ import { confirmationBlocker, confirmationBlockerCopy } from "@shared/confirmati
 import { canInspectRegistrationPayment } from "@shared/paymentReconciliationEligibility";
 import { HistoricReconciliation, useHistoricReconciliation } from "@/components/HistoricReconciliation";
 import { CompactClientCard, ClientDetailPanel, hasRecordedAppointmentSelection } from "@/components/CompactClientCard";
+import { WriteUppAdminQueue } from "@/components/WriteUppAdminQueue";
+import { needsWriteUppAdminWork } from "@shared/writeUppAdminWork";
 import { BookingPaymentReview } from "@/components/BookingPaymentReview";
 import { ConfirmPortalReconcile } from "@/components/ConfirmPortalReconcile";
 import { WriteuppAppointmentAction } from "@/components/WriteuppAppointmentAction";
@@ -100,7 +102,7 @@ import { format, parseISO, isSameDay } from "date-fns";
 import { formatFormDate } from "@/lib/formDates";
 import { apiRequest } from "@/lib/queryClient";
 import { fetchOriginalEnquiry, MISSING_ORIGINAL_ENQUIRY } from "@/lib/originalEnquiry";
-import type { Client as ClientType, Clinician, FormTemplate as FormTemplateType, TimeSlot } from "@shared/schema";
+import type { Client as ClientType, Clinician, FormTemplate as FormTemplateType, TimeSlot, BookingSnapshot } from "@shared/schema";
 import { useInsurers, useAddInsurer } from "@/hooks/use-insurers";
 import { useAuth } from "@/lib/auth";
 import { isPendingZoomDelivery, isValidZoomLink } from "@shared/bookingZoom";
@@ -148,7 +150,7 @@ type BoardClient = ClientType & {
     sentAt?: string | null;
   };
   allocationOfferEligibility?: AllocationOfferEligibility | null;
-  bookingSnapshot?: { id: string } | null;
+  bookingSnapshot?: BookingSnapshot | null;
   writeuppArranged?: boolean;
 };
 
@@ -1505,6 +1507,12 @@ export default function Clients() {
   const staffConfirmed = (client: ClientType) => isStaffConfirmed({
     status: client.status, writeuppArranged: arrangedHistoricIds.has(client.id),
   });
+  // Confirmed bookings stay confirmed (including their calendar occupancy).
+  // Tenant 2 also needs a working list until both manual WriteUpp checks are saved.
+  const pendingWriteUppAdminClients = clients.filter(client =>
+    needsWriteUppAdminWork(client, tenant?.id)
+    && (!searchTerm || client.displayId.toLowerCase().includes(searchTerm.toLowerCase())),
+  );
   const filteredClients = clients.filter(client => {
     const matchesSearch = searchTerm === "" || client.displayId.toLowerCase().includes(searchTerm.toLowerCase());
     
@@ -2326,6 +2334,23 @@ export default function Clients() {
       {historicReconciliationEnabled && <HistoricReconciliation rows={historicInventory.data || []} error={historicInventory.isError} />}
 
       {/* Kanban Board */}
+      {!showConfirmedState && !showArchivedState && !showCompletedState && (
+        <WriteUppAdminQueue
+          clients={pendingWriteUppAdminClients.map(client => ({
+            ...client,
+            name: intakeClientSummaryEnabled ? getSummaryClientName(client.notes) : null,
+            description: compactDescription(client),
+          }))}
+          saving={updateClientMutation.isPending}
+          canEdit={isAdmin}
+          onUpdate={(id, updates) => updateClientMutation.mutate({ id, updates })}
+          onView={client => {
+            setSearchTerm(client.displayId);
+            setShowPendingZoomLinksOnly(false);
+            setShowConfirmedState(true);
+          }}
+        />
+      )}
       {!showConfirmedState && !showArchivedState && !showCompletedState ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           {/* Column 1: Pending Intake */}

@@ -6,6 +6,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import Clients from "./clients";
+import { CYA_PSYCHOLOGY_TENANT_ID } from "@shared/practicePolicies";
 
 const uiSignals = vi.hoisted(() => ({ toast: vi.fn() }));
 vi.mock("@/hooks/use-toast", () => ({
@@ -91,6 +92,21 @@ function makeClient(id: string, displayId: string, status: string): ClientFixtur
     isArchived: false,
     completedAt: null,
     notes: null,
+  };
+}
+
+function cyaConfirmedClient(overrides: Record<string, any> = {}): ClientFixture {
+  return {
+    ...makeClient("cya-confirmed", "WU-ADMIN-1", "BookingConfirmed"),
+    tenantId: CYA_PSYCHOLOGY_TENANT_ID,
+    confirmedAt: "2026-10-18T12:00:00Z",
+    paymentType: "self_pay", paymentStatus: "paid",
+    writeuppAppointmentConfirmed: false, writeuppDataTransferred: false,
+    bookingSnapshot: {
+      id: "booking-cya", clinicianName: "Fixture clinician", slotType: "Recurring",
+      day: "Wednesday", date: null, startTime: "15:00", endTime: "16:00",
+    },
+    ...overrides,
   };
 }
 
@@ -345,6 +361,129 @@ describe("Clients page compact board integration", () => {
     expect(writes[0]).toMatchObject({ displayId: "WLAYOUT1", status: "New" });
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add New Referral" })).toBeNull());
     expect(uiSignals.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Client Created" }));
+  });
+
+  it.each([false, true])("keeps Tenant 2 confirmed admin work visible with compact board=%s", async compact => {
+    apiFixtures.tenant = makeTenant({
+      id: CYA_PSYCHOLOGY_TENANT_ID, multiClinicianAllocationEnabled: compact,
+      writeuppChecklistEnabled: true, registrationFormEnabled: true,
+    });
+    apiFixtures.clients = [cyaConfirmedClient()];
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const card = await screen.findByTestId("writeupp-admin-card-cya-confirmed");
+    expect(within(card).getByText("Booking confirmed")).toBeTruthy();
+    expect(within(card).getByText(/Fixture clinician · Wednesday/)).toBeTruthy();
+    expect(within(card).getByRole("checkbox", { name: "Appointment confirmed in WriteUpp" })).toBeTruthy();
+    expect(within(card).getByRole("checkbox", { name: "Data transferred to WriteUpp" })).toBeTruthy();
+    expect(within(card).queryByText(/Awaiting registration|Payment link|Mark as Confirmed/)).toBeNull();
+  });
+
+  it("keeps Tenant 1 unchanged even with identical feature settings and incomplete checks", async () => {
+    apiFixtures.tenant = makeTenant({ writeuppChecklistEnabled: true, registrationFormEnabled: true });
+    apiFixtures.clients = [cyaConfirmedClient({ tenantId: "tenant-1" })];
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const user = userEvent.setup();
+    await screen.findByText("Client Allocation");
+    expect(screen.queryByTestId("writeupp-admin-queue")).toBeNull();
+    await user.click(screen.getByRole("switch", { name: "Show Confirmed" }));
+    await screen.findByTestId("client-record-cya-confirmed");
+  });
+
+  it("only clears saved admin work after both boxes are ticked and preserves the confirmed record", async () => {
+    apiFixtures.tenant = makeTenant({ id: CYA_PSYCHOLOGY_TENANT_ID, writeuppChecklistEnabled: true });
+    apiFixtures.clients = [cyaConfirmedClient()];
+    const before = structuredClone(apiFixtures.clients[0]);
+    const originalFetch = vi.mocked(fetch).getMockImplementation()!;
+    const writes: Record<string, unknown>[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: any, init?: any) => {
+      if (String(input) === "/api/clients/cya-confirmed" && init?.method === "PATCH") {
+        const update = JSON.parse(init.body);
+        writes.push(update);
+        apiFixtures.clients = [{ ...apiFixtures.clients[0], ...update }];
+        return json(apiFixtures.clients[0]);
+      }
+      return originalFetch(input, init);
+    }));
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const user = userEvent.setup();
+    const card = await screen.findByTestId("writeupp-admin-card-cya-confirmed");
+    await user.click(within(card).getByRole("checkbox", { name: "Appointment confirmed in WriteUpp" }));
+    await waitFor(() => expect(within(screen.getByTestId("writeupp-admin-card-cya-confirmed"))
+      .getByRole("checkbox", { name: "Appointment confirmed in WriteUpp" }).getAttribute("aria-checked")).toBe("true"));
+    expect(writes).toEqual([{ writeuppAppointmentConfirmed: true }]);
+    await user.click(within(screen.getByTestId("writeupp-admin-card-cya-confirmed"))
+      .getByRole("checkbox", { name: "Data transferred to WriteUpp" }));
+    await waitFor(() => expect(screen.queryByTestId("writeupp-admin-queue")).toBeNull());
+    expect(writes).toEqual([{ writeuppAppointmentConfirmed: true }, { writeuppDataTransferred: true }]);
+    expect(apiFixtures.clients[0]).toEqual({
+      ...before, writeuppAppointmentConfirmed: true, writeuppDataTransferred: true,
+    });
+    await user.click(screen.getByRole("switch", { name: "Show Confirmed" }));
+    const confirmedCard = await screen.findByTestId("client-record-cya-confirmed");
+    await user.click(within(confirmedCard).getByRole("checkbox", { name: "Data transferred to WriteUpp" }));
+    await waitFor(() => expect(apiFixtures.clients[0].writeuppDataTransferred).toBe(false));
+    await user.click(screen.getByRole("switch", { name: "Show Confirmed" }));
+    await screen.findByTestId("writeupp-admin-card-cya-confirmed");
+    expect(apiFixtures.clients[0]).toEqual({
+      ...before, writeuppAppointmentConfirmed: true, writeuppDataTransferred: false,
+    });
+  });
+
+  it("keeps failed checkbox saves in the working list", async () => {
+    apiFixtures.tenant = makeTenant({ id: CYA_PSYCHOLOGY_TENANT_ID });
+    apiFixtures.clients = [cyaConfirmedClient({ writeuppAppointmentConfirmed: true })];
+    const originalFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.stubGlobal("fetch", vi.fn(async (input: any, init?: any) => {
+      if (String(input) === "/api/clients/cya-confirmed" && init?.method === "PATCH") {
+        return json({ error: "Save failed" }, 500);
+      }
+      return originalFetch(input, init);
+    }));
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const user = userEvent.setup();
+    const card = await screen.findByTestId("writeupp-admin-card-cya-confirmed");
+    await user.click(within(card).getByRole("checkbox", { name: "Data transferred to WriteUpp" }));
+    await waitFor(() => expect(uiSignals.toast).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Client not updated",
+    })));
+    expect(screen.getByTestId("writeupp-admin-card-cya-confirmed")).toBeTruthy();
+    expect(within(card).getByRole("checkbox", { name: "Data transferred to WriteUpp" })
+      .getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("keeps fully checked, archived and completed bookings out of the active admin queue", async () => {
+    apiFixtures.tenant = makeTenant({ id: CYA_PSYCHOLOGY_TENANT_ID });
+    apiFixtures.clients = [
+      cyaConfirmedClient({ id: "finished", writeuppAppointmentConfirmed: true, writeuppDataTransferred: true }),
+      cyaConfirmedClient({ id: "archived", isArchived: true }),
+      cyaConfirmedClient({ id: "completed", completedAt: "2026-10-18T13:00:00Z" }),
+    ];
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    await screen.findByText("Client Allocation");
+    expect(screen.queryByTestId("writeupp-admin-queue")).toBeNull();
+  });
+
+  it("respects search and opens the confirmed record without writing any booking changes", async () => {
+    apiFixtures.tenant = makeTenant({ id: CYA_PSYCHOLOGY_TENANT_ID, writeuppChecklistEnabled: true });
+    apiFixtures.clients = [cyaConfirmedClient()];
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const user = userEvent.setup();
+    await screen.findByTestId("writeupp-admin-card-cya-confirmed");
+    const search = screen.getByPlaceholderText("Search by Client ID (W...)");
+    await user.type(search, "NO-MATCH");
+    expect(screen.queryByTestId("writeupp-admin-queue")).toBeNull();
+    await user.clear(search);
+    const card = await screen.findByTestId("writeupp-admin-card-cya-confirmed");
+    await user.click(within(card).getByRole("button", { name: "View confirmed booking" }));
+    await screen.findByTestId("client-record-cya-confirmed");
+    expect(screen.queryByTestId("writeupp-admin-queue")).toBeNull();
+    expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === "PATCH" || init?.method === "POST")).toBe(false);
   });
 
   async function openConfirmedEdit(clientId: string, user: ReturnType<typeof userEvent.setup>) {

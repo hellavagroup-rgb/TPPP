@@ -1,12 +1,7 @@
 import { formatOfferDate } from "./offerSchedule";
 import { practiceToday } from "./slotEligibility";
 
-// A presentation-only practice policy. Do not infer it from a display name or
-// reuse workflow/payment flags: every other practice keeps its existing output.
-export const CYA_PSYCHOLOGY_TENANT_ID = "92fbc179-2b4e-41e9-9326-4d8e008ca5be";
-export function usesRegularSessionCopy(tenantId?: string | null): boolean {
-  return tenantId === CYA_PSYCHOLOGY_TENANT_ID;
-}
+export { CYA_PSYCHOLOGY_TENANT_ID, isCyaPsychologyTenant as usesRegularSessionCopy } from "./practicePolicies";
 
 export const FIRST_SESSION_TO_AGREE = "First session date: to be agreed.";
 export const REGULAR_SESSION_NEXT_STEPS =

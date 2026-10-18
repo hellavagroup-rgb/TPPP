@@ -26,6 +26,7 @@ import {
   type RecentActivityCategory,
 } from "./activity";
 import { shouldResetZoomDelivery } from "@shared/bookingZoom";
+import { visibleCalendarSlots } from "@shared/calendarBooking";
 import { slotUnavailableReason } from "@shared/slotEligibility";
 import { UNALLOCATED_CLIENT_STATUSES } from "./strandedAllocationRepair";
 import {
@@ -398,10 +399,34 @@ export class DatabaseStorage implements IStorage {
 
   // ============ TIME SLOTS ============
   async getTimeSlotsByClinicianId(clinicianId: string): Promise<TimeSlot[]> {
-    return await db.select().from(timeSlots).where(and(
+    const slots = await db.select().from(timeSlots).where(and(
       eq(timeSlots.clinicianId, clinicianId),
       isNull(timeSlots.retiredAt),
     ));
+    if (!slots.length) return slots;
+    // Existing WriteUpp bookings must disappear automatically too. Read the
+    // recorded arrangement without rewriting clinical/payment/portal evidence.
+    // Verify the client's practice through the reliably scoped parent clinician;
+    // legacy slot rows can have a null tenantId.
+    const reservations = await db.select({
+      assignedSlotId: clients.assignedSlotId,
+      status: clients.status,
+      writeuppArranged: sql<boolean>`exists (
+        select 1 from audit_logs arrangement
+        where arrangement.tenant_id = ${clients.tenantId}
+          and arrangement.resource_id = ${clients.id}
+          and arrangement.resource_type = 'client'
+          and arrangement.action = 'activity_writeupp_appointment_arranged'
+      )`,
+    }).from(clients).innerJoin(clinicians, and(
+      eq(clients.assignedClinicianId, clinicians.id),
+      eq(clients.tenantId, clinicians.tenantId),
+    )).where(and(
+      eq(clinicians.id, clinicianId),
+      inArray(clients.assignedSlotId, slots.map(slot => slot.id)),
+      inArray(clients.status, ["Scheduled", "BookingConfirmed", "AwaitingConfirmation", "RegistrationPending"]),
+    ));
+    return visibleCalendarSlots(slots, reservations);
   }
 
   async createTimeSlot(slot: InsertTimeSlot): Promise<TimeSlot> {

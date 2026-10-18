@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { useHistoricReconciliation, type HistoricRow } from "@/components/HistoricReconciliation";
+import { invalidateOperationalData } from "@/lib/operationalRefresh";
 
 export function WriteuppAppointmentAction({
   clientId, enabled, onRecorded,
@@ -23,7 +24,7 @@ export function WriteuppAppointmentAction({
       cache.setQueryData<HistoricRow[]>(["/api/historic-reconciliation"], rows =>
         rows?.map(item => item.id === clientId ? { ...item, writeuppArranged: true } : item));
       cache.invalidateQueries({ queryKey: ["/api/historic-reconciliation"] });
-      cache.invalidateQueries({ queryKey: ["/api/clients"] });
+      invalidateOperationalData(cache);
       onRecorded?.();
     },
   });

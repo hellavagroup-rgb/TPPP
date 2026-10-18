@@ -12,11 +12,7 @@ export function getWriteUppArrangedIds(
 
 // This is a staff-view classification, not a portal booking/payment assertion.
 // An explicit reopen into intake or matching stays active despite old diary evidence.
-export function isStaffConfirmed(client: { status: string; writeuppArranged?: boolean | null }): boolean {
-  return ["Scheduled", "BookingConfirmed"].includes(client.status)
-    || (["AwaitingConfirmation", "RegistrationPending"].includes(client.status)
-      && isExplicitlyWriteUppArranged(client));
-}
+export { isCalendarConfirmed as isStaffConfirmed } from "@shared/calendarBooking";
 
 export function classifyBookingProgress<T extends { status: string; writeuppArranged?: boolean | null }>(clients: T[]) {
   const confirmed = clients.filter(client => client.status === "BookingConfirmed");

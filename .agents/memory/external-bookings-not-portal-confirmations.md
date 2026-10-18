@@ -1,9 +1,13 @@
 ---
-name: External bookings are not portal confirmations
-description: How to keep historic external diary evidence separate from internal booking state.
+name: WriteUpp bookings are confirmed
+description: Confirmed staff/calendar behaviour for WriteUpp bookings without inventing portal payment or delivery evidence.
 ---
 
-Clients explicitly marked as arranged in WriteUpp belong in the staff Confirmed view, not a separate active Kanban column. Portal-confirmed clients also stay off the active Kanban. A mere diary review is not an arrangement acknowledgement.
+An appointment booked in WriteUpp is confirmed. Clients explicitly marked as arranged in WriteUpp belong in the staff Confirmed view, and their occupied slots must automatically disappear from the availability calendar, including existing bookings. Staff must not need a separate slot-removal step. A mere diary review is not an arrangement acknowledgement.
+
+**Why:** The user reiterated: “Once a booking is confirmed it should no longer be shown in the availability calendar” and clarified: “if a slot has been booked in writeup then it is confirmed.”
+
+**How to apply:** Treat the recorded WriteUpp arrangement as confirmation for staff workflow and calendar visibility even if the legacy portal status is AwaitingConfirmation or RegistrationPending. Preserve appointment links and occupied-time protection; do not fabricate checkout, payment, consent, delivery or portal booking snapshot evidence.
 
 **Why:** The user said that cases with no further booking action clog the dashboard and should move to Confirmed rather than remain on the Kanban.
 
@@ -31,4 +35,4 @@ Staff may explicitly retire occupied portal availability for an appointment alre
 
 **Why:** The user approved a safe removal action for externally arranged appointments whose therapy is already underway. The portal's pending confirmation state must not force staff to misrepresent therapy as completed or release occupied time for another client.
 
-**How to apply:** Keep this an explicit, audited administrative action rather than a side effect of recording a WriteUpp arrangement. Recheck ownership and the recorded arrangement at confirmation, retain the slot as retired history, and leave client, payment and delivery evidence unchanged.
+**How to apply:** Explicit audited retirement is an optional recovery tool, not the normal route for a confirmed WriteUpp booking. Calendar removal must be automatic once the arrangement is recorded. Leave client, payment and delivery evidence unchanged.

@@ -51,13 +51,16 @@ function setup(options: {
 describe("WriteUpp appointment arrangement action", () => {
   it("records the arrangement with one click and no form or extra confirmation", async () => {
     const onRecorded = vi.fn();
-    const { savedPosts } = setup({ onRecorded });
+    const { savedPosts, client } = setup({ onRecorded });
+    const invalidation = vi.spyOn(client, "invalidateQueries");
     fireEvent.click(await screen.findByRole("button", { name: "Appointment arranged in WriteUpp" }));
     expect(await screen.findByRole("status")).toHaveProperty(
       "textContent", "Appointment arranged in WriteUpp. No further booking action needed.",
     );
     expect(savedPosts).toEqual([{ arrangedInWriteupp: true }]);
     expect(onRecorded).toHaveBeenCalledOnce();
+    expect(invalidation).toHaveBeenCalledWith({ queryKey: ["/api/clinicians"] });
+    expect(invalidation).toHaveBeenCalledWith({ queryKey: ["/api/clinicians/me/slot-clients"] });
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();
     expect(screen.queryByRole("checkbox")).toBeNull();

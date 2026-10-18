@@ -847,6 +847,24 @@ describe("manual client creation HTTP errors", () => {
 });
 
 describe("registration journey HTTP routes", () => {
+  it.each([
+    ["92fbc179-2b4e-41e9-9326-4d8e008ca5be", true],
+    ["0199f88e-fc37-453f-8e14-1152f790d40b", false],
+    ["other-practice", false],
+  ])("derives recurring presentation from the option's verified tenant %s, not a public query flag", async (tenantId, expected) => {
+    h.state.tenant.id = tenantId;
+    h.state.tenant.name = "CY&A Psychology";
+    h.state.client.tenantId = tenantId;
+    h.state.clinician.tenantId = tenantId;
+    h.state.slot.tenantId = tenantId;
+    h.state.options.forEach(option => { option.tenantId = tenantId; });
+    const response = await request("/api/public/options/selection-token-a?regularSessionCopy=true");
+    expect(response.status).toBe(200);
+    expect(response.body.regularSessionCopy).toBe(expected);
+    expect(h.state.activities).toEqual([]);
+    expect(h.state.emails).toEqual([]);
+  });
+
   it("refuses a foreign booking snapshot instead of treating it as this tenant's confirmation", async () => {
     resetState({
       tenant: { confirmationRecoveryEnabled: true, paymentsEnabled: false },

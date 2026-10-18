@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Loader2, CheckCircle2, UserX, Clock, MapPin } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { formatOfferDate, formatOfferFrequency, formatOfferTimeRange, formatOfferWindow } from "@shared/offerSchedule";
+import { regularSessionConstraints, FIRST_SESSION_TO_AGREE, REGULAR_SESSION_NEXT_STEPS } from "@shared/regularSessionCopy";
 
 interface OptionDetail {
   id: string;
@@ -30,6 +31,7 @@ interface OptionsData {
   clientStatus: string;
   tenantName: string;
   primaryColor: string | null;
+  regularSessionCopy?: boolean;
   registrationUrl?: string | null;
 }
 
@@ -193,12 +195,19 @@ export default function OptionSelection() {
                       </>
                     ) : (
                       <>
+                        {data.regularSessionCopy && <span className="font-medium">Regular session slot</span>}
                         <span className="flex items-center gap-1.5">
                           <Clock className="h-3.5 w-3.5" />
                           {formatOfferFrequency(option.slot.frequency)} · {option.slot.day || "Weekday unavailable"} · {formatOfferTimeRange(option.slot.startTime, option.slot.endTime)}
                         </span>
-                        <span>{formatOfferWindow(option.slot.startDate, option.slot.endDate)}</span>
-                        <span>First appointment date to be confirmed.</span>
+                        {data.regularSessionCopy ? <>
+                          {regularSessionConstraints(option.slot.startDate, option.slot.endDate).map(line => <span key={line}>{line}</span>)}
+                          <span>{FIRST_SESSION_TO_AGREE}</span>
+                          <span>{REGULAR_SESSION_NEXT_STEPS}</span>
+                        </> : <>
+                          <span>{formatOfferWindow(option.slot.startDate, option.slot.endDate)}</span>
+                          <span>First appointment date to be confirmed.</span>
+                        </>}
                       </>
                     )}
                     <span className="flex items-center gap-1.5">

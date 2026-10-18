@@ -1,6 +1,8 @@
 import { Resend } from 'resend';
 import { storage } from './storage';
 import { formatOfferDate, formatOfferFrequency, formatOfferTimeRange, formatOfferWindow } from '../shared/offerSchedule';
+import { usesRegularSessionCopy, regularSessionConstraints, FIRST_SESSION_TO_AGREE,
+  REGULAR_SESSION_NEXT_STEPS, REGULAR_SESSION_CONFIRMED, FIRST_SESSION_CONTACT } from '../shared/regularSessionCopy';
 
 let resend: Resend | null = null;
 function getResend(): Resend {
@@ -524,6 +526,14 @@ export async function generateAllocationOptionsEmail(
       return `Option ${i + 1}: One-off appointment — ${oneOffDate}, ${timeRange}${modeLabel}`;
     }
     const weekday = opt.day || 'Weekday not specified';
+    if (usesRegularSessionCopy(tenant?.id)) {
+      return [
+        `Option ${i + 1}: Regular session slot — ${formatOfferFrequency(opt.frequency)} — ${weekday}, ${timeRange}${modeLabel}`,
+        ...regularSessionConstraints(opt.startDate, opt.endDate),
+        FIRST_SESSION_TO_AGREE,
+        REGULAR_SESSION_NEXT_STEPS,
+      ].join('\n');
+    }
     return [
       `Option ${i + 1}: ${formatOfferFrequency(opt.frequency)} — ${weekday}, ${timeRange}${modeLabel}`,
       formatOfferWindow(opt.startDate, opt.endDate),
@@ -611,6 +621,8 @@ export async function generateBookingConfirmedEmail(
 ): Promise<EmailOptions> {
   const practiceName = tenant?.name || GENERIC_PRACTICE_NAME;
   const storedTemplate = await getStoredTemplate('booking_confirmed', tenant?.id);
+  const regularSession = usesRegularSessionCopy(tenant?.id) && details.type !== 'SpecificDate';
+  const header = regularSession ? 'Regular Session Slot Confirmed' : 'Booking Confirmed';
 
   let dayLabel: string;
   if (details.type === 'SpecificDate' && details.date) {
@@ -625,23 +637,42 @@ export async function generateBookingConfirmedEmail(
     : `${details.startTime}–${details.endTime}`;
 
   if (storedTemplate) {
-    const bodyText = replacePlaceholders(storedTemplate.bodyText, {
+    const renderedBody = replacePlaceholders(storedTemplate.bodyText, {
       clinician_name: details.clinicianName,
       appointment_time: slotDisplay,
       zoom_link: '',
       practice_name: practiceName,
     });
+    // Preserve practice-authored text and placeholders, but always clarify the
+    // first-session distinction for this practice's recurring confirmations.
+    const bodyText = regularSession
+      ? `${renderedBody}\n\n${REGULAR_SESSION_CONFIRMED}\n${FIRST_SESSION_TO_AGREE}\n${FIRST_SESSION_CONTACT}`
+      : renderedBody;
     const subject = replacePlaceholders(storedTemplate.subject, { practice_name: practiceName });
     return {
       to: '',
       subject,
-      html: wrapInHtmlTemplate(bodyText, 'Booking Confirmed', practiceName, tenant?.primaryColor),
+      html: wrapInHtmlTemplate(bodyText, header, practiceName, tenant?.primaryColor),
       text: bodyText,
       from: buildFromAddress(tenant),
     };
   }
 
-  const defaultBody = `Your booking is confirmed.
+  const defaultBody = regularSession
+    ? `${REGULAR_SESSION_CONFIRMED}
+
+Regular Session Slot:
+Clinician: ${details.clinicianName}
+Time: ${slotDisplay}
+
+${FIRST_SESSION_TO_AGREE}
+${FIRST_SESSION_CONTACT}
+
+If you have any questions or need to make changes, please don't hesitate to contact us.
+
+Warm regards,
+${practiceName} Team`
+    : `Your booking is confirmed.
 
 Appointment Details:
 Clinician: ${details.clinicianName}
@@ -654,8 +685,8 @@ ${practiceName} Team`;
 
   return {
     to: '',
-    subject: `Booking Confirmed - ${practiceName}`,
-    html: wrapInHtmlTemplate(defaultBody, 'Booking Confirmed', practiceName, tenant?.primaryColor),
+    subject: `${regularSession ? 'Regular Session Slot Confirmed' : 'Booking Confirmed'} - ${practiceName}`,
+    html: wrapInHtmlTemplate(defaultBody, header, practiceName, tenant?.primaryColor),
     text: defaultBody,
     from: buildFromAddress(tenant),
   };

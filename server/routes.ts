@@ -11,6 +11,7 @@ import { clientCreationConflict } from "./clientCreationError";
 import { writeuppSlotRetirement, WriteuppSlotRetirementError } from "./writeuppSlotRetirement";
 import { getAllocationOfferStates } from "./allocationOfferState";
 import { withTenantAllocationVisibility } from "@shared/allocationVisibility";
+import { usesRegularSessionCopy } from "@shared/regularSessionCopy";
 import { setupAuth, requireAuth, requireAdmin, requireClinician, hashPassword, auditLog, destroySessionsForUser } from "./auth";
 import { registerManagerConfirmationRoutes } from "./managerConfirmation";
 import passport from "passport";
@@ -3134,6 +3135,7 @@ export async function registerRoutes(
         options: optionsWithDetails,
         clientStatus: client.status,
         tenantName: tenant?.name || "",
+        regularSessionCopy: usesRegularSessionCopy(optionRow.tenantId),
         primaryColor: tenant?.primaryColor || null,
         registrationUrl: tenant?.registrationFormEnabled
           && client.status === "OptionSelected"

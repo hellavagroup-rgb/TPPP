@@ -23,13 +23,14 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function renderOptions(options: unknown[]) {
+function renderOptions(options: unknown[], regularSessionCopy = false) {
   useQueryMock.mockReturnValue({
     data: {
       options,
       clientStatus: "OptionsSent",
       tenantName: "Test Practice",
       primaryColor: null,
+      regularSessionCopy,
     },
     isLoading: false,
     isError: false,
@@ -39,6 +40,35 @@ function renderOptions(options: unknown[]) {
 }
 
 describe("public allocation option details", () => {
+  const recurring = {
+    id: "weekly", status: "pending", clinicianName: "Dr Eve", available: true,
+    slot: { type: "Recurring", day: "Wednesday", date: null, startTime: "15:00", endTime: "16:00",
+      locationType: "online", frequency: "weekly", startDate: "2020-10-07", endDate: null },
+  };
+
+  it("uses the Tenant 2 wording for recurring slots without showing a historical window date", () => {
+    renderOptions([recurring], true);
+    expect(screen.getByText("Regular session slot")).toBeTruthy();
+    expect(screen.getByText("Weekly · Wednesday · 3:00 PM–4:00 PM")).toBeTruthy();
+    expect(screen.getByText("First session date: to be agreed.")).toBeTruthy();
+    expect(screen.getByText(/After you choose a slot and complete registration/)).toBeTruthy();
+    expect(screen.queryByText(/Availability window|7 Oct 2020|within.*weeks/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Select this option" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  it("retains real future constraints and fortnightly frequency for Tenant 2", () => {
+    renderOptions([{ ...recurring, slot: { ...recurring.slot, frequency: "fortnightly", startDate: "2099-10-07" } }], true);
+    expect(screen.getByText("Fortnightly · Wednesday · 3:00 PM–4:00 PM")).toBeTruthy();
+    expect(screen.getByText("Available from 7 Oct 2099 (earliest possible start; first session date to be agreed).")).toBeTruthy();
+  });
+
+  it("keeps exact one-off dates for Tenant 2 without the recurring-first-session disclaimer", () => {
+    renderOptions([{ ...recurring, slot: { ...recurring.slot, type: "SpecificDate", date: "2099-10-07" } }], true);
+    expect(screen.getByText("One-off appointment: 7 Oct 2099")).toBeTruthy();
+    expect(screen.queryByText("First session date: to be agreed.")).toBeNull();
+    expect(screen.queryByText("Regular session slot")).toBeNull();
+  });
+
   it("shows recurrence and the availability window without inventing a first appointment", () => {
     renderOptions([{
       id: "weekly", status: "pending", clinicianName: "Dr Eve", available: true,

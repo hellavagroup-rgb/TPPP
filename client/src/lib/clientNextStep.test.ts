@@ -3,7 +3,71 @@ import {
   bookingCompletionNextStep,
   getClientNextStep,
   getCompactClientDescription,
+  shouldShowNeedsCall,
 } from "./clientNextStep";
+import { CYA_PSYCHOLOGY_TENANT_ID } from "@shared/practicePolicies";
+
+describe("Tenant 2 offer call prompts", () => {
+  const offer = {
+    tenantId: CYA_PSYCHOLOGY_TENANT_ID, status: "OptionsSent", needsAdminCall: true,
+    offerState: "pending", offerDeliveryRecorded: true,
+    offerEligibility: { pendingCount: 2, availableCount: 2, unavailableCount: 0 },
+    isAdmin: true,
+  };
+
+  it("shows waiting for the family despite an old intake call flag, without mutating it", () => {
+    const before = structuredClone(offer);
+    expect(getClientNextStep(offer)).toMatchObject({ kind: "waiting", title: "Waiting for the family to choose" });
+    expect(shouldShowNeedsCall(offer)).toBe(false);
+    expect(offer).toEqual(before);
+  });
+
+  it("shows the real decline follow-up until staff mark the call as completed", () => {
+    const declined = { ...offer, offerState: "declined", offerEligibility: undefined };
+    expect(getClientNextStep(declined)).toMatchObject({
+      kind: "action", title: "Call the family about declined options", action: "review_offer",
+    });
+    expect(shouldShowNeedsCall(declined)).toBe(true);
+    expect(shouldShowNeedsCall({ ...declined, needsAdminCall: false })).toBe(false);
+    expect(getClientNextStep({ ...declined, needsAdminCall: false })).toMatchObject({
+      title: "Offer new appointment choices",
+    });
+  });
+
+  it.each([false, undefined])("preserves missing-delivery warnings (accepted=%s)", offerDeliveryRecorded => {
+    expect(getClientNextStep({ ...offer, offerDeliveryRecorded })).toMatchObject({
+      kind: "action", title: "Review offer delivery", action: "review_offer",
+    });
+  });
+
+  it("preserves unavailable-choice warnings instead of falsely waiting", () => {
+    expect(getClientNextStep({ ...offer,
+      offerEligibility: { pendingCount: 2, availableCount: 1, unavailableCount: 1 },
+    })).toMatchObject({ kind: "action", title: "Offer new appointment choices" });
+  });
+
+  it.each(["closed", null, undefined])("does not infer a decline or call from offer state %s", offerState => {
+    const input = { ...offer, offerState, offerEligibility: undefined };
+    expect(shouldShowNeedsCall(input)).toBe(false);
+    expect(getClientNextStep(input).kind).toBe("action");
+    expect(getClientNextStep(input).title).not.toMatch(/Call the family/);
+  });
+
+  it.each(["New", "Forms Sent", "Forms Completed", "Assigned"])("preserves existing earlier-stage call flags for %s", status => {
+    expect(shouldShowNeedsCall({ ...offer, status })).toBe(true);
+  });
+
+  it.each(["0199f88e-fc37-453f-8e14-1152f790d40b", "another-practice", undefined, null])(
+    "leaves existing behaviour unchanged for practice %s", tenantId => {
+      const input = { ...offer, tenantId };
+      expect(shouldShowNeedsCall(input)).toBe(true);
+      expect(getClientNextStep(input)).toMatchObject({
+        kind: "action", title: "Review the appointment offer",
+        detail: "A staff follow-up is flagged; no appointment selection is recorded here.",
+      });
+    },
+  );
+});
 
 describe("booking completion guidance", () => {
   const complete = { kind: "action" as const, title: "Complete", detail: "Ready", action: "complete" as const };

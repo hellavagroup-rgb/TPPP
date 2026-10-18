@@ -1,4 +1,5 @@
 import { bookingCompletionBlockerCopy, type BookingCompletionBlockerCode } from "@shared/bookingCompletion";
+import { isCyaPsychologyTenant } from "@shared/practicePolicies";
 
 export type ClientNextStepAction =
   | "offer_new_choices"
@@ -13,6 +14,7 @@ export type ClientNextStepAction =
   | "review_offer";
 
 export interface ClientNextStepInput {
+  tenantId?: string | null;
   status: string;
   registrationProgress?: string;
   paymentProgress?: string;
@@ -167,7 +169,14 @@ function paymentNextStep(input: ClientNextStepInput): ClientNextStep {
 function optionsSentNextStep(input: ClientNextStepInput): ClientNextStep {
   const eligibility = input.offerEligibility;
 
-  if (input.needsAdminCall) {
+  if (shouldShowNeedsCall(input)) {
+    if (isCyaPsychologyTenant(input.tenantId) && input.offerState === "declined") {
+      return action(
+        "Call the family about declined options",
+        "The family declined the offered choices. Contact them to discuss alternatives, then mark the call as completed.",
+        "review_offer",
+      );
+    }
     return action(
       "Review the appointment offer",
       "A staff follow-up is flagged; no appointment selection is recorded here.",
@@ -216,6 +225,19 @@ function optionsSentNextStep(input: ClientNextStepInput): ClientNextStep {
     "Offer delivery or current choice availability is not established; check the offer record before contacting the family.",
     "review_offer",
   );
+}
+
+/** A past intake call flag is not evidence that the current offer was declined.
+ * Keep the saved flag intact, but use the same stage-aware rule for badge and guidance.
+ */
+export function shouldShowNeedsCall(
+  input: Pick<ClientNextStepInput, "tenantId" | "status" | "offerState" | "needsAdminCall">,
+): boolean {
+  if (!input.needsAdminCall) return false;
+  if (isCyaPsychologyTenant(input.tenantId) && input.status === "OptionsSent") {
+    return input.offerState === "declined";
+  }
+  return true;
 }
 
 /**

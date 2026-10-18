@@ -110,6 +110,16 @@ function cyaConfirmedClient(overrides: Record<string, any> = {}): ClientFixture 
   };
 }
 
+function cyaOfferedClient(overrides: Record<string, any> = {}): ClientFixture {
+  return {
+    ...makeClient("matched-offer", "WU-OFFER", "OptionsSent"),
+    tenantId: CYA_PSYCHOLOGY_TENANT_ID, needsAdminCall: true, contactPreference: "phone",
+    allocationOfferState: { state: "pending", deliveryAcceptedAt: "2026-10-18T12:00:00Z" },
+    allocationOfferEligibility: { pendingCount: 2, availableCount: 2, unavailableCount: 0 },
+    ...overrides,
+  };
+}
+
 function makeHistoricRow(
   client: ClientFixture,
   flags: Partial<HistoricFixture> = {},
@@ -484,6 +494,100 @@ describe("Clients page compact board integration", () => {
     await screen.findByTestId("client-record-cya-confirmed");
     expect(screen.queryByTestId("writeupp-admin-queue")).toBeNull();
     expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === "PATCH" || init?.method === "POST")).toBe(false);
+  });
+
+  it.each([
+    [true, true], [true, false], [false, true], [false, false],
+  ])("does not carry an intake call prompt into a delivered offer (compact=%s, details=%s)", async (compact, details) => {
+    apiFixtures.tenant = makeTenant({
+      id: CYA_PSYCHOLOGY_TENANT_ID, contactPreferenceEnabled: true,
+      multiClinicianAllocationEnabled: compact, allocationVisibilityEnabled: details,
+    });
+    apiFixtures.clients = [cyaOfferedClient()];
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const user = userEvent.setup();
+    let record: HTMLElement;
+    if (compact) {
+      const card = await screen.findByTestId("compact-client-card-matched-offer");
+      expect(within(card).getByText("Waiting for the family to choose")).toBeTruthy();
+      await user.click(card);
+      record = await screen.findByTestId("client-details-matched-offer");
+    } else {
+      record = await screen.findByTestId("kanban-card-matched-offer");
+    }
+    expect(within(record).queryByText("Needs Call")).toBeNull();
+    expect(within(record).getByText("Phone")).toBeTruthy();
+    expect(apiFixtures.clients[0].needsAdminCall).toBe(true);
+    expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === "PATCH" || init?.method === "POST")).toBe(false);
+  });
+
+  it("keeps genuine declined-option calls visible and lets staff mark the call as completed", async () => {
+    apiFixtures.tenant = makeTenant({ id: CYA_PSYCHOLOGY_TENANT_ID, contactPreferenceEnabled: true });
+    apiFixtures.clients = [cyaOfferedClient({ allocationOfferState: "declined", allocationOfferEligibility: null })];
+    const originalFetch = vi.mocked(fetch).getMockImplementation()!;
+    const writes: Record<string, unknown>[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: any, init?: any) => {
+      if (String(input) === "/api/clients/matched-offer" && init?.method === "PATCH") {
+        const updates = JSON.parse(init.body);
+        writes.push(updates);
+        apiFixtures.clients = [{ ...apiFixtures.clients[0], ...updates }];
+        return json(apiFixtures.clients[0]);
+      }
+      return originalFetch(input, init);
+    }));
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const user = userEvent.setup();
+    const card = await screen.findByTestId("compact-client-card-matched-offer");
+    expect(within(card).getByText("Call the family about declined options")).toBeTruthy();
+    await user.click(card);
+    const record = await screen.findByTestId("client-details-matched-offer");
+    expect(within(record).getByText("Needs Call")).toBeTruthy();
+    await user.click(within(record).getByTitle("Mark as called"));
+    await waitFor(() => expect(within(record).queryByText("Needs Call")).toBeNull());
+    expect(writes).toEqual([{ needsAdminCall: false }]);
+    expect(apiFixtures.clients[0].status).toBe("OptionsSent");
+    expect(apiFixtures.clients[0].allocationOfferState).toBe("declined");
+    expect(within(screen.getByTestId("compact-client-card-matched-offer"))
+      .getByText("Offer new appointment choices")).toBeTruthy();
+  });
+
+  it("does not change Tenant 1 call guidance or badges with the same flags and display name", async () => {
+    apiFixtures.tenant = makeTenant({ name: "CY&A Psychology", contactPreferenceEnabled: true });
+    apiFixtures.clients = [cyaOfferedClient({ tenantId: "tenant-1" })];
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const user = userEvent.setup();
+    const card = await screen.findByTestId("compact-client-card-matched-offer");
+    expect(within(card).getByText("Review the appointment offer")).toBeTruthy();
+    await user.click(card);
+    const record = await screen.findByTestId("client-details-matched-offer");
+    expect(within(record).getByText("Needs Call")).toBeTruthy();
+  });
+
+  it.each([
+    ["delivery", "Review offer delivery"],
+    ["unavailable", "Offer new appointment choices"],
+  ])("retains the %s warning instead of an old call prompt", async (reason, expected) => {
+    apiFixtures.tenant = makeTenant({ id: CYA_PSYCHOLOGY_TENANT_ID, contactPreferenceEnabled: true });
+    apiFixtures.clients = [cyaOfferedClient(reason === "delivery"
+      ? { allocationOfferState: { state: "pending", deliveryAcceptedAt: null } }
+      : { allocationOfferEligibility: { pendingCount: 2, availableCount: 1, unavailableCount: 1 } })];
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const card = await screen.findByTestId("compact-client-card-matched-offer");
+    expect(within(card).getByText(expected)).toBeTruthy();
+    expect(within(card).queryByText("Waiting for the family to choose")).toBeNull();
+  });
+
+  it.each(["Forms Sent", "Forms Completed"])("keeps the genuine intake call visible at %s", async status => {
+    apiFixtures.tenant = makeTenant({ id: CYA_PSYCHOLOGY_TENANT_ID, contactPreferenceEnabled: true });
+    apiFixtures.clients = [cyaOfferedClient({ status })];
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const record = await screen.findByTestId("kanban-card-matched-offer");
+    expect(within(record).getByText("Needs Call")).toBeTruthy();
   });
 
   async function openConfirmedEdit(clientId: string, user: ReturnType<typeof userEvent.setup>) {

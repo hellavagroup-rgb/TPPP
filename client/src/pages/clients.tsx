@@ -112,7 +112,7 @@ import {
   type ClientStatus as CanonicalClientStatus,
 } from "@shared/clientWorkflow";
 import { paymentProgress, registrationProgress } from "@shared/clientProgress";
-import { getClientNextStep, getCompactClientDescription, bookingCompletionNextStep } from "@/lib/clientNextStep";
+import { getClientNextStep, getCompactClientDescription, bookingCompletionNextStep, shouldShowNeedsCall } from "@/lib/clientNextStep";
 import { invalidateOperationalData, useOperationalRefresh } from "@/lib/operationalRefresh";
 import {
   findAvailabilityInSubmissions,
@@ -1299,10 +1299,13 @@ export default function Clients() {
   };
 
   // CY&A: contact preference and needs-admin-call badges
-  const contactPreferenceBadge = (client: ClientType) => {
+  const contactPreferenceBadge = (client: BoardClient) => {
     if (!contactPreferenceEnabled) return null;
     const cp = (client as any).contactPreference;
-    const needsCall = (client as any).needsAdminCall;
+    const needsCall = shouldShowNeedsCall({
+      tenantId: tenant?.id, status: client.status,
+      offerState: getAllocationOfferState(client), needsAdminCall: client.needsAdminCall === true,
+    });
     if (!cp && !needsCall) return null;
     return (
       <div className="flex flex-wrap gap-1 mt-1">
@@ -1595,6 +1598,7 @@ export default function Clients() {
   const clientNextStep = (client: BoardClient, extra: { externallyArranged?: boolean } = {}) => {
     const registrationEnabled = tenant?.registrationFormEnabled === true;
     const nextStep = getClientNextStep({
+      tenantId: tenant?.id,
       status: client.status,
       registrationProgress: registrationEnabled ? registrationProgress(client) : undefined,
       paymentProgress: registrationEnabled ? paymentProgress(client, { paymentsEnabled: tenant?.paymentsEnabled === true }) : undefined,

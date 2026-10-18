@@ -57,8 +57,11 @@ export async function createPaymentLink(opts: {
   // If the client already has an active link, pass its ID so it is deactivated first
   previousPaymentLinkId?: string | null;
   registrationAttemptKey?: string | null;
+  tenantOwnedOnly?: boolean;
 }): Promise<{ url: string; paymentLinkId: string } | null> {
-  const stripe = getStripeInstance(opts.tenantStripeKey);
+  const stripe = opts.tenantOwnedOnly
+    ? (opts.tenantStripeKey ? new Stripe(opts.tenantStripeKey, { apiVersion: "2026-05-27.dahlia" }) : null)
+    : getStripeInstance(opts.tenantStripeKey);
   if (!stripe) return null;
 
   // Payment Links require a Price object (inline price_data is not supported)

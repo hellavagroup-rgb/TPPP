@@ -17,6 +17,7 @@ import { ManagerConfirmationSettings } from "@/components/ManagerConfirmationSet
 import { useLocation } from "wouter";
 import { useManagedInsurers, useAddInsurer, useDeleteInsurer } from "@/hooks/use-insurers";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { isCyaPsychologyTenant } from "@shared/practicePolicies";
 
 interface EmailTemplate {
   id: string;
@@ -710,6 +711,62 @@ function RegistrationTermsTab() {
       </CardContent>
     </Card>
   );
+}
+
+function FlexibleBookingSettings({ tenant }: { tenant: any }) {
+  const queryClient = useQueryClient();
+  const { data: settings, isLoading, isError, refetch } = useQuery<{ enabled: boolean; durationHours: number }>({
+    queryKey: ["/api/tenant/booking-settings"],
+    queryFn: async () => {
+      const response = await apiRequest("GET", "/api/tenant/booking-settings");
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "Booking settings could not be loaded.");
+      return body;
+    },
+    enabled: isCyaPsychologyTenant(tenant?.id),
+  });
+  const [duration, setDuration] = useState<string>("");
+  useEffect(() => {
+    if (settings) setDuration(String(settings.durationHours));
+  }, [settings?.durationHours]);
+  const save = useMutation({
+    mutationFn: async (enabled: boolean) => {
+      const durationHours = Number(duration);
+      if (!Number.isInteger(durationHours) || durationHours < 1 || durationHours > 168) {
+        throw new Error("Enter a whole number from 1 to 168 hours.");
+      }
+      const response = await apiRequest("PATCH", "/api/tenant/booking-settings", { enabled, durationHours });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "Booking settings could not be saved.");
+      return body as { enabled: boolean; durationHours: number };
+    },
+    onSuccess: saved => {
+      queryClient.setQueryData(["/api/tenant/booking-settings"], saved);
+      queryClient.invalidateQueries({ queryKey: ["/api/tenant"] });
+      toast.success("Flexible booking settings saved");
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const canEnable = tenant?.multiClinicianAllocationEnabled === true
+    && tenant?.registrationFormEnabled === true
+    && !!tenant?.registrationFormId;
+  if (!isCyaPsychologyTenant(tenant?.id)) return null;
+  return <Card className="border-none shadow-sm" data-testid="flexible-booking-settings">
+    <CardHeader><CardTitle>Clinician preference booking</CardTitle><CardDescription>Invite families to choose a suitable clinician first. Staff can then reserve an agreed appointment while registration is completed.</CardDescription></CardHeader>
+    <CardContent className="space-y-5">
+      {isLoading ? <div className="h-16 animate-pulse rounded bg-muted" aria-label="Loading booking settings" /> :
+        isError ? <Alert variant="destructive"><AlertDescription>Booking settings could not be loaded. <Button variant="link" className="h-auto p-0" onClick={() => refetch()}>Try again</Button></AlertDescription></Alert> :
+        <>
+          {!canEnable && <Alert><AlertDescription>To enable this workflow, turn on multi-clinician allocation and registration, and select a registration form in Settings.</AlertDescription></Alert>}
+          <div className="flex items-center justify-between gap-4">
+            <div><Label htmlFor="flexible-booking-enabled">Allow families to choose a clinician</Label><p className="mt-1 text-sm text-muted-foreground">New invitations ask for a clinician preference, not a specific appointment time.</p></div>
+            <Switch id="flexible-booking-enabled" checked={settings?.enabled === true} disabled={save.isPending || (!canEnable && settings?.enabled !== true)} onCheckedChange={enabled => save.mutate(enabled)} aria-label="Allow flexible clinician booking" />
+          </div>
+          <div className="max-w-xs space-y-2"><Label htmlFor="reservation-duration">New reservation duration (hours)</Label><Input id="reservation-duration" type="number" min={1} max={168} step={1} value={duration} onChange={event => setDuration(event.target.value)} /><p className="text-xs text-muted-foreground">Applies to new holds only. Existing reservations keep their original deadline.</p></div>
+          <Button onClick={() => save.mutate(settings?.enabled === true)} disabled={save.isPending || !settings || !duration}>{save.isPending ? "Saving…" : "Save reservation duration"}</Button>
+        </>}
+    </CardContent>
+  </Card>;
 }
 
 interface AdminUser {
@@ -1774,6 +1831,7 @@ export default function Settings() {
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
           <TabsTrigger value="email-templates">Message Templates</TabsTrigger>
           <TabsTrigger value="payments">Payments</TabsTrigger>
+          {user?.role === "admin" && isCyaPsychologyTenant(tenant?.id) && <TabsTrigger value="booking">Booking</TabsTrigger>}
           {registrationFormEnabled && <TabsTrigger value="registration-form">Registration Form</TabsTrigger>}
           {registrationFormEnabled && <TabsTrigger value="registration-terms">Registration Terms</TabsTrigger>}
           <TabsTrigger value="non-engagement">Categories</TabsTrigger>
@@ -1802,6 +1860,10 @@ export default function Settings() {
         <TabsContent value="payments">
           <PaymentSettingsTab />
         </TabsContent>
+
+        {user?.role === "admin" && isCyaPsychologyTenant(tenant?.id) && (
+          <TabsContent value="booking" className="space-y-4"><FlexibleBookingSettings tenant={tenant} /></TabsContent>
+        )}
 
         {registrationFormEnabled && (
           <TabsContent value="registration-form">

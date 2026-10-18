@@ -12,6 +12,7 @@ interface AllocationOfferActionsProps {
   resendPending?: boolean;
   clientId: string;
   eligibility?: AllocationOfferEligibility | null;
+  resendLabel?: string;
 }
 
 export function AllocationOfferActions({
@@ -22,6 +23,7 @@ export function AllocationOfferActions({
   resendPending = false,
   clientId,
   eligibility,
+  resendLabel = "Resend Options Email",
 }: AllocationOfferActionsProps) {
   if (state === "pending") {
     const unavailableCount = eligibility?.unavailableCount ?? 0;
@@ -66,7 +68,7 @@ export function AllocationOfferActions({
           data-testid={`button-resend-allocation-options-${clientId}`}
         >
           {resendPending ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Mail className="h-3 w-3" />}
-          Resend Options Email
+          {resendLabel}
         </Button>
       </div>
     );

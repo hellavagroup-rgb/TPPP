@@ -2,6 +2,8 @@ import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db } from "./db";
 import { confirmationBlocker, confirmationBlockerCopy } from "@shared/confirmationRecovery";
 import { ACTIVE_ALLOCATION_STATUSES } from "@shared/clientWorkflow";
+import { isCyaPsychologyTenant } from "@shared/practicePolicies";
+import { latestReservation, ReservationError } from "./reservationLifecycle";
 import {
   bookingSnapshots,
   auditLogs,
@@ -11,6 +13,7 @@ import {
   tenants,
   timeSlots,
   users,
+  bookingReservations,
   type BookingSnapshot,
   type Client,
 } from "@shared/schema";
@@ -123,6 +126,17 @@ export async function confirmBookingInTransaction(tx: any, input: BookingConfirm
       }
     }
     const status = confirmationStatus(tenant?.bookingConfirmedEmailEnabled === true);
+    const reservation = isCyaPsychologyTenant(input.tenantId) ? await latestReservation(client.id, tx) : undefined;
+    if (reservation) {
+      const timelyDirectRegistration = input.source === "registration" && client.registrationFormSubmissionId &&
+        client.termsAcceptedAt && client.termsAcceptedAt <= reservation.deadline &&
+        (client.paymentType === "insurer" || !tenant?.paymentsEnabled);
+      const verifiedPayment = input.source === "stripe" && client.paymentStatus === "active";
+      if (!["active", "payment_check"].includes(reservation.status) || reservation.slotId !== client.assignedSlotId ||
+          (!verifiedPayment && !timelyDirectRegistration && (reservation.status !== "active" || reservation.deadline.getTime() <= Date.now()))) {
+        throw new ReservationError(409, "This reservation is no longer available for confirmation. Staff must review the payment and appointment.");
+      }
+    }
     const [slot] = await tx.select().from(timeSlots).where(and(
       eq(timeSlots.id, client.assignedSlotId),
       eq(timeSlots.tenantId, input.tenantId),
@@ -208,6 +222,10 @@ export async function confirmBookingInTransaction(tx: any, input: BookingConfirm
       updatedAt: confirmedAt,
     }).where(and(eq(clients.id, client.id), eq(clients.tenantId, input.tenantId))).returning();
     if (!updated) throw new Error("Client confirmation update failed");
+    if (reservation) await tx.update(bookingReservations).set({
+      status: "confirmed", endedAt: confirmedAt, reason: null, followUpPending: true,
+      paymentAttemptKey: client.registrationPaymentAttemptKey, paymentLinkId: client.stripePaymentLinkId,
+    }).where(eq(bookingReservations.id, reservation.id));
     return { client: updated, snapshot, status, newlyConfirmed: true };
   }
 }

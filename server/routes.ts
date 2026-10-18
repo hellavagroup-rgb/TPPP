@@ -83,32 +83,12 @@ import {
   type PaymentSetupFailureCode,
 } from "./paymentSetupRecovery";
 import { deliverRegistration, RegistrationDeliveryError } from "./registrationDelivery";
-
-export function handleLoginResult(
-  req: Request,
-  res: Response,
-  err: unknown,
-  user: Express.User | false | null,
-  info?: { message?: string },
-): void {
-  if (err) {
-    console.error("Authentication service failed during login:", err);
-    res.status(503).json({ error: "Login service is temporarily unavailable. Please try again." });
-    return;
-  }
-  if (!user) {
-    res.status(401).json({ error: info?.message || "Invalid credentials" });
-    return;
-  }
-  req.logIn(user, (loginError) => {
-    if (loginError) {
-      console.error("Failed to persist authenticated session:", loginError);
-      res.status(503).json({ error: "Login service is temporarily unavailable. Please try again." });
-      return;
-    }
-    res.json({ user });
-  });
-}
+import { registerFlexibleBookingRoutes } from "./flexibleBooking";
+import { assertReservationOpen, guardReservationMutation, latestReservation, reconcileDueReservations, ReservationError, settleReservation, flagLateReservationPayment, registerReservationRecoveryFollowUp } from "./reservationLifecycle";
+import { flexibleBookingAvailable } from "@shared/reservationPolicy";
+import { isCyaPsychologyTenant } from "@shared/practicePolicies";
+import { handleLoginResult } from "./loginResponse";
+export { handleLoginResult } from "./loginResponse";
 
 function formatActivitySlot(slot: { type?: string | null; day?: string | null; date?: string | null; startTime?: string | null; endTime?: string | null; locationType?: string | null }): string {
   const day = slot.type === "SpecificDate" ? slot.date : slot.day;
@@ -283,6 +263,7 @@ export async function registerRoutes(
   // Setup authentication
   setupAuth(app);
   app.use('/api', requireTenant as any);
+  registerFlexibleBookingRoutes(app);
 
   // Admin endpoint to force reseed database (must be after auth setup)
   app.post("/api/admin/reseed", requireAdmin, async (req, res) => {
@@ -420,6 +401,7 @@ export async function registerRoutes(
   // ============ CLINICIAN ROUTES ============
   app.get("/api/clinicians", requireAuth, async (req, res) => {
     try {
+      if (req.tenant?.id) await reconcileDueReservations(req.tenant.id);
       const clinicians = await storage.getAllClinicians(req.tenant?.id);
       const allClients = await storage.getAllClients(false, req.tenant?.id);
       
@@ -1814,6 +1796,7 @@ export async function registerRoutes(
       res.json(updated);
     } catch (error) {
       if (error instanceof ExternalBookingReviewConflictError) return res.status(409).json({ error: error.message });
+      if (error instanceof ReservationError) return res.status(error.status).json({ error: error.message });
       console.error("Failed to update client:", error);
       if (error instanceof ClientAllocationUpdateError) {
         return res.status(500).json({
@@ -1826,6 +1809,9 @@ export async function registerRoutes(
 
   app.post("/api/clients/:clientId/assign", requireAdmin, auditLog("assign", "client"), async (req, res) => {
     try {
+      if (flexibleBookingAvailable(req.tenant || {})) {
+        return res.status(409).json({ error: "Use Reserve agreed slot for this practice's new bookings." });
+      }
       const { clinicianId, slotId, allocationMethod = "form", allocationReason, formatOverride } = req.body;
       
       if (!clinicianId || !slotId) {
@@ -1932,6 +1918,9 @@ export async function registerRoutes(
   // CY&A: Multi-clinician allocation — inserts client_clinician_options rows and holds slots
   app.post("/api/clients/:clientId/allocate-options", requireAdmin, auditLog("assign", "client"), async (req, res) => {
     try {
+      if (flexibleBookingAvailable(req.tenant || {})) {
+        return res.status(409).json({ error: "Choose suitable clinicians and send a clinician invitation instead of matching three slots." });
+      }
       const { selections, reoffer } = req.body;
 
       const client = await storage.getClientById(req.params.clientId);
@@ -2869,6 +2858,7 @@ export async function registerRoutes(
       const clientToArchive = await storage.getClientById(req.params.id);
       if (!clientToArchive) return res.status(404).json({ error: "Client not found" });
       if (clientToArchive.tenantId !== req.tenant?.id) return res.status(403).json({ error: "Access denied" });
+      await guardReservationMutation(clientToArchive.id, req.tenant!.id);
       if (clientToArchive.completedAt) return res.status(409).json({ error: "Reopen the completed booking before archiving." });
       const archived = await storage.archiveClient(req.params.id, reason, category);
       if (!archived) {
@@ -2880,6 +2870,7 @@ export async function registerRoutes(
       });
       res.json(archived);
     } catch (error) {
+      if (error instanceof ReservationError) return res.status(error.status).json({ error: error.message });
       res.status(500).json({ error: "Failed to archive client" });
     }
   });
@@ -3425,6 +3416,14 @@ export async function registerRoutes(
     try {
       const client = await storage.getClientById(req.params.clientId);
       if (!client) return res.status(404).json({ error: "Client not found" });
+      if (isCyaPsychologyTenant(client.tenantId) && client.registrationToken === req.params.registrationToken) {
+        const hold = await latestReservation(client.id);
+        if (hold && ["active", "payment_check"].includes(hold.status) && hold.deadline.getTime() <= Date.now()) {
+          await settleReservation(hold.id, client.tenantId!);
+          Object.assign(client, await storage.getClientById(client.id));
+        }
+        await assertReservationOpen(client);
+      }
       const tenant = client.tenantId ? await storage.getTenantById(client.tenantId).catch(() => undefined) : undefined;
       if (!tenant?.registrationFormEnabled) return res.status(404).json({ error: "Registration is not available for this practice" });
       if (tenant.registrationFormTemplateId === null) {
@@ -3466,6 +3465,7 @@ export async function registerRoutes(
 
       res.json({
         tenantName: tenant?.name || "",
+        reservationDeadline: isCyaPsychologyTenant(client.tenantId) ? (await latestReservation(client.id))?.deadline || null : null,
         primaryColor: tenant?.primaryColor || null,
         termsText,
         termsVersion: tenant.registrationTermsVersion,
@@ -3490,6 +3490,7 @@ export async function registerRoutes(
         registrationTemplateUpdatedAt: registrationTemplate?.updatedAt?.toISOString() || null,
       });
     } catch (error) {
+      if (error instanceof ReservationError) return res.status(error.status).json({ error: error.message });
       console.error("Failed to fetch registration data:", error);
       res.status(500).json({ error: "Failed to fetch registration data" });
     }
@@ -3518,6 +3519,14 @@ export async function registerRoutes(
 
       const client = await storage.getClientById(req.params.clientId);
       if (!client) return res.status(404).json({ error: "Client not found" });
+      if (isCyaPsychologyTenant(client.tenantId) && client.registrationToken === req.params.registrationToken) {
+        const hold = await latestReservation(client.id);
+        if (hold && ["active", "payment_check"].includes(hold.status) && hold.deadline.getTime() <= Date.now()) {
+          await settleReservation(hold.id, client.tenantId!);
+          Object.assign(client, await storage.getClientById(client.id));
+        }
+        await assertReservationOpen(client);
+      }
       const tenant = client.tenantId ? await storage.getTenantById(client.tenantId).catch(() => undefined) : undefined;
       if (!tenant?.registrationFormEnabled) return res.status(404).json({ error: "Registration is not available for this practice" });
       if (tenant.registrationFormTemplateId === null) {
@@ -3689,6 +3698,10 @@ export async function registerRoutes(
           acceptedAt,
         );
         const claimed = await db.transaction(async (tx) => {
+          if (isCyaPsychologyTenant(client.tenantId)) {
+            const [current] = await tx.select().from(clients).where(eq(clients.id, client.id)).for("update");
+            await assertReservationOpen(current, tx);
+          }
           const claimedRows = await tx.update(clients).set({
             paymentType: validatedPaymentType,
             insurerDetails: validatedPaymentType === "insurer"
@@ -3798,6 +3811,7 @@ export async function registerRoutes(
             eq(clients.tenantId, client.tenantId!),
           )).limit(1).then(rows => rows[0]);
           if (!current) return { status: 404, error: "Client not found" } as const;
+          await assertReservationOpen(current, tx);
           if (current.stripeCheckoutUrl) {
             return { status: 200, url: current.stripeCheckoutUrl, idempotent: true } as const;
           }
@@ -3824,6 +3838,7 @@ export async function registerRoutes(
                 : undefined,
               idempotencyKey: `registration-payment-${current.id}-${paymentAttemptKey}`,
               registrationAttemptKey: paymentAttemptKey,
+              tenantOwnedOnly: isCyaPsychologyTenant(current.tenantId) && Boolean(await latestReservation(current.id, tx)),
             });
           } catch (stripeErr) {
             setupFailureCode = classifyPaymentSetupProviderFailure(stripeErr);
@@ -3867,6 +3882,10 @@ export async function registerRoutes(
           )).returning({ id: clients.id });
           if (!savedLink.length) {
             return { status: 409, error: "Payment setup changed while processing. Please retry." } as const;
+          }
+          const held = isCyaPsychologyTenant(current.tenantId) ? await latestReservation(current.id, tx) : undefined;
+          if (held && held.deadline.getTime() <= Date.now()) {
+            return { status: 410, error: "The reservation deadline passed during payment setup. Contact the practice for fresh choices; do not pay this link." } as const;
           }
           return { status: 200, url: session.url, idempotent: false } as const;
         });
@@ -3953,6 +3972,7 @@ export async function registerRoutes(
 
       res.json({ success: true });
     } catch (error) {
+      if (error instanceof ReservationError) return res.status(error.status).json({ error: error.message });
       console.error("Failed to submit registration:", error);
       res.status(500).json({ error: "Failed to submit registration" });
     }
@@ -5856,6 +5876,8 @@ export async function registerRoutes(
     }
   });
 
+  registerReservationRecoveryFollowUp(finishReconciledBooking);
+
   // Create a Checkout session for a client (sends payment link to their email)
   app.post("/api/stripe/checkout", requireAdmin, async (req, res) => {
     try {
@@ -5872,6 +5894,9 @@ export async function registerRoutes(
           eq(clients.tenantId, req.tenant!.id),
         )).limit(1).then(rows => rows[0]);
         if (!client) return { status: 404, error: "Client not found" } as const;
+        if (isCyaPsychologyTenant(client.tenantId) && await latestReservation(client.id, tx)) {
+          return { status: 409, error: "Use the registration payment workflow for this reservation, not a separate manual payment link." } as const;
+        }
         if (!client.email) return { status: 400, error: "Client has no email address" } as const;
         if (client.paymentStatus === "active") {
           return { status: 409, error: "Payment setup is already complete for this client." } as const;
@@ -6015,6 +6040,11 @@ export async function registerRoutes(
   app.post("/api/clients/:id/resend-payment-link", requireAdmin, async (req, res) => {
     try {
       if (!req.tenant) return res.status(400).json({ error: "Tenant not found" });
+      if (isCyaPsychologyTenant(req.tenant.id)) {
+        const scoped = await storage.getClientById(req.params.id);
+        if (!scoped || scoped.tenantId !== req.tenant.id) return res.status(404).json({ error: "Client not found" });
+        await assertReservationOpen(scoped);
+      }
       const [registrationClient] = req.tenant.paymentReconciliationEnabled === true
         ? await db.select({ status: clients.status, registrationPaymentAttemptKey: clients.registrationPaymentAttemptKey })
           .from(clients).where(and(eq(clients.id, req.params.id), eq(clients.tenantId, req.tenant.id))).limit(1)
@@ -6036,6 +6066,7 @@ export async function registerRoutes(
         if (!client || client.tenantId !== req.tenant!.id) {
           return { status: 404, error: "Client not found" } as const;
         }
+        await assertReservationOpen(client, tx);
         if (client.paymentStatus === "active") {
           return { status: 409, error: "Payment setup is already complete for this client." } as const;
         }
@@ -6167,7 +6198,8 @@ export async function registerRoutes(
         fromEmail: req.tenant.fromEmail,
         primaryColor: req.tenant.primaryColor,
       };
-      const emailOptions = await generatePaymentLinkEmail(delivery.url, amountPounds, tenantContext);
+      const emailOptions = await generatePaymentLinkEmail(delivery.url, amountPounds, tenantContext,
+        isCyaPsychologyTenant(req.tenant.id) ? (await latestReservation(req.params.id))?.deadline : undefined);
       const emailResult = await sendEmail({ ...emailOptions, to: delivery.email });
       if (!emailResult.success) {
         return res.status(502).json({
@@ -6183,6 +6215,7 @@ export async function registerRoutes(
         replacedInactiveLink: delivery.replacedInactiveLink,
       });
     } catch (error) {
+      if (error instanceof ReservationError) return res.status(error.status).json({ error: error.message });
       console.error("Payment link resend error:", error);
       return res.status(500).json({ error: "The payment link email could not be resent." });
     }
@@ -6197,6 +6230,7 @@ export async function registerRoutes(
       if (!scopedClient || scopedClient.tenantId !== req.tenant.id) {
         return res.status(404).json({ error: "Client not found" });
       }
+      await assertReservationOpen(scopedClient);
       // requireTenant decrypts tenant credentials before attaching them to req.
       // Public registration routes fetch encrypted tenant rows and decrypt once,
       // but authenticated routes must use this request-scoped plaintext value.
@@ -6209,6 +6243,7 @@ export async function registerRoutes(
           eq(clients.tenantId, req.tenant!.id),
         )).limit(1).then(rows => rows[0]);
         if (!current) return { status: 404, error: "Client not found" } as const;
+        await assertReservationOpen(current, tx);
         if (current.stripeCheckoutUrl && current.stripePaymentLinkId) {
           return { status: 200, url: current.stripeCheckoutUrl, idempotent: true } as const;
         }
@@ -6268,6 +6303,7 @@ export async function registerRoutes(
             previousPaymentLinkId: current.stripePaymentLinkId,
             idempotencyKey: `registration-payment-${current.id}-${current.registrationPaymentAttemptKey}`,
             registrationAttemptKey: current.registrationPaymentAttemptKey,
+            tenantOwnedOnly: isCyaPsychologyTenant(current.tenantId) && Boolean(await latestReservation(current.id, tx)),
           });
         } catch (error) {
           providerFailure = classifyPaymentSetupProviderFailure(error);
@@ -6312,7 +6348,8 @@ export async function registerRoutes(
 
       if ("error" in result) return res.status(result.status).json(result);
       return res.status(200).json(result);
-    } catch {
+    } catch (error) {
+      if (error instanceof ReservationError) return res.status(error.status).json({ error: error.message });
       return res.status(500).json({ error: "Automatic payment setup could not be retried." });
     }
   });
@@ -6515,6 +6552,11 @@ export async function registerRoutes(
         const session = event.data.object as any;
         const clientId = session.metadata?.clientId;
         if (!clientId) return acknowledge();
+        const reportedLink = typeof session.payment_link === "string" ? session.payment_link : session.payment_link?.id;
+        if (metaTenantId && session.payment_status === "paid" &&
+            await flagLateReservationPayment(metaTenantId, clientId, session.metadata?.registrationAttemptKey, reportedLink)) {
+          return acknowledge();
+        }
         // For opted-in practices use the same independently verified provider path
         // as staff reconciliation. A signed event alone does not establish a paid,
         // current, correctly attributed checkout.

@@ -11,6 +11,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { DynamicFormFields, validateDynamicFields } from "@/components/forms/DynamicFormFields";
 import { serializeFormDates } from "@/lib/formDates";
 import { findRegistrationConsent } from "@shared/registrationConsent";
+import { formatEuropeLondonDateTime } from "@/lib/europeLondonTime";
 
 interface RegistrationData {
   tenantName: string;
@@ -28,6 +29,7 @@ interface RegistrationData {
   savedPreauthorisationCode: string | null;
   registrationTemplate?: { id: string; title?: string; fields: any[] } | null;
   registrationTemplateUpdatedAt?: string | null;
+  reservationDeadline?: string | null;
 }
 
 function formatPence(pence: number) {
@@ -176,7 +178,7 @@ export default function RegistrationForm() {
           <CardContent className="pt-6 text-center">
             <p className="text-muted-foreground">
               {loadError instanceof Error
-                ? loadError.message
+                ? `${loadError.message}${/410|reservation|expired/i.test(loadError.message) ? " Please contact your practice and ask them for fresh appointment choices." : ""}`
                 : "This registration link is invalid or has expired. Please contact your practice for assistance."}
             </p>
           </CardContent>
@@ -221,6 +223,11 @@ export default function RegistrationForm() {
                 ? ` and set up your initial session payment of ${formatPence(data.agreedRatePence)}.`
                 : "."}
             </p>
+            {data.reservationDeadline && (
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950" role="status" data-testid="registration-reservation-deadline">
+                Your appointment is being held until {formatEuropeLondonDateTime(data.reservationDeadline)}. Please complete registration before then.
+              </div>
+            )}
 
             {/* Configured registration questions must be completed before payment details. */}
             {data.registrationTemplate?.fields?.length ? (

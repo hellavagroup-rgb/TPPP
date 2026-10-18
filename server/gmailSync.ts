@@ -3,7 +3,7 @@ import { db } from "./db";
 import { gmailConnections, intakeMessages } from "../shared/schema";
 import { eq, and } from "drizzle-orm";
 import { parseIntakeEmailBody } from "./intakeParser";
-import { log } from "./index";
+import { log } from "./log";
 
 function getOAuthClient(redirectUri?: string) {
   return new google.auth.OAuth2(

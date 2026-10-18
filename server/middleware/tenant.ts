@@ -23,6 +23,7 @@ export function isOpenTenantPath(req: any): boolean {
     req.path.startsWith('/clients/public/') ||
     req.path.startsWith('/public/form-completion-page/') ||
     req.path.startsWith('/public/options/') ||
+    req.path.startsWith('/public/booking/') ||
     req.path.startsWith('/public/register/') ||
     (req.path.startsWith('/forms/') && !req.user?.id) ||
     req.path.startsWith('/form-submissions') ||

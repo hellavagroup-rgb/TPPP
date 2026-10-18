@@ -25,6 +25,7 @@ import { ClientCreationError, readClientCreationError } from "@/lib/clientCreati
 import { correctSummaryClientName, editClientStatusPatch, getSummaryClientName } from "@shared/clientIdentitySummary";
 import { AllocationCardDetails, type AllocationVisibilityData } from "@/components/AllocationVisibility";
 import { AllocationOfferActions, type AllocationOfferState } from "@/components/AllocationOfferActions";
+import { ClinicianRecommendationToggle } from "@/components/ClinicianRecommendationToggle";
 import type { AllocationOfferEligibility } from "@shared/allocationOfferSummary";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -100,12 +101,16 @@ import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { format, parseISO, isSameDay } from "date-fns";
 import { formatFormDate } from "@/lib/formDates";
+import { formatEuropeLondonDateTime } from "@/lib/europeLondonTime";
+import { reservationActionFeedback } from "@/lib/reservationActionFeedback";
+import { shouldShowBookingReservations } from "@/lib/bookingReservationVisibility";
 import { apiRequest } from "@/lib/queryClient";
 import { fetchOriginalEnquiry, MISSING_ORIGINAL_ENQUIRY } from "@/lib/originalEnquiry";
 import type { Client as ClientType, Clinician, FormTemplate as FormTemplateType, TimeSlot, BookingSnapshot } from "@shared/schema";
 import { useInsurers, useAddInsurer } from "@/hooks/use-insurers";
 import { useAuth } from "@/lib/auth";
 import { isPendingZoomDelivery, isValidZoomLink } from "@shared/bookingZoom";
+import { isCyaPsychologyTenant } from "@shared/practicePolicies";
 import {
   getAdminStatusOptions,
   getClientStatusLabel,
@@ -236,6 +241,7 @@ export default function Clients() {
   const contactPreferenceEnabled = tenant?.contactPreferenceEnabled === true;
   const intakeClientSummaryEnabled = tenant?.intakeClientSummaryEnabled === true;
   const multiClinicianAllocationEnabled = tenant?.multiClinicianAllocationEnabled === true;
+  const flexibleBookingEnabled = isCyaPsychologyTenant(tenant?.id) && tenant?.flexibleBookingEnabled === true;
   const allocationVisibilityEnabled = tenant?.allocationVisibilityEnabled === true;
   const zoomLinkEmailEnabled = tenant?.zoomLinkEmailEnabled === true;
   const writeuppChecklistEnabled = tenant?.writeuppChecklistEnabled === true;
@@ -467,6 +473,24 @@ export default function Clients() {
     },
   });
 
+  const reserveSlotMutation = useMutation({
+    mutationFn: async ({ clientId, clinicianId, slotId, allocationReason }: { clientId: string; clinicianId: string; slotId: string; allocationReason?: string }) => {
+      const response = await apiRequest("POST", `/api/clients/${clientId}/reserve-slot`, { clinicianId, slotId, allocationReason });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "Reservation could not be created.");
+      return body;
+    },
+    onSuccess: (data) => {
+      invalidateOperationalData(queryClient);
+      queryClient.invalidateQueries({ queryKey: ["/api/booking-reservations"] });
+      toast({ title: "Appointment reserved", description: data.emailSent === false
+        ? "The slot is held, but the registration email failed. Open the client and resend registration before the deadline."
+        : "The agreed slot is held while registration and any required payment are completed." });
+      setSelectedClient(null); setIsManualAllocateOpen(false); setIsAllocateDialogOpen(false); setAllocationReason("");
+    },
+    onError: (error: Error) => toast({ title: "Appointment not reserved", description: mutationErrorMessage(error, "The appointment could not be held. Please refresh availability and try again."), variant: "destructive" }),
+  });
+
   // CY&A: multi-clinician option selection state
   const [selectedOptions, setSelectedOptions] = useState<{clinicianId: string; slotId: string; formatOverride?: { preference: SessionFormat; slotFormat: SessionFormat }}[]>([]);
 
@@ -505,6 +529,53 @@ export default function Clients() {
       }
       toast({ title: "Options not sent", description, variant: "destructive" });
     },
+  });
+
+  const clinicianInvitationMutation = useMutation({
+    mutationFn: async ({ clientId, clinicianIds, reoffer }: { clientId: string; clinicianIds: string[]; reoffer?: boolean }) => {
+      const response = await apiRequest("POST", `/api/clients/${clientId}/clinician-invitation`, { clinicianIds, sendAttemptKey: crypto.randomUUID(), ...(reoffer ? { reoffer: true } : {}) });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "Clinician invitation could not be sent.");
+      return body;
+    },
+    onSuccess: (_result, variables) => {
+      invalidateOperationalData(queryClient);
+      setClosedOfferClientIds(current => { const next = new Set(current); next.delete(variables.clientId); return next; });
+      toast({ title: "Clinician invitation sent", description: "The family can choose an available session and continue to registration and any required payment." });
+      setSelectedClient(null);
+      setIsAllocateDialogOpen(false);
+      setSelectedOptions([]);
+      setAllocationReason("");
+    },
+    onError: (error: Error) => toast({ title: "Invitation not sent", description: mutationErrorMessage(error, "Please try again."), variant: "destructive" }),
+  });
+
+  type ReservationSummary = { id: string; clientId: string; status: "active" | "payment_check" | "expired" | "cancelled" | "confirmed" | "payment_review"; deadline: string; durationHours: number; route: "online" | "phone"; reason?: string; clinicianName: string; appointmentLabel: string };
+  const { data: reservations = [], isError: reservationsError, refetch: refetchReservations } = useQuery<ReservationSummary[]>({
+    queryKey: ["/api/booking-reservations"],
+    queryFn: async () => {
+      const response = await apiRequest("GET", "/api/booking-reservations");
+      if (!response.ok) throw new Error("Reservations could not be loaded.");
+      return response.json();
+    },
+    enabled: shouldShowBookingReservations(isAdmin, tenant?.id),
+    refetchInterval: 30_000,
+  });
+  const [reservationToCancel, setReservationToCancel] = useState<ReservationSummary | null>(null);
+  const reservationAction = useMutation({
+    mutationFn: async ({ clientId, reservationId, action }: { clientId: string; reservationId: string; action: "cancel" | "check" }) => {
+      const response = await apiRequest("POST", `/api/clients/${clientId}/${action === "cancel" ? "cancel-reservation" : "check-reservation"}`, { reservationId });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "Reservation could not be updated.");
+      return body;
+    },
+    onSuccess: (result: { status?: string; reason?: string }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/booking-reservations"] });
+      invalidateOperationalData(queryClient);
+      setReservationToCancel(null);
+      toast(reservationActionFeedback(result.status, result.reason));
+    },
+    onError: (error: Error) => toast({ title: "Reservation not updated", description: error.message, variant: "destructive" }),
   });
 
   const resendAllocationOptionsMutation = useMutation({
@@ -1558,6 +1629,15 @@ export default function Clients() {
     // For legacy manual dialog (isManualAllocateOpen), use manualAllocateClient
     const clientToAssign = isManualAllocateOpen ? manualAllocateClient : selectedClient;
     if (clientToAssign) {
+      if (flexibleBookingEnabled) {
+        reserveSlotMutation.mutate({
+          clientId: clientToAssign.id,
+          clinicianId,
+          slotId,
+          allocationReason: allocationReason.trim() || undefined,
+        });
+        return;
+      }
       assignClientMutation.mutate({ 
         clientId: clientToAssign.id, 
         clinicianId, 
@@ -2042,6 +2122,32 @@ export default function Clients() {
             ))}
           </ul>
         </div>
+      )}
+      {shouldShowBookingReservations(isAdmin, tenant?.id) && (
+        <section className="rounded-lg border border-border bg-card p-4" aria-labelledby="booking-reservations-title" data-testid="booking-reservations">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div><h2 id="booking-reservations-title" className="font-semibold">Appointment reservations</h2><p className="text-xs text-muted-foreground">Current and recent holds. Duration applies to new holds only.</p></div>
+            <Button variant="outline" size="sm" onClick={() => refetchReservations()}>Refresh</Button>
+          </div>
+          {reservationsError ? <div role="alert" className="rounded border border-destructive/40 p-3 text-sm">Reservation summaries are unavailable. <Button variant="link" className="h-auto p-0" onClick={() => refetchReservations()}>Retry</Button></div> :
+            reservations.length === 0 ? <p className="rounded border border-dashed p-4 text-sm text-muted-foreground">No appointment reservations have been recorded.</p> :
+              <div className="grid gap-2 lg:grid-cols-2">{reservations.map(reservation => {
+                const client = clients.find(item => item.id === reservation.clientId);
+                const actionable = ["expired", "cancelled", "payment_check", "payment_review"].includes(reservation.status);
+                return <div key={reservation.id} className="flex flex-col justify-between gap-3 rounded-md border bg-background p-3 sm:flex-row sm:items-center">
+                  <div className="min-w-0"><p className="font-medium">{client?.displayId || reservation.clientId} · {reservation.clinicianName}</p><p className="text-sm text-muted-foreground">{reservation.appointmentLabel}</p><p className="text-xs text-muted-foreground">{reservation.status.replaceAll("_", " ")} · {reservation.route} · {reservation.durationHours}h hold · deadline {formatEuropeLondonDateTime(reservation.deadline)}</p>{reservation.reason && <p className="text-xs text-muted-foreground">{reservation.reason}</p>}</div>
+                  <div className="flex shrink-0 gap-2">
+                    {reservation.status === "payment_check" && <Button size="sm" variant="outline" disabled={reservationAction.isPending} onClick={() => reservationAction.mutate({ clientId: reservation.clientId, reservationId: reservation.id, action: "check" })}>Check reservation</Button>}
+                    {reservation.status === "payment_review" && <Button size="sm" variant="outline" disabled={!client} onClick={() => setSelectedPortalClientId(reservation.clientId)}>Review client</Button>}
+                    {actionable && (reservation.status === "expired" || reservation.status === "cancelled") && client && <Button size="sm" variant="outline" onClick={() => { setSelectedClient(client); setSelectedOptions([]); setIsAllocateDialogOpen(true); }}>Review choices</Button>}
+                    {(reservation.status === "active" || reservation.status === "payment_check") && <Button size="sm" variant="ghost" onClick={() => setReservationToCancel(reservation)}>Cancel hold</Button>}
+                  </div>
+                </div>;
+              })}</div>}
+          <AlertDialog open={!!reservationToCancel} onOpenChange={open => { if (!open) setReservationToCancel(null); }}>
+            <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Request cancellation?</AlertDialogTitle><AlertDialogDescription>This requests cancellation of the held appointment for {reservationToCancel?.clinicianName}. The slot is released only after any required payment check is complete; the result may remain payment_check or become confirmed. You will see the returned status and reason after the check.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Keep reservation</AlertDialogCancel><AlertDialogAction disabled={reservationAction.isPending} onClick={() => reservationToCancel && reservationAction.mutate({ clientId: reservationToCancel.clientId, reservationId: reservationToCancel.id, action: "cancel" })}>Request cancellation</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
+          </AlertDialog>
+        </section>
       )}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
@@ -2669,13 +2775,13 @@ export default function Clients() {
                             && (client.allocationOfferEligibility?.unavailableCount ?? 0) === 0 && (
                             <DropdownMenuItem
                               disabled={resendAllocationOptionsMutation.isPending}
-                              onClick={() => resendAllocationOptionsMutation.mutate(client.id)}
+                              onClick={() => flexibleBookingEnabled ? handleOfferNewChoices(client) : resendAllocationOptionsMutation.mutate(client.id)}
                               data-testid={`button-resend-allocation-options-${client.id}`}
                             >
                               {resendAllocationOptionsMutation.isPending
                                 ? <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                                 : <Mail className="h-4 w-4 mr-2" />}
-                              Resend Options Email
+                              {flexibleBookingEnabled ? "Review and resend clinician invitation" : "Resend Options Email"}
                             </DropdownMenuItem>
                           )}
                           <DropdownMenuSeparator />
@@ -2790,7 +2896,8 @@ export default function Clients() {
                                 resendPending={resendAllocationOptionsMutation.isPending}
                                 onContactFamily={() => handleOpenEditClient(client)}
                                 onOfferNewChoices={() => handleOfferNewChoices(client)}
-                                onResend={() => resendAllocationOptionsMutation.mutate(client.id)}
+                                resendLabel={flexibleBookingEnabled ? "Review and resend clinician invitation" : undefined}
+                                onResend={() => flexibleBookingEnabled ? handleOfferNewChoices(client) : resendAllocationOptionsMutation.mutate(client.id)}
                               />
                         )}
                         {client.status === "OptionSelected" && (
@@ -3521,10 +3628,14 @@ export default function Clients() {
       <Dialog open={isAllocateDialogOpen} onOpenChange={(open) => { setIsAllocateDialogOpen(open); if (!open) { setIsManualAllocation(false); setAllocationReason(""); setSelectedOptions([]); setShowUnavailableSlots(false); } }}>
         <DialogContent className="sm:max-w-[600px] max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{multiClinicianAllocationEnabled ? "Send Clinician Options" : "Allocate Clinician Slot"}</DialogTitle>
+            <DialogTitle>{isManualAllocation && flexibleBookingEnabled ? "Reserve Agreed Appointment" : multiClinicianAllocationEnabled ? (flexibleBookingEnabled ? "Invite Clinician Preferences" : "Send Clinician Options") : "Allocate Clinician Slot"}</DialogTitle>
             <DialogDescription>
-              {multiClinicianAllocationEnabled
-                ? `Select up to 3 clinician/slot options to send to ${selectedClient?.displayId}. Click slots to toggle selection.`
+              {isManualAllocation && flexibleBookingEnabled
+                ? `Reserve an agreed appointment for ${selectedClient?.displayId}. The reservation deadline applies to new holds only.`
+                : multiClinicianAllocationEnabled
+                ? flexibleBookingEnabled
+                  ? `Select clinicians to recommend to ${selectedClient?.displayId}. The family will express a clinician preference before appointment details are agreed.`
+                  : `Select up to 3 clinician/slot options to send to ${selectedClient?.displayId}. Click slots to toggle selection.`
                 : `Assign ${selectedClient?.displayId} to an available time slot.`}
             </DialogDescription>
           </DialogHeader>
@@ -3632,6 +3743,8 @@ export default function Clients() {
 
               {selectedClient && getCliniciansForAllocation(selectedClient).map(clinician => {
                 const isMatch = isClinicianMatch(clinician, selectedClient);
+                const isFlexibleInvitation = flexibleBookingEnabled && !isManualAllocation;
+                const isRecommendedClinician = selectedOptions.some(option => option.clinicianId === clinician.id);
                 return (
                   <div key={clinician.id} className={!isMatch ? "opacity-75" : ""}>
                     <div className="flex items-center justify-between mb-2">
@@ -3663,6 +3776,15 @@ export default function Clients() {
                         </div>
                       </div>
                       <div className="flex items-center gap-2 flex-wrap justify-end">
+                        {isFlexibleInvitation && (
+                          <ClinicianRecommendationToggle
+                            clinicianName={clinician.name}
+                            selected={isRecommendedClinician}
+                            onToggle={() => setSelectedOptions(current => isRecommendedClinician
+                              ? current.filter(option => option.clinicianId !== clinician.id)
+                              : [...current, { clinicianId: clinician.id, slotId: "" }])}
+                          />
+                        )}
                         {/* New client capacity indicator */}
                         <div className={`flex items-center text-[10px] px-2 py-0.5 rounded ${
                           (clinician.maxNewClients ?? 0) === 0 
@@ -3713,7 +3835,7 @@ export default function Clients() {
                         const slotIsMatch = availMatch === true;
                         const noMatch = availMatch === false;
                         
-                        const isSelectedForOptions = multiClinicianAllocationEnabled && selectedOptions.some(o => o.clinicianId === clinician.id && o.slotId === slot.id);
+                        const isSelectedForOptions = multiClinicianAllocationEnabled && !(isManualAllocation && flexibleBookingEnabled) && !flexibleBookingEnabled && selectedOptions.some(o => o.clinicianId === clinician.id && o.slotId === slot.id);
                         const missingZoomLink = zoomLinkEmailEnabled && (slot as any).locationType === "online" && !isValidZoomLink(clinician.zoomLink);
                         const unavailableReason = getSlotUnavailableReason({
                           isBooked: slot.isBooked,
@@ -3728,7 +3850,7 @@ export default function Clients() {
                             key={slot.id}
                             title={unavailableReason || undefined}
                             variant={isSelectedForOptions ? "default" : slot.isBooked ? "ghost" : "outline"}
-                            disabled={allocationPreferenceLoading || (!isSelectedForOptions && isSlotUnavailable)}
+                            disabled={isFlexibleInvitation || allocationPreferenceLoading || reserveSlotMutation.isPending || (!isSelectedForOptions && isSlotUnavailable)}
                             className={`justify-start h-auto py-2 px-3 text-xs relative ${
                               isSelectedForOptions
                                 ? "bg-primary text-primary-foreground border-primary ring-2 ring-primary/30"
@@ -3741,7 +3863,7 @@ export default function Clients() {
                                       : "hover:border-primary hover:bg-primary/5"
                             }`}
                             onClick={() => {
-                              if (multiClinicianAllocationEnabled) {
+                              if (multiClinicianAllocationEnabled && !(isManualAllocation && flexibleBookingEnabled)) {
                                 // Multi-select: toggle selection (max 3); never add unavailable slots
                                 if (isSelectedForOptions) {
                                   setSelectedOptions(prev => prev.filter(o => !(o.clinicianId === clinician.id && o.slotId === slot.id)));
@@ -3816,28 +3938,28 @@ export default function Clients() {
             </div>
           </div>
           {/* CY&A: Send Options footer */}
-          {multiClinicianAllocationEnabled && (
+          {multiClinicianAllocationEnabled && !(isManualAllocation && flexibleBookingEnabled) && (
             <div className="border-t pt-4 flex items-center justify-between gap-4">
               <span className="text-sm text-muted-foreground">
                 {selectedOptions.length === 0
-                  ? "Select 1–3 clinician/slot options"
-                  : `${selectedOptions.length}/3 selected`}
+                  ? flexibleBookingEnabled ? "Select one or more clinicians" : "Select 1–3 clinician/slot options"
+                  : flexibleBookingEnabled ? `${selectedOptions.length} clinician${selectedOptions.length === 1 ? "" : "s"} selected` : `${selectedOptions.length}/3 selected`}
               </span>
               <Button
-                disabled={allocationPreferenceLoading || selectedOptions.length === 0 || allocateOptionsMutation.isPending}
+                disabled={allocationPreferenceLoading || selectedOptions.length === 0 || allocateOptionsMutation.isPending || clinicianInvitationMutation.isPending}
                 onClick={() => {
                   if (selectedClient) {
-                    allocateOptionsMutation.mutate({
-                      clientId: selectedClient.id,
-                      selections: selectedOptions,
-                      reoffer: selectedClient.status === "OptionsSent",
-                    });
+                    if (flexibleBookingEnabled) {
+                      clinicianInvitationMutation.mutate({ clientId: selectedClient.id, clinicianIds: selectedOptions.map(option => option.clinicianId).filter((id, index, all) => all.indexOf(id) === index), reoffer: selectedClient.status === "OptionsSent" });
+                    } else {
+                      allocateOptionsMutation.mutate({ clientId: selectedClient.id, selections: selectedOptions, reoffer: selectedClient.status === "OptionsSent" });
+                    }
                   }
                 }}
               >
-                {allocateOptionsMutation.isPending
+                {allocateOptionsMutation.isPending || clinicianInvitationMutation.isPending
                   ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Sending...</>
-                  : `Send Options (${selectedOptions.length})`}
+                  : flexibleBookingEnabled ? `Send Invitation (${selectedOptions.length})` : `Send Options (${selectedOptions.length})`}
               </Button>
             </div>
           )}

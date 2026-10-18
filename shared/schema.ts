@@ -59,6 +59,8 @@ export const tenants = pgTable("tenants", {
   writeuppChecklistEnabled: boolean("writeup_checklist_enabled").default(false),
   completedBookingsEnabled: boolean("completed_bookings_enabled").default(false),
   oneOffSlotsEnabled: boolean("one_off_slots_enabled").default(false),
+  flexibleBookingEnabled: boolean("flexible_booking_enabled").notNull().default(false),
+  reservationDurationHours: integer("reservation_duration_hours").notNull().default(12),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -297,6 +299,53 @@ export const selectClientSchema = createSelectSchema(clients);
 
 export type InsertClient = z.infer<typeof insertClientSchema>;
 export type Client = typeof clients.$inferSelect;
+
+// New-generation bookings only. Legacy options and assignments never acquire a hold.
+export const clinicianInvitations = pgTable("clinician_invitations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  clientId: varchar("client_id").notNull().references(() => clients.id, { onDelete: "cascade" }),
+  token: text("token").notNull().unique(),
+  clinicianIds: json("clinician_ids").$type<string[]>().notNull(),
+  previousStatus: text("previous_status").notNull().default("Forms Completed"),
+  status: text("status", { enum: ["prepared", "sent", "uncertain", "selected", "declined", "closed"] }).notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  sentAt: timestamp("sent_at"),
+  emailAttemptKey: text("email_attempt_key").notNull().default(sql`gen_random_uuid()`),
+  emailAttemptStartedAt: timestamp("email_attempt_started_at").notNull().defaultNow(),
+  emailAttemptAcceptedAt: timestamp("email_attempt_accepted_at"),
+}, table => [index("clinician_invitations_client_idx").on(table.clientId)]);
+
+export const bookingReservations = pgTable("booking_reservations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  clientId: varchar("client_id").notNull().references(() => clients.id, { onDelete: "cascade" }),
+  invitationId: varchar("invitation_id").references(() => clinicianInvitations.id),
+  clinicianId: varchar("clinician_id").notNull().references(() => clinicians.id),
+  slotId: varchar("slot_id").notNull().references(() => timeSlots.id),
+  route: text("route", { enum: ["online", "phone"] }).notNull(),
+  previousStatus: text("previous_status").notNull().default("Forms Completed"),
+  durationHours: integer("duration_hours").notNull(),
+  deadline: timestamp("deadline").notNull(),
+  status: text("status", { enum: ["active", "payment_check", "expired", "cancelled", "confirmed", "payment_review"] }).notNull(),
+  reason: text("reason"),
+  clinicianName: text("clinician_name").notNull(),
+  appointmentLabel: text("appointment_label").notNull(),
+  // Historic payment ownership survives the client's next reservation.
+  paymentAttemptKey: text("payment_attempt_key"),
+  paymentLinkId: text("payment_link_id"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  endedAt: timestamp("ended_at"),
+  lastCheckedAt: timestamp("last_checked_at"),
+  latePaymentReviewRequired: boolean("late_payment_review_required").notNull().default(false),
+  followUpPending: boolean("follow_up_pending").notNull().default(false),
+}, table => [
+  index("booking_reservations_due_idx").on(table.status, table.deadline),
+  uniqueIndex("booking_reservations_active_client_unique").on(table.clientId)
+    .where(sql`${table.status} in ('active', 'payment_check', 'payment_review')`),
+]);
+
+export type BookingReservation = typeof bookingReservations.$inferSelect;
 
 // Immutable history of a confirmed appointment.  Assignment rows are retired
 // after confirmation, so confirmation views and delivery retries must never

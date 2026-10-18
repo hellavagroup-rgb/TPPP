@@ -27,6 +27,7 @@ import Payments from "@/pages/payments";
 import SuperAdmin from "@/pages/super-admin";
 import OptionSelection from "@/pages/option-selection";
 import RegistrationForm from "@/pages/registration-form";
+import FlexibleBooking from "@/pages/flexible-booking";
 import { useEffect } from "react";
 
 function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
@@ -101,6 +102,10 @@ function Router() {
           <Route path="/options/:selectionToken" component={OptionSelection} />
         </Switch>
       );
+  }
+
+  if (location.startsWith("/book/")) {
+      return <Switch><Route path="/book/:token" component={FlexibleBooking} /></Switch>;
   }
 
   if (location.startsWith("/register/")) {

@@ -96,7 +96,7 @@ describe("login response handling", () => {
   }
 
   it("returns 401 for rejected credentials without trying to persist a session", async () => {
-    const { handleLoginResult } = await import("./routes");
+    const { handleLoginResult } = await import("./loginResponse");
     const logIn = vi.fn();
     const res = responseRecorder();
 
@@ -114,7 +114,7 @@ describe("login response handling", () => {
   });
 
   it("returns 503 when valid credentials cannot be persisted to the session store", async () => {
-    const { handleLoginResult } = await import("./routes");
+    const { handleLoginResult } = await import("./loginResponse");
     const logIn = vi.fn((_user, done) => done(new Error("session store unavailable")));
     const res = responseRecorder();
     const user = { id: "user-123", role: "admin" } as any;
@@ -129,7 +129,7 @@ describe("login response handling", () => {
   });
 
   it("returns the authenticated user after the session is persisted", async () => {
-    const { handleLoginResult } = await import("./routes");
+    const { handleLoginResult } = await import("./loginResponse");
     const logIn = vi.fn((_user, done) => done());
     const res = responseRecorder();
     const user = { id: "user-123", role: "admin" } as any;

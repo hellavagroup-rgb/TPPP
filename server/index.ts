@@ -8,6 +8,9 @@ import rateLimit from "express-rate-limit";
 import { syncAllActiveConnections } from "./gmailSync";
 import { storage } from "./storage";
 import { pollIntakeBounceAlerts } from "./intakeBounceAlerts";
+import { sweepReservations } from "./reservationLifecycle";
+import { log } from "./log";
+export { log } from "./log";
 
 const app = express();
 
@@ -66,20 +69,11 @@ app.use(
 
 app.use(express.urlencoded({ extended: false }));
 
-export function log(message: string, source = "express") {
-  const formattedTime = new Date().toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-  });
-
-  console.log(`${formattedTime} [${source}] ${message}`);
-}
-
 app.use((req, res, next) => {
   const start = Date.now();
-  const path = req.path;
+  const path = req.path
+    .replace(/^(\/api\/public\/booking\/)[^/]+/, "$1[token]")
+    .replace(/^(\/api\/public\/register\/[^/]+\/)[^/]+/, "$1[token]");
 
   res.on("finish", () => {
     const duration = Date.now() - start;
@@ -161,4 +155,8 @@ app.use((req, res, next) => {
   setInterval(() => {
     pollIntakeBounceAlerts().catch(err => log(`[intake bounce] poll error: ${err}`));
   }, 5 * 60 * 1000);
+  sweepReservations().catch(() => log("[reservations] initial reconciliation failed; existing ownership preserved"));
+  setInterval(() => {
+    sweepReservations().catch(() => log("[reservations] reconciliation failed; existing ownership preserved"));
+  }, 60 * 1000);
 })();

@@ -6,6 +6,7 @@ import { db } from "./db";
 import { generateRegistrationInviteEmail, sendEmail } from "./email";
 import { storage } from "./storage";
 import { canSendRegistration } from "./registrationWorkflow";
+import { assertReservationOpen } from "./reservationLifecycle";
 
 const ELIGIBLE_STATUSES: Client["status"][] = ["Assigned", "AwaitingConfirmation", "OptionSelected"];
 
@@ -64,6 +65,7 @@ export async function deliverRegistration(input: {
     if (!client.assignedClinicianId || !client.assignedSlotId) {
       throw new RegistrationDeliveryError(400, "Registration can only be sent to an allocated client");
     }
+    const reservation = await assertReservationOpen(client);
     if (!canSendRegistration({
       featureEnabled: tenant.registrationFormEnabled === true,
       requestTenantId: tenant.id,
@@ -102,6 +104,8 @@ export async function deliverRegistration(input: {
       updatedAt: new Date(),
     }).where(and(
       eq(clients.id, client.id),
+      eq(clients.assignedSlotId, client.assignedSlotId),
+      ...(reservation ? [eq(clients.registrationToken, client.registrationToken!)] : []),
       eq(clients.tenantId, tenant.id),
       inArray(clients.status, ELIGIBLE_STATUSES),
       or(
@@ -164,7 +168,7 @@ export async function deliverRegistration(input: {
       name: tenant.name,
       fromEmail: tenant.fromEmail,
       primaryColor: tenant.primaryColor,
-    });
+    }, reservation);
     const delivery = await sendEmail({
       ...email,
       to: client.email,
@@ -203,13 +207,15 @@ export async function deliverRegistration(input: {
       registrationEmailClaimId: null,
       registrationEmailPendingToken: null,
       registrationToken: token,
-      registrationTokenExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      registrationTokenExpiresAt: reservation?.deadline || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
       registrationTokenRevokedAt: null,
       status: "OptionSelected",
       updatedAt: new Date(),
     }).where(and(
       eq(clients.id, client.id),
       eq(clients.tenantId, tenant.id),
+      eq(clients.assignedSlotId, client.assignedSlotId),
+      inArray(clients.status, ELIGIBLE_STATUSES),
       eq(clients.registrationEmailAttemptKey, effectiveAttemptKey),
       eq(clients.registrationEmailClaimId, claimId),
       isNotNull(clients.registrationEmailSendingAt),

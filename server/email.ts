@@ -67,7 +67,7 @@ function solidHeaderColor(primaryColor?: string | null): string {
   return '#667eea'; // default brand blue
 }
 
-function wrapInHtmlTemplate(text: string, headerTitle?: string, practiceName?: string, primaryColor?: string | null): string {
+export function wrapInHtmlTemplate(text: string, headerTitle?: string, practiceName?: string, primaryColor?: string | null): string {
   const footer = practiceName || GENERIC_PRACTICE_NAME;
   const lines = text.split('\n').map(line => line ? `<p style="margin:0 0 12px 0;">${linkifyUrls(line)}</p>` : '<br>').join('\n');
   const solidBg = solidHeaderColor(primaryColor);
@@ -585,15 +585,20 @@ ${practiceName} Team`;
 export async function generateRegistrationInviteEmail(
   registrationUrl: string,
   tenant?: TenantContext,
+  reservation?: { deadline: Date | string; appointmentLabel: string; clinicianName: string },
 ): Promise<EmailOptions> {
   const practiceName = tenant?.name || GENERIC_PRACTICE_NAME;
   const storedTemplate = await getStoredTemplate('registration_invite', tenant?.id);
-  const bodyText = storedTemplate
+  let bodyText = storedTemplate
     ? replacePlaceholders(storedTemplate.bodyText, {
       registration_link: registrationUrl,
       practice_name: practiceName,
     })
     : `Please complete your registration before your appointment can be confirmed.\n\nComplete registration securely here:\n${registrationUrl}\n\nWarm regards,\n${practiceName} Team`;
+  if (reservation) {
+    const deadline = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", dateStyle: "full", timeStyle: "short" }).format(new Date(reservation.deadline));
+    bodyText += `\n\nReserved appointment: ${reservation.clinicianName}, ${reservation.appointmentLabel}\nPlease complete registration and any required payment by ${deadline} (UK time). This is a temporary reservation, not a confirmed booking. An unpaid reservation may be released after this deadline.`;
+  }
   const subject = storedTemplate
     ? replacePlaceholders(storedTemplate.subject, { practice_name: practiceName })
     : `Complete your registration - ${practiceName}`;
@@ -758,7 +763,7 @@ export async function generateWaitlistUpdateEmail(clientDisplayId: string, clien
   };
 }
 
-export async function generatePaymentLinkEmail(paymentUrl: string, amountPounds: string, tenant?: TenantContext): Promise<EmailOptions> {
+export async function generatePaymentLinkEmail(paymentUrl: string, amountPounds: string, tenant?: TenantContext, reservationDeadline?: Date): Promise<EmailOptions> {
   const practiceName = tenant?.name || GENERIC_PRACTICE_NAME;
   const storedTemplate = await getStoredTemplate('payment_link', tenant?.id);
 
@@ -781,10 +786,13 @@ If you have any questions, please don't hesitate to contact us.
 Warm regards,
 ${practiceName} Team`;
 
+  const reservationCopy = reservationDeadline
+    ? `\n\nReservation deadline: ${new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", dateStyle: "full", timeStyle: "short" }).format(reservationDeadline)} (UK time). Complete your required registration and payment by this deadline. This is a temporary reservation, not a confirmed booking.`
+    : "";
   const bodyText = rawBody
     .replace(/\{\{amount\}\}/g, amountPounds)
     .replace(/\{\{payment_url\}\}/g, paymentUrl)
-    .replace(/\{\{practice_name\}\}/g, practiceName);
+    .replace(/\{\{practice_name\}\}/g, practiceName) + reservationCopy;
 
   const finalSubject = subject.replace(/\{\{practice_name\}\}/g, practiceName);
 

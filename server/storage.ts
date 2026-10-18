@@ -29,6 +29,8 @@ import {
 import { shouldResetZoomDelivery } from "@shared/bookingZoom";
 import { visibleCalendarSlots } from "@shared/calendarBooking";
 import { slotUnavailableReason } from "@shared/slotEligibility";
+import { isCyaPsychologyTenant } from "@shared/practicePolicies";
+import { guardReservationMutation, ReservationError } from "./reservationLifecycle";
 import { UNALLOCATED_CLIENT_STATUSES } from "./strandedAllocationRepair";
 import {
   ACTIVE_ALLOCATION_STATUSES,
@@ -585,8 +587,18 @@ export class DatabaseStorage implements IStorage {
   }
 
   async archiveClient(id: string, reason?: string, category?: string): Promise<Client | undefined> {
+    const scoped = await this.getClientById(id);
+    if (isCyaPsychologyTenant(scoped?.tenantId)) return db.transaction(async tx => {
+      await tx.select().from(clients).where(eq(clients.id, id)).for("update");
+      await guardReservationMutation(id, scoped!.tenantId!, tx);
+      return this.archiveClientRecord(id, reason, category, tx);
+    });
+    return this.archiveClientRecord(id, reason, category, db);
+  }
+
+  private async archiveClientRecord(id: string, reason: string | undefined, category: string | undefined, executor: any): Promise<Client | undefined> {
     // First, get the client to find their assigned slot and clinician
-    const [existingClient] = await db.select().from(clients).where(eq(clients.id, id));
+    const [existingClient] = await executor.select().from(clients).where(eq(clients.id, id));
     
     if (!existingClient) return undefined;
 
@@ -601,7 +613,7 @@ export class DatabaseStorage implements IStorage {
         const startTime = slotParts[1];
 
         // Try to find by day (recurring) first, then by date (specific date)
-        let [foundSlot] = await db.select().from(timeSlots)
+        let [foundSlot] = await executor.select().from(timeSlots)
           .where(and(
             eq(timeSlots.clinicianId, existingClient.assignedClinicianId),
             eq(timeSlots.day, dayOrDate),
@@ -610,7 +622,7 @@ export class DatabaseStorage implements IStorage {
           ));
 
         if (!foundSlot) {
-          [foundSlot] = await db.select().from(timeSlots)
+          [foundSlot] = await executor.select().from(timeSlots)
             .where(and(
               eq(timeSlots.clinicianId, existingClient.assignedClinicianId),
               eq(timeSlots.date, dayOrDate),
@@ -623,12 +635,12 @@ export class DatabaseStorage implements IStorage {
 
       if (slotIdToRelease) {
         // Release the slot
-        await db.update(timeSlots).set({
+        await executor.update(timeSlots).set({
           isBooked: false
         }).where(eq(timeSlots.id, slotIdToRelease));
 
         // Decrement clinician load
-        await db.update(clinicians).set({
+        await executor.update(clinicians).set({
           currentLoad: sql`GREATEST(${clinicians.currentLoad} - 1, 0)`
         }).where(eq(clinicians.id, existingClient.assignedClinicianId));
       }
@@ -638,7 +650,7 @@ export class DatabaseStorage implements IStorage {
     // assignedSlotId pointing at a slot that is no longer booked. Leaving it set
     // causes a FK-constraint error if an admin later tries to delete that slot
     // (the slot's isBooked flag is false so the old guard skipped cleanup).
-    const [client] = await db.update(clients).set({
+    const [client] = await executor.update(clients).set({
       isArchived: true,
       archivedAt: new Date(),
       archiveReason: reason || null,
@@ -909,6 +921,18 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateClient(id: string, updates: Partial<InsertClient>): Promise<Client | undefined> {
+    if (["status", "assignedClinicianId", "assignedSlotId", "assignedSlot", "isArchived", "paymentStatus", "stripeCheckoutUrl", "stripePaymentLinkId", "registrationToken"].some(key => key in updates)) {
+      const scoped = await this.getClientById(id);
+      if (isCyaPsychologyTenant(scoped?.tenantId)) return db.transaction(async tx => {
+        const [current] = await tx.select().from(clients).where(eq(clients.id, id)).for("update");
+        if (current && ["status", "assignedClinicianId", "assignedSlotId", "assignedSlot", "isArchived", "paymentStatus", "stripeCheckoutUrl", "stripePaymentLinkId", "registrationToken"]
+          .some(key => key in updates && (updates as any)[key] !== (current as any)[key])) {
+          await guardReservationMutation(id, scoped!.tenantId!, tx);
+        }
+        const [client] = await tx.update(clients).set({ ...updates, updatedAt: new Date() }).where(eq(clients.id, id)).returning();
+        return client;
+      });
+    }
     const [client] = await db.update(clients).set({
       ...updates,
       updatedAt: new Date()
@@ -925,6 +949,10 @@ export class DatabaseStorage implements IStorage {
   ): Promise<Client | undefined> {
     try {
       return await db.transaction(async (tx) => {
+        if (isCyaPsychologyTenant(tenantId)) {
+          await tx.select().from(clients).where(eq(clients.id, id)).for("update");
+          await guardReservationMutation(id, tenantId, tx);
+        }
         if (slotId) {
           const releasedSlots = await tx.update(timeSlots)
             .set({ isBooked: false })
@@ -976,7 +1004,7 @@ export class DatabaseStorage implements IStorage {
       if (error instanceof ClientMissingDuringAllocationUpdateError) {
         return undefined;
       }
-      if (error instanceof ClientAllocationUpdateError) {
+      if (error instanceof ClientAllocationUpdateError || error instanceof ReservationError) {
         throw error;
       }
       throw new ClientAllocationUpdateError(
@@ -1163,6 +1191,7 @@ export class DatabaseStorage implements IStorage {
         eq(clients.tenantId, tenantId),
       )).for("update");
       if (!existingClient) return undefined;
+      await guardReservationMutation(clientId, tenantId, tx);
       // This lock also serializes against completion: a stale status-edit request
       // must not replace a completed booking without an explicit reopen.
       if (existingClient.completedAt) {

@@ -293,6 +293,60 @@ describe("Clients page compact board integration", () => {
     expect(screen.queryByRole("button", { name: "Manager confirm" })).toBeNull();
   });
 
+  it.each([false, true])("keeps new-referral actions outside the scrollable fields (extra practice fields=%s)", async (extraFields) => {
+    apiFixtures.tenant = makeTenant({ contactPreferenceEnabled: extraFields, formsEnabled: extraFields });
+    const originalFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.stubGlobal("fetch", vi.fn(async (input: any, init?: any) => {
+      if (new URL(String(input), window.location.origin).pathname === "/api/clients/check-email") {
+        return json({ matches: [{ id: "existing-test", displayId: "WTEST1" }] });
+      }
+      return originalFetch(input, init);
+    }));
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "New Referral" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add New Referral" });
+    await user.type(within(dialog).getByPlaceholderText("client@example.com"), "test@example.test");
+    await user.tab();
+    await within(dialog).findByText(/This email is already linked to WTEST1/);
+
+    expect(dialog.classList.contains("max-h-[calc(100dvh-2rem)]")).toBe(true);
+    expect(dialog.classList.contains("flex-col")).toBe(true);
+    expect(dialog.classList.contains("overflow-hidden")).toBe(true);
+    const fields = within(dialog).getByTestId("new-referral-fields");
+    expect(fields.classList.contains("min-h-0")).toBe(true);
+    expect(fields.classList.contains("overflow-y-auto")).toBe(true);
+    expect(fields.classList.contains("overscroll-contain")).toBe(true);
+    const create = within(dialog).getByRole("button", { name: /Create client/i });
+    expect(fields.contains(create)).toBe(false);
+    expect(create.parentElement?.classList.contains("shrink-0")).toBe(true);
+    expect(create).toHaveProperty("disabled", false);
+  });
+
+  it("still submits a new client using the pinned create action", async () => {
+    const originalFetch = vi.mocked(fetch).getMockImplementation()!;
+    const writes: Record<string, unknown>[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: any, init?: any) => {
+      if (String(input) === "/api/clients" && init?.method === "POST") {
+        writes.push(JSON.parse(init.body));
+        return json(makeClient("new-client", "WLAYOUT1", "New"));
+      }
+      return originalFetch(input, init);
+    }));
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "New Referral" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add New Referral" });
+    await user.type(within(dialog).getByPlaceholderText("W..."), "WLAYOUT1");
+    await user.click(within(dialog).getByRole("button", { name: /Create client/i }));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]).toMatchObject({ displayId: "WLAYOUT1", status: "New" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add New Referral" })).toBeNull());
+    expect(uiSignals.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Client Created" }));
+  });
+
   async function openConfirmedEdit(clientId: string, user: ReturnType<typeof userEvent.setup>) {
     await user.click(await screen.findByTestId(`compact-client-card-${clientId}`));
     const card = await screen.findByTestId(`client-details-${clientId}`);

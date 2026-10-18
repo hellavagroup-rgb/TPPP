@@ -2073,14 +2073,14 @@ export default function Clients() {
                     New Referral
                 </Button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-[500px]">
-                <DialogHeader>
+            <DialogContent className="sm:max-w-[500px] max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
+                <DialogHeader className="shrink-0">
                     <DialogTitle>Add New Referral</DialogTitle>
                     <DialogDescription>
                         Enter client details from WriteUpp. The ID will be used for anonymization.
                     </DialogDescription>
                 </DialogHeader>
-                <div className="grid gap-4 py-4">
+                <div className="grid min-h-0 gap-4 overflow-y-auto overscroll-contain py-4" data-testid="new-referral-fields">
                     <div className="grid gap-2">
                         <Label>WriteUpp ID (W-Number)</Label>
                         <div className="relative">
@@ -2249,7 +2249,7 @@ export default function Clients() {
                         </div>
                     )}
                 </div>
-                <DialogFooter>
+                <DialogFooter className="shrink-0">
                     <Button onClick={handleCreateClient} disabled={createClientMutation.isPending || isRetryingCreatedForms}>
                       {createClientMutation.isPending || isRetryingCreatedForms
                         ? "Creating…"

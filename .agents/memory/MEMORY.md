@@ -40,3 +40,4 @@
 - [Original enquiry provenance](enquiry-source-provenance.md) — a matching contact email on an unconverted inbox message is a review candidate, not proof of a client's original source.
 - [Manager confirmations](manager-confirmations.md) — selected admins plus a practice PIN; administrative confirmation must never fabricate payment, registration or booking evidence.
 - [Calendar-only form dates](calendar-only-form-dates.md) — DOBs must not become UTC instants; preserve selected days and verify historical answers before correcting them.
+- [Modal viewport access](modal-viewport-access.md) — long staff forms need internal scrolling; modal page-scroll locks otherwise leave action buttons unreachable.

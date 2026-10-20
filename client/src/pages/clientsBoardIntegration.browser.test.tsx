@@ -8,14 +8,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import Clients from "./clients";
 import { CYA_PSYCHOLOGY_TENANT_ID } from "@shared/practicePolicies";
 
-const uiSignals = vi.hoisted(() => ({ toast: vi.fn() }));
+const uiSignals = vi.hoisted(() => ({ toast: vi.fn(), role: "admin" as string }));
 vi.mock("@/hooks/use-toast", () => ({
   useToast: () => ({ toast: uiSignals.toast }),
 }));
 
 vi.mock("@/lib/auth", () => ({
   useAuth: () => ({
-    user: { id: "admin-test", name: "Board Admin", role: "admin" },
+    user: { id: "admin-test", name: "Board Admin", role: uiSignals.role },
     isLoading: false,
   }),
 }));
@@ -59,7 +59,8 @@ const apiFixtures: {
   clients: ClientFixture[];
   historicRows: HistoricFixture[];
   managerEnabled: boolean;
-} = { tenant: {}, clients: [], historicRows: [], managerEnabled: false };
+  reservations: Record<string, unknown>[];
+} = { tenant: {}, clients: [], historicRows: [], managerEnabled: false, reservations: [] };
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -92,6 +93,20 @@ function makeClient(id: string, displayId: string, status: string): ClientFixtur
     isArchived: false,
     completedAt: null,
     notes: null,
+  };
+}
+
+function makeReservation(status: "active" | "payment_check" | "payment_review", clientId = "held-client") {
+  return {
+    id: `reservation-${status}`,
+    clientId,
+    status,
+    deadline: "2999-01-01T12:00:00.000Z",
+    durationHours: 12,
+    route: "online",
+    clinicianName: "Dr Fixture Clinician",
+    appointmentLabel: "Tuesday 10:00–11:00",
+    ...(status === "payment_review" ? { canResolvePaymentConflict: true, reason: "Payment needs staff review." } : {}),
   };
 }
 
@@ -201,6 +216,8 @@ describe("Clients page compact board integration", () => {
     apiFixtures.clients = [];
     apiFixtures.historicRows = [];
     apiFixtures.managerEnabled = false;
+    apiFixtures.reservations = [];
+    uiSignals.role = "admin";
 
     window.matchMedia = vi.fn().mockReturnValue({
       matches: false,
@@ -242,6 +259,8 @@ describe("Clients page compact board integration", () => {
           return json({ connected: false, configured: false });
         case "/api/historic-reconciliation":
           return json(apiFixtures.historicRows);
+        case "/api/booking-reservations":
+          return json(apiFixtures.reservations);
         default:
           return json({ error: `Unexpected test API request: ${url.pathname}` }, 404);
       }
@@ -309,6 +328,157 @@ describe("Clients page compact board integration", () => {
     } else {
       expect(writes[0].body).toMatchObject({ clinicianId: "pending-clinician", slotId: "pending-slot" });
     }
+  });
+
+  it.each([
+    ["flexible booking disabled", { flexibleBookingEnabled: false, paymentReconciliationEnabled: true }],
+    ["payment reconciliation disabled", { flexibleBookingEnabled: true, paymentReconciliationEnabled: false }],
+  ])("requires payment reconciliation before offering new flexible booking actions (%s)", async (_scenario, flags) => {
+    apiFixtures.tenant = makeTenant({
+      ...flags,
+      registrationFormEnabled: true,
+      registrationFormId: "registration-form",
+    });
+    apiFixtures.clients = [makeClient("new-flexible", "FLEX-101", "Forms Completed")];
+    const originalFetch = fetch;
+    const writes: Array<{ path: string; body: any }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input, init) => {
+      const path = new URL(String(input), window.location.origin).pathname;
+      if (path === "/api/clinicians") return json([{
+        id: "flex-clinician", name: "Dr Fixture Clinician", specialties: [], insurers: [],
+        capacity: 10, currentLoad: 0, maxNewClients: 3, isActive: true,
+        availability: [{ id: "flex-slot", tenantId: "tenant-1", clinicianId: "flex-clinician",
+          type: "Recurring", day: "Monday", startTime: "10:00", endTime: "11:00",
+          startDate: "2999-01-01", isBooked: false, locationType: "online" }],
+      }]);
+      if (path === "/api/clients/new-flexible/submissions") return json([]);
+      if (init?.method === "POST") {
+        writes.push({ path, body: JSON.parse(String(init.body)) });
+        return json({ success: true });
+      }
+      return originalFetch(input, init);
+    }));
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const user = userEvent.setup();
+    const card = await screen.findByTestId("kanban-card-new-flexible");
+    const menu = within(card).getAllByRole("button").find(button => button.getAttribute("aria-haspopup") === "menu");
+    await user.click(menu!);
+    await user.click(await screen.findByRole("menuitem", { name: "Allocate to Clinician" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Send Clinician Options")).toBeTruthy();
+    expect(within(dialog).queryByText("Invite Clinician Preferences")).toBeNull();
+    await user.click(await within(dialog).findByRole("button", { name: /Monday/ }));
+    const sendOptions = await within(dialog).findByRole("button", { name: "Send Options (1)" });
+    expect(within(dialog).queryByRole("button", { name: /Send Invitation/ })).toBeNull();
+    await user.click(sendOptions);
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0].path).toBe("/api/clients/new-flexible/allocate-options");
+    expect(writes[0].path).not.toBe("/api/clients/new-flexible/clinician-invitation");
+  });
+
+  it.each([
+    ["active", "Cancel hold"],
+    ["payment_check", "Check reservation"],
+    ["payment_review", "Review client"],
+  ] as const)("keeps an existing %s reservation visible and actionable when flexible booking is disabled", async (status, action) => {
+    apiFixtures.tenant = makeTenant({
+      id: CYA_PSYCHOLOGY_TENANT_ID,
+      flexibleBookingEnabled: false,
+      paymentReconciliationEnabled: true,
+    });
+    apiFixtures.clients = [makeClient("held-client", "HOLD-101", "RegistrationPending")];
+    apiFixtures.reservations = [makeReservation(status)];
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+
+    const reservations = await screen.findByTestId("booking-reservations");
+    await screen.findByText("HOLD-101 · Dr Fixture Clinician");
+    expect(reservations.textContent).toContain("HOLD-101");
+    expect(reservations.textContent).toContain(status.replaceAll("_", " "));
+    const actionButton = within(reservations).getByRole("button", { name: action });
+    expect(actionButton).toHaveProperty("disabled", false);
+  });
+
+  it.each([
+    ["active", "Cancel hold"],
+    ["payment_check", "Check reservation"],
+    ["payment_review", "Review client"],
+  ] as const)("keeps an existing %s reservation visible and actionable when payment reconciliation is disabled", async (status, action) => {
+    apiFixtures.tenant = makeTenant({
+      id: CYA_PSYCHOLOGY_TENANT_ID,
+      flexibleBookingEnabled: true,
+      paymentReconciliationEnabled: false,
+    });
+    apiFixtures.clients = [makeClient("held-client", "HOLD-102", "RegistrationPending")];
+    apiFixtures.reservations = [makeReservation(status)];
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+
+    const reservations = await screen.findByTestId("booking-reservations");
+    await screen.findByText("HOLD-102 · Dr Fixture Clinician");
+    expect(reservations.textContent).toContain("HOLD-102");
+    expect(reservations.textContent).toContain(status.replaceAll("_", " "));
+    expect(within(reservations).getByRole("button", { name: action })).toHaveProperty("disabled", false);
+  });
+
+  it("shows the returned payment warning after requesting cancellation without claiming the hold was released", async () => {
+    apiFixtures.tenant = makeTenant({
+      id: CYA_PSYCHOLOGY_TENANT_ID,
+      flexibleBookingEnabled: false,
+      paymentReconciliationEnabled: false,
+    });
+    apiFixtures.clients = [makeClient("held-client", "HOLD-103", "RegistrationPending")];
+    apiFixtures.reservations = [makeReservation("payment_check")];
+    const originalFetch = fetch;
+    const writes: Array<{ path: string; body: any }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input, init) => {
+      const path = new URL(String(input), window.location.origin).pathname;
+      if (path === "/api/clients/held-client/cancel-reservation" && init?.method === "POST") {
+        writes.push({ path, body: JSON.parse(String(init.body)) });
+        return json({ status: "payment_check", reason: "Payment remains unresolved; the appointment is still held." });
+      }
+      return originalFetch(input, init);
+    }));
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const user = userEvent.setup();
+    const reservations = await screen.findByTestId("booking-reservations");
+    await screen.findByText("HOLD-103 · Dr Fixture Clinician");
+    await user.click(within(reservations).getByRole("button", { name: "Cancel hold" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog.textContent).toContain("The slot is released only after any required payment check is complete");
+    await user.click(within(dialog).getByRole("button", { name: "Request cancellation" }));
+
+    await waitFor(() => expect(writes).toEqual([{
+      path: "/api/clients/held-client/cancel-reservation",
+      body: { reservationId: "reservation-payment_check" },
+    }]));
+    await waitFor(() => expect(uiSignals.toast).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Payment check required",
+      description: "Payment remains unresolved; the appointment is still held.",
+    })));
+    expect(await screen.findByText("HOLD-103 · Dr Fixture Clinician")).toBeTruthy();
+    expect((await screen.findByTestId("booking-reservations")).textContent).toContain("payment check");
+    expect(uiSignals.toast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Reservation cancelled" }));
+  });
+
+  it.each([
+    ["clinician", CYA_PSYCHOLOGY_TENANT_ID],
+    ["admin", "another-practice"],
+  ])("does not request or render reservation records for a %s outside the owning-practice admin role", async (role, tenantId) => {
+    uiSignals.role = role;
+    apiFixtures.tenant = makeTenant({ id: tenantId });
+    apiFixtures.clients = [makeClient("held-client", "HOLD-104", "RegistrationPending")];
+    apiFixtures.reservations = [makeReservation("active")];
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+
+    await screen.findByText("Client Allocation");
+    expect(screen.queryByTestId("booking-reservations")).toBeNull();
+    expect(screen.queryByText("Dr Fixture Clinician")).toBeNull();
+    expect(vi.mocked(fetch).mock.calls.some(([input]) =>
+      new URL(String(input), window.location.origin).pathname === "/api/booking-reservations")).toBe(false);
   });
 
   it("does not show the manager override to an ordinary admin", async () => {

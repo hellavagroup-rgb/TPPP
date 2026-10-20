@@ -6,19 +6,25 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { invalidateOperationalData } from "@/lib/operationalRefresh";
+import { useAuth } from "@/lib/auth";
 
 export function RetireAvailabilityDialog({ open, target, onClose }: {
   open: boolean; target: { slot: TimeSlot; clinicianId: string } | null; onClose: () => void;
 }) {
   const cache = useQueryClient();
   const { toast } = useToast();
+  const { user } = useAuth();
+  const canPreviewWriteupp = user?.role === "admin";
   const base = target ? `/api/timeslots/${target.clinicianId}/${target.slot.id}` : "";
   const check = useQuery<{ eligible: boolean; confirmedBooking?: boolean; clientId?: string; clientDisplayId?: string; reason?: string }>({
     queryKey: [base + "/writeupp-retirement"],
     queryFn: async () => (await apiRequest("GET", base + "/writeupp-retirement")).json(),
-    enabled: open && !!target, staleTime: 0, retry: false,
+    enabled: canPreviewWriteupp && open && !!target, staleTime: 0, retry: false,
   });
-  const external = check.data?.eligible === true;
+  // Ordinary clinician retirement uses the existing own-slot DELETE endpoint.
+  // Do not require an admin-only WriteUpp preview, or reuse its cached result.
+  const external = canPreviewWriteupp && check.data?.eligible === true;
+  const confirmedBooking = canPreviewWriteupp && check.data?.confirmedBooking === true;
   const retirement = useMutation({
     mutationFn: async () => {
       if (!target) throw new Error("Select a slot first.");
@@ -39,7 +45,7 @@ export function RetireAvailabilityDialog({ open, target, onClose }: {
         : "Removed from portal availability. Historical records were preserved." });
       onClose();
     },
-    onError: () => { check.refetch(); },
+    onError: () => { if (canPreviewWriteupp) check.refetch(); },
   });
   return <AlertDialog open={open} onOpenChange={value => { if (!value && !retirement.isPending) onClose(); }}>
     <AlertDialogContent>
@@ -48,21 +54,23 @@ export function RetireAvailabilityDialog({ open, target, onClose }: {
         <AlertDialogDescription>
           {external
             ? `${check.data?.clientDisplayId}'s appointment is recorded as arranged in WriteUpp. Remove this slot from portal availability, including future weeks for a recurring slot? The client's appointment links, history, therapy status and payments will stay unchanged. No emails will be sent, and this time will not become available for another client.`
-            : check.data?.confirmedBooking ? check.data.reason
+             : confirmedBooking ? check.data?.reason
             : target?.slot.isBooked
-              ? "This slot is booked. Active client reservations cannot normally be removed. Checking for an eligible appointment already arranged in WriteUpp does not change the client."
+               ? canPreviewWriteupp
+                 ? "This slot is booked. Active client reservations cannot normally be removed. Checking for an eligible appointment already arranged in WriteUpp does not change the client."
+                 : "This slot is booked and cannot be removed here. Ask a practice administrator to review the booking or any appointment arranged in WriteUpp."
               : "Remove this slot from portal availability, including future weeks for a recurring slot? Historical records will be preserved rather than permanently deleted."}
         </AlertDialogDescription>
       </AlertDialogHeader>
-      {check.isFetching && <p role="status">Checking slot ownership…</p>}
-      {check.isError && <div role="alert">Could not check slot ownership. <Button variant="link" onClick={() => check.refetch()}>Retry check</Button></div>}
-      {!check.isFetching && !external && !check.data?.confirmedBooking && target?.slot.isBooked && check.data?.reason &&
+      {canPreviewWriteupp && check.isFetching && <p role="status">Checking slot ownership…</p>}
+      {canPreviewWriteupp && check.isError && <div role="alert">Could not check slot ownership. <Button variant="link" onClick={() => check.refetch()}>Retry check</Button></div>}
+      {canPreviewWriteupp && !check.isFetching && !external && !confirmedBooking && target?.slot.isBooked && check.data?.reason &&
         <p role="status">{check.data.reason}</p>}
       {retirement.isError && <p role="alert" className="text-destructive">{retirement.error.message}</p>}
       <AlertDialogFooter>
         <AlertDialogCancel disabled={retirement.isPending}>Cancel</AlertDialogCancel>
-        <AlertDialogAction disabled={check.isFetching || check.isError || retirement.isPending ||
-           (!external && (!!target?.slot.isBooked || check.data?.confirmedBooking === true))} onClick={event => { event.preventDefault(); retirement.mutate(); }}>
+        <AlertDialogAction disabled={!user || (canPreviewWriteupp && (check.isFetching || check.isError)) || retirement.isPending ||
+            (!external && (!!target?.slot.isBooked || confirmedBooking))} onClick={event => { event.preventDefault(); retirement.mutate(); }}>
           {retirement.isPending ? "Retiring…" : external ? "Retire occupied WriteUpp slot" : "Retire slot"}
         </AlertDialogAction>
       </AlertDialogFooter>

@@ -6,10 +6,16 @@ import { RetireAvailabilityDialog } from "./RetireAvailabilityDialog";
 import { confirmedSlotRetirementCopy } from "@shared/slotRetirementCopy";
 
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
+const auth = vi.hoisted(() => ({ role: "admin" as "admin" | "clinician" | null }));
+vi.mock("@/lib/auth", () => ({ useAuth: () => ({
+  user: auth.role ? { id: "user-a", role: auth.role } : null,
+}) }));
 const caches: QueryClient[] = [];
 afterEach(() => { cleanup(); caches.splice(0).forEach(cache => cache.clear()); vi.unstubAllGlobals(); });
 
-function setup({ eligible = true, booked = true, failed = false, checkFails = false, confirmedBooking = false } = {}) {
+function setup({ eligible = true, booked = true, failed = false, checkFails = false, confirmedBooking = false,
+  role = "admin" as "admin" | "clinician" | null, cachedPreview = undefined as any } = {}) {
+  auth.role = role;
   const writes: { method: string; path: string; body: any }[] = [];
   const onClose = vi.fn();
   vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
@@ -23,6 +29,7 @@ function setup({ eligible = true, booked = true, failed = false, checkFails = fa
   }));
   const cache = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   caches.push(cache);
+  if (cachedPreview) cache.setQueryData(["/api/timeslots/clinician-a/slot-a/writeupp-retirement"], cachedPreview);
   render(<QueryClientProvider client={cache}><RetireAvailabilityDialog open
     target={{ clinicianId: "clinician-a", slot: { id: "slot-a", isBooked: booked } as any }} onClose={onClose} /></QueryClientProvider>);
   return { writes, onClose };
@@ -79,4 +86,48 @@ it("fails closed when eligibility cannot be checked", async () => {
   await screen.findByRole("button", { name: "Retry check" });
   expect((screen.getByRole("button", { name: "Retire slot" }) as HTMLButtonElement).disabled).toBe(true);
   expect(writes).toEqual([]);
+});
+
+it("lets a clinician retire an unbooked slot without calling the administrator-only preview", async () => {
+  const { writes, onClose } = setup({ role: "clinician", booked: false, checkFails: true });
+  fireEvent.click(screen.getByRole("button", { name: "Retire slot" }));
+  await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+  expect(writes).toEqual([{ method: "DELETE", path: "/api/timeslots/clinician-a/slot-a", body: null }]);
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText(/Could not check slot ownership/)).toBeNull();
+});
+
+it("keeps booked slots protected for clinicians, without calling an administrator-only endpoint", () => {
+  const { writes } = setup({ role: "clinician", booked: true });
+  expect(screen.getByText(/Ask a practice administrator/)).toBeTruthy();
+  const button = screen.getByRole("button", { name: "Retire slot" }) as HTMLButtonElement;
+  expect(button.disabled).toBe(true);
+  fireEvent.click(button);
+  expect(writes).toEqual([]);
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it("does not reuse an administrator's cached WriteUpp approval for a clinician", async () => {
+  const { writes, onClose } = setup({ role: "clinician", booked: false,
+    cachedPreview: { eligible: true, clientId: "client-a", clientDisplayId: "WU1" } });
+  expect(screen.queryByRole("button", { name: "Retire occupied WriteUpp slot" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Retire slot" }));
+  await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+  expect(writes[0].method).toBe("DELETE");
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+it("preserves a server rejection if a seemingly free clinician slot has become occupied", async () => {
+  const { writes, onClose } = setup({ role: "clinician", booked: false, failed: true });
+  fireEvent.click(screen.getByRole("button", { name: "Retire slot" }));
+  await screen.findByText("The slot's client has changed. Refresh and review the slot again.");
+  expect(onClose).not.toHaveBeenCalled();
+  expect(writes).toHaveLength(1);
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+it("does not permit retirement without a signed-in user", () => {
+  setup({ role: null, booked: false });
+  expect((screen.getByRole("button", { name: "Retire slot" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(fetch).not.toHaveBeenCalled();
 });

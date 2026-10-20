@@ -910,7 +910,7 @@ export default function Availability() {
                               key={slot.id}
                               onClick={() => isActive && !slot.isBooked && slot.type !== "Vacation" && handleSlotClick(slot, clinician.id)}
                               className={cn(
-                                "p-1.5 rounded text-[10px] border transition-all group relative",
+                                "p-1.5 pr-7 rounded text-[10px] border transition-all group relative",
                                 slot.type === "Vacation"
                                   ? "bg-slate-100 text-slate-500 border-slate-200 border-dashed"
                                   : isFuture
@@ -970,12 +970,15 @@ export default function Availability() {
                                 </>
                               )}
                               
-                              {!isAllocating && (isActive || isFuture) && (
-                                <div className="opacity-0 group-hover:opacity-100 transition-opacity absolute right-0.5 top-0.5 flex gap-0.5">
+                              {!isAllocating && (isActive || isFuture) && !slot.retiredAt &&
+                                (user?.role === "admin" || canEditSlotLocation(user, clinician, slot)) && (
+                                <div className="absolute right-0.5 top-0.5 flex gap-0.5">
                                   <Button
                                     variant="ghost"
                                     size="icon"
-                                    className="h-4 w-4 bg-white/80 hover:bg-white text-destructive p-0"
+                                    className="h-6 w-6 bg-white/80 hover:bg-white text-destructive p-0"
+                                    aria-label="Retire availability slot"
+                                    title="Retire availability slot"
                                     onClick={(e) => { e.stopPropagation(); handleDeleteClick(slot, clinician.id); }}
                                     data-testid={`button-delete-slot-${slot.id}`}
                                   >

@@ -17,12 +17,18 @@ const caches: QueryClient[] = [];
 beforeEach(() => { h.role = "clinician"; h.toast.mockClear(); window.history.replaceState({}, "", "/availability"); });
 afterEach(() => { cleanup(); caches.splice(0).forEach(cache => cache.clear()); vi.unstubAllGlobals(); });
 
-function setup({ role = "clinician", failed = false } = {}) {
+function setup({ role = "clinician", failed = false, deleteFailed = false, booked = false, retired = false, future = false } = {}) {
   h.role = role;
   let locationType = "online";
   const writes: any[] = [];
+  const deletions: string[] = [];
   const fetchMock = vi.fn(async (input: string, init?: RequestInit) => {
     const path = new URL(String(input), window.location.origin).pathname;
+    if (init?.method === "DELETE") {
+      deletions.push(path);
+      return new Response(JSON.stringify(deleteFailed ? { error: "The slot is now booked. Refresh availability." } : { retired: true }), { status: deleteFailed ? 409 : 200 });
+    }
+    if (path.endsWith("/writeupp-retirement")) return new Response(JSON.stringify({ eligible: false }));
     if (init?.method === "PATCH") {
       const body = JSON.parse(String(init.body));
       writes.push({ path, body });
@@ -31,12 +37,15 @@ function setup({ role = "clinician", failed = false } = {}) {
     }
     const data = path === "/api/clinicians" ? [
       { id: "own", userId: "user-a", name: "Own Clinician", avatar: "O", isActive: true, availability: [
-        { id: "own-slot", type: "Recurring", day: "Monday", startTime: "09:00", endTime: "10:00", isBooked: false, retiredAt: null, locationType },
+        { id: "own-slot", type: "Recurring", day: "Monday", startTime: "09:00", endTime: "10:00", isBooked: booked, retiredAt: retired ? new Date().toISOString() : null, startDate: future ? "2099-01-01" : null, locationType },
       ] },
       { id: "colleague", userId: "user-b", name: "Other Clinician", avatar: "C", isActive: true, availability: [
         { id: "other-slot", type: "Recurring", day: "Monday", startTime: "11:00", endTime: "12:00", isBooked: false, retiredAt: null, locationType: "online" },
       ] },
-    ] : path === "/api/tenant/features" ? {} : [];
+    ] : path === "/api/tenant/features" ? {} :
+      path === "/api/clinicians/me/slot-clients" ? (booked ? { "own-slot": { displayId: "TEST-1", status: "Assigned" } } : {}) :
+      booked && path === "/api/clients"
+        ? [{ id: "client", displayId: "TEST-1", status: "Assigned", assignedSlotId: "own-slot", assignedClinicianId: "own" }] : [];
     return new Response(JSON.stringify(data), { status: 200 });
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -45,8 +54,55 @@ function setup({ role = "clinician", failed = false } = {}) {
   }, mutations: { retry: false } } });
   caches.push(cache);
   render(<QueryClientProvider client={cache}><Availability /></QueryClientProvider>);
-  return { writes, fetchMock };
+  return { writes, deletions, fetchMock };
 }
+
+it("shows a clinician's own retire icon without hovering and completes deletion through the real dialog", async () => {
+  const { deletions, fetchMock } = setup();
+  const button = await screen.findByTestId("button-delete-slot-own-slot");
+  expect(button.getAttribute("aria-label")).toBe("Retire availability slot");
+  expect(button.parentElement?.className).not.toContain("opacity-0");
+  expect(button.parentElement?.className).not.toContain("group-hover");
+  expect(screen.queryByTestId("button-delete-slot-other-slot")).toBeNull();
+  fireEvent.click(button);
+  fireEvent.click(await screen.findByRole("button", { name: "Retire slot", exact: true }));
+  await waitFor(() => expect(deletions).toEqual(["/api/timeslots/own/own-slot"]));
+  await waitFor(() => expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Slot retired" })));
+  expect(fetchMock.mock.calls.some(([path]) => String(path).endsWith("/writeupp-retirement"))).toBe(false);
+});
+
+it("shows a stale-booking rejection after clicking the visible clinician retire icon", async () => {
+  const { deletions } = setup({ deleteFailed: true });
+  fireEvent.click(await screen.findByTestId("button-delete-slot-own-slot"));
+  fireEvent.click(await screen.findByRole("button", { name: "Retire slot", exact: true }));
+  await screen.findByRole("alert");
+  expect(screen.getByText("The slot is now booked. Refresh availability.")).toBeTruthy();
+  expect(deletions).toHaveLength(1);
+  expect(h.toast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Slot retired" }));
+});
+
+it("also shows the retire icon for a clinician's own future availability", async () => {
+  setup({ future: true });
+  expect(await screen.findByTestId("button-delete-slot-own-slot")).toBeTruthy();
+});
+
+it("does not offer a clinician a retire action for a booked slot", async () => {
+  setup({ booked: true });
+  await screen.findByTestId("button-toggle-location-own-slot");
+  expect(screen.queryByTestId("button-delete-slot-own-slot")).toBeNull();
+});
+
+it("does not offer retirement of an already retired slot", async () => {
+  setup({ retired: true });
+  await screen.findByText("Own Clinician");
+  expect(screen.queryByTestId("button-delete-slot-own-slot")).toBeNull();
+});
+
+it("preserves the administrator's booked-slot review and practice-wide free-slot controls", async () => {
+  setup({ role: "admin", booked: true });
+  expect(await screen.findByTestId("button-delete-slot-own-slot")).toBeTruthy();
+  expect(await screen.findByTestId("button-delete-slot-other-slot")).toBeTruthy();
+});
 
 it("lets a clinician switch their own free slot in both directions and refreshes the displayed label", async () => {
   const { writes } = setup();

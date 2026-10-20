@@ -4,7 +4,7 @@ import { createServer, type Server } from "node:http";
 import { and, eq } from "drizzle-orm";
 import * as schema from "@shared/schema";
 import { CYA_PSYCHOLOGY_TENANT_ID as CYA } from "@shared/practicePolicies";
-import { reservationDeadline, validReservationHours } from "@shared/reservationPolicy";
+import { flexibleBookingAvailable, reservationDeadline, validReservationHours } from "@shared/reservationPolicy";
 
 const isolated = vi.hoisted(() => ({ pool: null as any, admin: null as any, schema: "", failMail: false, stripe: null as any }));
 // Actual PostgreSQL locks/transactions in an isolated schema, never practice records.
@@ -39,7 +39,8 @@ vi.mock("stripe", () => ({ default: class { constructor() { if (!isolated.stripe
 
 import { db } from "./db";
 import { registerFlexibleBookingRoutes, reserveFlexibleSlot } from "./flexibleBooking";
-import { latestReservation, settleReservation, assertReservationOpen, flagLateReservationPayment } from "./reservationLifecycle";
+import { latestReservation, settleReservation, assertReservationOpen, flagLateReservationPayment, bindReservationPayment, reservationPaymentLock } from "./reservationLifecycle";
+import { reconcileRegistrationPayment } from "./paymentReconciliation";
 import { confirmBooking } from "./bookingConfirmation";
 import { storage } from "./storage";
 
@@ -55,7 +56,7 @@ async function request(path: string, body?: unknown, tenant = CYA, admin = true)
 }
 async function fixture() {
   await db.insert(schema.tenants).values([
-    { id: CYA, name: "Test Practice", flexibleBookingEnabled: true, multiClinicianAllocationEnabled: true, registrationFormEnabled: true, registrationFormTemplateId: "registration", oneOffSlotsEnabled: true },
+    { id: CYA, name: "Test Practice", flexibleBookingEnabled: true, paymentReconciliationEnabled: true, multiClinicianAllocationEnabled: true, registrationFormEnabled: true, registrationFormTemplateId: "registration", oneOffSlotsEnabled: true },
     { id: OTHER, name: "Other Practice" },
   ]);
   await db.insert(schema.users).values({ id: "admin", email: "admin@example.invalid", password: "not-a-real-password", role: "admin", name: "Test Admin", tenantId: CYA });
@@ -179,6 +180,33 @@ describe("slot format editing with real database ownership and booking guards", 
 });
 
 describe("flexible booking with actual PostgreSQL ownership", () => {
+  it("requires reconciliation for both availability and settings, without abandoning existing holds", async () => {
+    expect(flexibleBookingAvailable({ id: CYA, flexibleBookingEnabled: true, paymentReconciliationEnabled: false })).toBe(false);
+    const held = await reserve();
+    await db.update(schema.tenants).set({ paymentReconciliationEnabled: false }).where(eq(schema.tenants.id, CYA));
+    expect((await request("/api/tenant/booking-settings", { enabled: true, durationHours: 12 })).status).toBe(409);
+    await expect(reserve("client-2", "slot-2")).rejects.toMatchObject({ status: 404 });
+    expect((await settleReservation(held.reservation.id, CYA, true))?.status).toBe("cancelled");
+    expect((await request("/api/tenant/booking-settings", { enabled: false, durationHours: 12 })).status).toBe(200);
+  });
+  it("pins the attempt before resource creation and never allows a different attempt or link", async () => {
+    const held = await reserve();
+    async function bind(attempt: string, link: string | null) {
+      return db.transaction(async tx => {
+        await reservationPaymentLock(tx, "client", CYA);
+        const [current] = await tx.select().from(schema.clients).where(eq(schema.clients.id, "client")).for("update");
+        await bindReservationPayment(current, attempt, link, tx);
+        await tx.update(schema.clients).set({ registrationPaymentAttemptKey: attempt, stripePaymentLinkId: link }).where(eq(schema.clients.id, "client"));
+      });
+    }
+    await bind("attempt", null);
+    expect((await latestReservation("client"))?.paymentAttemptKey).toBe("attempt");
+    await bind("attempt", "link");
+    await bind("attempt", "link");
+    await expect(bind("replacement", "new-link")).rejects.toMatchObject({ status: 409 });
+    await expect(bind("attempt", "new-link")).rejects.toMatchObject({ status: 409 });
+    expect(await latestReservation("client")).toMatchObject({ id: held.reservation.id, paymentAttemptKey: "attempt", paymentLinkId: "link" });
+  });
   it("validates duration and preserves elapsed hours across DST", () => {
     expect([0, -1, 1.5, 169, "12", NaN].every(value => !validReservationHours(value))).toBe(true);
     expect(reservationDeadline(12, new Date("2026-10-24T23:00:00Z")).toISOString()).toBe("2026-10-25T11:00:00.000Z");
@@ -247,6 +275,7 @@ describe("flexible booking with actual PostgreSQL ownership", () => {
   async function paymentFixture(outcome: "paid" | "unpaid" | "processing" | "race") {
     const held = await reserve();
     await db.update(schema.tenants).set({ stripeSecretKey: "synthetic-test-key" }).where(eq(schema.tenants.id, CYA));
+    await db.update(schema.bookingReservations).set({ paymentAttemptKey: "attempt", paymentLinkId: "plink_test" }).where(eq(schema.bookingReservations.id, held.reservation.id));
     await db.update(schema.clients).set({
       status: "RegistrationPending", paymentType: "self_pay", registrationPaymentAttemptKey: "attempt",
       stripePaymentLinkId: "plink_test", stripeCheckoutUrl: "https://checkout.example.invalid",
@@ -273,6 +302,136 @@ describe("flexible booking with actual PostgreSQL ownership", () => {
     await overdue(held.reservation.id);
     return held;
   }
+  describe.each([false, true])("reservation safety with paymentReconciliationEnabled=%s", reconciliation => {
+    it.each([
+      ["paid", false], ["paid", true], ["processing", false], ["processing", true],
+    ] as const)("keeps a progressed %s payment when BOTH records lost their identity (cancel=%s)", async (outcome, cancel) => {
+      const held = await paymentFixture(outcome);
+      await db.update(schema.tenants).set({ paymentReconciliationEnabled: reconciliation }).where(eq(schema.tenants.id, CYA));
+      await db.update(schema.bookingReservations).set({ paymentAttemptKey: null, paymentLinkId: null }).where(eq(schema.bookingReservations.id, held.reservation.id));
+      await db.update(schema.clients).set({
+        registrationPaymentAttemptKey: null, stripePaymentLinkId: null, stripeCheckoutUrl: null,
+        // Even loss of the pending-payment badge does not erase registration progress.
+        paymentStatus: "none",
+      }).where(eq(schema.clients.id, "client"));
+      expect((await settleReservation(held.reservation.id, CYA, cancel))?.status).toBe("payment_check");
+      expect((await settleReservation(held.reservation.id, CYA, cancel))?.status).toBe("payment_check");
+      expect(await latestReservation("client")).toMatchObject({ paymentAttemptKey: null, paymentLinkId: null });
+      expect((await client()).assignedSlotId).toBe("slot");
+      expect((await db.select().from(schema.timeSlots).where(eq(schema.timeSlots.id, "slot")))[0].isBooked).toBe(true);
+      expect((await db.select().from(schema.clinicians).where(eq(schema.clinicians.id, "clinician")))[0].currentLoad).toBe(1);
+      expect(isolated.stripe.paymentLinks.retrieve).not.toHaveBeenCalled();
+      expect(await db.select().from(schema.bookingSnapshots)).toHaveLength(0);
+      await expect(assertReservationOpen(await client())).rejects.toMatchObject({ status: 409 });
+    });
+    it.each([false, true])("still releases a pristine hold with no payment journey (cancel=%s)", async cancel => {
+      const held = await reserve();
+      await db.update(schema.tenants).set({ paymentReconciliationEnabled: reconciliation }).where(eq(schema.tenants.id, CYA));
+      await overdue(held.reservation.id);
+      expect((await settleReservation(held.reservation.id, CYA, cancel))?.status).toBe(cancel ? "cancelled" : "expired");
+      expect((await client()).assignedSlotId).toBeNull();
+      expect((await db.select().from(schema.timeSlots).where(eq(schema.timeSlots.id, "slot")))[0].isBooked).toBe(false);
+    });
+    it.each(["link_only", "cleared"] as const)("retains the original evidence if current pointers are %s", async change => {
+      const held = await paymentFixture("paid");
+      await db.update(schema.tenants).set({ paymentReconciliationEnabled: reconciliation }).where(eq(schema.tenants.id, CYA));
+      await db.update(schema.clients).set(change === "link_only"
+        ? { stripePaymentLinkId: "replacement-link" }
+        : { stripePaymentLinkId: null, registrationPaymentAttemptKey: null }).where(eq(schema.clients.id, "client"));
+      expect((await settleReservation(held.reservation.id, CYA, true))?.status).toBe("payment_check");
+      expect(await latestReservation("client")).toMatchObject({ paymentAttemptKey: "attempt", paymentLinkId: "plink_test" });
+      expect((await client()).assignedSlotId).toBe("slot");
+      expect(isolated.stripe.paymentLinks.retrieve).not.toHaveBeenCalled();
+    });
+    it.each([
+      ["paid", false], ["paid", true], ["processing", false], ["processing", true],
+    ] as const)("keeps an earlier %s attempt after link replacement (cancel=%s)", async (outcome, cancel) => {
+      const held = await paymentFixture(outcome);
+      await db.update(schema.tenants).set({ paymentReconciliationEnabled: reconciliation }).where(eq(schema.tenants.id, CYA));
+      await db.update(schema.clients).set({ registrationPaymentAttemptKey: "new-attempt", stripePaymentLinkId: "new-link" }).where(eq(schema.clients.id, "client"));
+      expect((await settleReservation(held.reservation.id, CYA, cancel))?.status).toBe("payment_check");
+      expect((await settleReservation(held.reservation.id, CYA, cancel))?.status).toBe("payment_check");
+      expect(await latestReservation("client")).toMatchObject({ paymentAttemptKey: "attempt", paymentLinkId: "plink_test" });
+      // No current-link-only provider check is allowed to erase the older evidence.
+      expect(isolated.stripe.paymentLinks.retrieve).not.toHaveBeenCalled();
+      expect((await client()).assignedSlotId).toBe("slot");
+      expect((await db.select().from(schema.timeSlots).where(eq(schema.timeSlots.id, "slot")))[0].isBooked).toBe(true);
+      expect((await db.select().from(schema.clinicians).where(eq(schema.clinicians.id, "clinician")))[0].currentLoad).toBe(1);
+      await expect(assertReservationOpen(await client())).rejects.toMatchObject({ status: 409 });
+      await expect(confirmBooking({ clientId: "client", tenantId: CYA, source: "stripe" })).rejects.toThrow();
+      expect(await db.select().from(schema.bookingSnapshots)).toHaveLength(0);
+    });
+    it.each([false, true])("does not release missing historical identity (cancel=%s)", async cancel => {
+      const held = await paymentFixture("paid");
+      await db.update(schema.tenants).set({ paymentReconciliationEnabled: reconciliation }).where(eq(schema.tenants.id, CYA));
+      await db.update(schema.bookingReservations).set({ paymentAttemptKey: null, paymentLinkId: null }).where(eq(schema.bookingReservations.id, held.reservation.id));
+      expect((await settleReservation(held.reservation.id, CYA, cancel))?.status).toBe("payment_check");
+      expect(await latestReservation("client")).toMatchObject({ paymentAttemptKey: null, paymentLinkId: null });
+      expect((await client()).assignedSlotId).toBe("slot");
+    });
+    it.each(["paid", "processing", "unpaid"] as const)("settles a matching %s attempt even after the flag is changed", async outcome => {
+      const held = await paymentFixture(outcome);
+      await db.update(schema.tenants).set({ paymentReconciliationEnabled: reconciliation }).where(eq(schema.tenants.id, CYA));
+      const results = await Promise.all([
+        settleReservation(held.reservation.id, CYA),
+        settleReservation(held.reservation.id, CYA, true),
+      ]);
+      const expected = outcome === "paid" ? "confirmed" : outcome === "processing" ? "payment_check" : results[0]?.status;
+      expect(results.map(result => result?.status)).toEqual([expected, expected]);
+      expect((await client()).assignedSlotId).toBe(outcome === "processing" ? "slot" : null);
+      if (outcome === "paid") {
+        // Confirmation retires the slot and preserves the appointment snapshot,
+        // rather than leaving an allocatable assignedSlotId on the client.
+        const [slot] = await db.select().from(schema.timeSlots).where(eq(schema.timeSlots.id, "slot"));
+        expect(slot.isBooked).toBe(false);
+        expect(slot.retiredAt).toBeTruthy();
+        expect(await db.select().from(schema.bookingSnapshots)).toHaveLength(1);
+      }
+      expect(await db.select().from(schema.paymentCharges)).toHaveLength(outcome === "paid" ? 1 : 0);
+    });
+    it("serializes duplicate earlier-link webhook handling against expiry and cancellation", async () => {
+      const held = await paymentFixture("paid");
+      await db.update(schema.tenants).set({ paymentReconciliationEnabled: reconciliation }).where(eq(schema.tenants.id, CYA));
+      await db.update(schema.clients).set({ registrationPaymentAttemptKey: "new-attempt", stripePaymentLinkId: "new-link" }).where(eq(schema.clients.id, "client"));
+      const outcomes = await Promise.all([
+        flagLateReservationPayment(CYA, "client", "attempt", "plink_test"),
+        flagLateReservationPayment(CYA, "client", "attempt", "plink_test"),
+        settleReservation(held.reservation.id, CYA),
+        settleReservation(held.reservation.id, CYA, true),
+      ]);
+      expect(outcomes.slice(0, 2)).toEqual([true, true]);
+      expect(await latestReservation("client")).toMatchObject({ status: "payment_review", paymentAttemptKey: "attempt", paymentLinkId: "plink_test" });
+      expect((await client()).assignedSlotId).toBe("slot");
+      expect(await db.select().from(schema.auditLogs).where(eq(schema.auditLogs.action, "activity_reservation_payment_review"))).toHaveLength(1);
+      expect(await db.select().from(schema.bookingSnapshots)).toHaveLength(0);
+    });
+    it("converges concurrent current-link webhook reconciliation and expiry on one booking and charge", async () => {
+      const held = await paymentFixture("paid");
+      const [tenant] = await db.update(schema.tenants).set({ paymentReconciliationEnabled: reconciliation }).where(eq(schema.tenants.id, CYA)).returning();
+      const results = await Promise.all([
+        reconcileRegistrationPayment(tenant, "client", "cs_test"),
+        reconcileRegistrationPayment(tenant, "client", "cs_test"),
+        settleReservation(held.reservation.id, CYA),
+      ]);
+      expect(results[0]).toMatchObject({ state: "recorded" });
+      expect(results[1]).toMatchObject({ state: "recorded" });
+      expect(await latestReservation("client")).toMatchObject({ status: "confirmed" });
+      expect(await db.select().from(schema.bookingSnapshots)).toHaveLength(1);
+      expect(await db.select().from(schema.paymentCharges)).toHaveLength(1);
+    });
+    it("rejects provider ownership mismatches and provider failure without releasing", async () => {
+      const held = await paymentFixture("unpaid");
+      await db.update(schema.tenants).set({ paymentReconciliationEnabled: reconciliation }).where(eq(schema.tenants.id, CYA));
+      isolated.stripe.paymentLinks.retrieve.mockResolvedValueOnce({ metadata: { tenantId: OTHER, clientId: "client", registrationAttemptKey: "attempt" } });
+      expect((await settleReservation(held.reservation.id, CYA, true))?.status).toBe("payment_check");
+      expect(isolated.stripe.paymentLinks.update).not.toHaveBeenCalled();
+      isolated.stripe.paymentLinks.retrieve.mockRejectedValueOnce(new Error("provider offline"));
+      expect((await settleReservation(held.reservation.id, CYA))?.status).toBe("payment_check");
+      await expect(settleReservation(held.reservation.id, OTHER, true)).rejects.toMatchObject({ status: 404 });
+      expect(await flagLateReservationPayment(OTHER, "client", "attempt", "plink_test")).toBe(false);
+      expect((await client()).assignedSlotId).toBe("slot");
+    });
+  });
   it("disables the link and expires open Stripe sessions before releasing an unpaid slot", async () => {
     const held = await paymentFixture("unpaid");
     expect((await settleReservation(held.reservation.id, CYA))?.status).toBe("expired");
@@ -302,8 +461,10 @@ describe("flexible booking with actual PostgreSQL ownership", () => {
   });
   it("confirms completed insurer registration once and never expires its retired slot", async () => {
     const held = await reserve();
+    // Real registration pins its workflow attempt even when no Stripe link is needed.
+    await db.update(schema.bookingReservations).set({ paymentAttemptKey: "insurer-registration" }).where(eq(schema.bookingReservations.id, held.reservation.id));
     await db.insert(schema.formSubmissions).values({ id: "submitted", clientId: "client", tenantId: CYA, responses: {}, isDraft: false });
-    await db.update(schema.clients).set({ paymentType: "insurer", registrationFormSubmissionId: "submitted", termsAcceptedAt: new Date(), status: "RegistrationPending" }).where(eq(schema.clients.id, "client"));
+    await db.update(schema.clients).set({ registrationPaymentAttemptKey: "insurer-registration", paymentType: "insurer", registrationFormSubmissionId: "submitted", termsAcceptedAt: new Date(), status: "RegistrationPending" }).where(eq(schema.clients.id, "client"));
     const result = await confirmBooking({ clientId: "client", tenantId: CYA, source: "registration" });
     expect(result.newlyConfirmed).toBe(true);
     expect((await latestReservation("client"))?.status).toBe("confirmed");
@@ -352,9 +513,8 @@ describe("flexible booking with actual PostgreSQL ownership", () => {
   });
   it("fences a late old payment away from a newer reservation", async () => {
     const old = await reserve();
-    await db.update(schema.bookingReservations).set({ paymentAttemptKey: "old-attempt", paymentLinkId: "old-link" }).where(eq(schema.bookingReservations.id, old.reservation.id));
     await settleReservation(old.reservation.id, CYA, true);
-    // Settlement copies current client attempt ownership.
+    // Historical evidence is immutable, separate from a new hold.
     await db.update(schema.bookingReservations).set({ paymentAttemptKey: "old-attempt", paymentLinkId: "old-link" }).where(eq(schema.bookingReservations.id, old.reservation.id));
     const fresh = await reserve("client", "slot-2");
     expect(await flagLateReservationPayment(CYA, "client", "old-attempt", "old-link")).toBe(true);

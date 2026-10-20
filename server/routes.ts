@@ -86,6 +86,7 @@ import { deliverRegistration, RegistrationDeliveryError } from "./registrationDe
 import { registerFlexibleBookingRoutes } from "./flexibleBooking";
 import { assertReservationOpen, guardReservationMutation, latestReservation, reconcileDueReservations, ReservationError, settleReservation, flagLateReservationPayment, registerReservationRecoveryFollowUp } from "./reservationLifecycle";
 import { flexibleBookingAvailable } from "@shared/reservationPolicy";
+import { bindReservationPayment, reservationPaymentLock } from "./reservationLifecycle";
 import { isCyaPsychologyTenant } from "@shared/practicePolicies";
 import { handleLoginResult } from "./loginResponse";
 export { handleLoginResult } from "./loginResponse";
@@ -3546,6 +3547,7 @@ export async function registerRoutes(
       }
       const activeFields = activeRegistrationFields(registrationTemplate?.fields);
       let registrationTenantStripeKey: string | null = null;
+      const reservationPaymentProtected = isCyaPsychologyTenant(tenant.id) && Boolean(await latestReservation(client.id));
       if (tenant.stripeSecretKey) {
         try { registrationTenantStripeKey = decryptSecret(tenant.stripeSecretKey); } catch { /* handled as unavailable */ }
       }
@@ -3557,7 +3559,7 @@ export async function registerRoutes(
         && client.paymentType === "self_pay"
         && client.stripeCheckoutUrl
         && client.stripePaymentLinkId) {
-        const stripe = tenant.paymentReconciliationEnabled
+        const stripe = tenant.paymentReconciliationEnabled || reservationPaymentProtected
           ? (registrationTenantStripeKey
             ? new Stripe(registrationTenantStripeKey, { apiVersion: "2026-05-27.dahlia" })
             : null)
@@ -3567,7 +3569,7 @@ export async function registerRoutes(
             ? await stripe.paymentLinks.retrieve(client.stripePaymentLinkId)
             : null;
           if (storedLink && storedLink.active === false) {
-            if (tenant.paymentReconciliationEnabled === true) {
+            if (tenant.paymentReconciliationEnabled === true || reservationPaymentProtected) {
               return res.status(409).json({
                 error: "This payment link is inactive. Staff must check its Stripe payment status before any replacement is considered.",
               });
@@ -3702,8 +3704,10 @@ export async function registerRoutes(
         );
         const claimed = await db.transaction(async (tx) => {
           if (isCyaPsychologyTenant(client.tenantId)) {
+            await reservationPaymentLock(tx, client.id, client.tenantId!);
             const [current] = await tx.select().from(clients).where(eq(clients.id, client.id)).for("update");
             await assertReservationOpen(current, tx);
+            await bindReservationPayment(current, claimedPaymentAttemptKey, null, tx);
           }
           const claimedRows = await tx.update(clients).set({
             paymentType: validatedPaymentType,
@@ -3812,7 +3816,7 @@ export async function registerRoutes(
           const current = await tx.select().from(clients).where(and(
             eq(clients.id, client.id),
             eq(clients.tenantId, client.tenantId!),
-          )).limit(1).then(rows => rows[0]);
+          )).for("update").limit(1).then(rows => rows[0]);
           if (!current) return { status: 404, error: "Client not found" } as const;
           await assertReservationOpen(current, tx);
           if (current.stripeCheckoutUrl) {
@@ -3867,6 +3871,7 @@ export async function registerRoutes(
             } as const;
           }
 
+          await bindReservationPayment(current, paymentAttemptKey!, session.paymentLinkId, tx);
           const savedLink = await tx.update(clients).set({
             stripeCheckoutUrl: session.url,
             stripePaymentLinkId: session.paymentLinkId,
@@ -6048,7 +6053,8 @@ export async function registerRoutes(
         if (!scoped || scoped.tenantId !== req.tenant.id) return res.status(404).json({ error: "Client not found" });
         await assertReservationOpen(scoped);
       }
-      const [registrationClient] = req.tenant.paymentReconciliationEnabled === true
+      const reservationProtected = isCyaPsychologyTenant(req.tenant.id) && Boolean(await latestReservation(req.params.id));
+      const [registrationClient] = req.tenant.paymentReconciliationEnabled === true || reservationProtected
         ? await db.select({ status: clients.status, registrationPaymentAttemptKey: clients.registrationPaymentAttemptKey })
           .from(clients).where(and(eq(clients.id, req.params.id), eq(clients.tenantId, req.tenant.id))).limit(1)
         : [];
@@ -6103,7 +6109,7 @@ export async function registerRoutes(
             return { status: 502, error: "Stripe could not verify the stored payment link. No email was sent." } as const;
           }
           if (storedLink.active === false) {
-            if (isRegistrationLink) {
+            if (isRegistrationLink || (isCyaPsychologyTenant(client.tenantId) && await latestReservation(client.id, tx))) {
               return { status: 409, error: "The current link is inactive. Review its Stripe check before deciding how to proceed; no replacement or email was created." } as const;
             }
             let completedPayment = false;
@@ -6244,7 +6250,7 @@ export async function registerRoutes(
         const current = await tx.select().from(clients).where(and(
           eq(clients.id, req.params.id),
           eq(clients.tenantId, req.tenant!.id),
-        )).limit(1).then(rows => rows[0]);
+        )).for("update").limit(1).then(rows => rows[0]);
         if (!current) return { status: 404, error: "Client not found" } as const;
         await assertReservationOpen(current, tx);
         if (current.stripeCheckoutUrl && current.stripePaymentLinkId) {
@@ -6331,6 +6337,7 @@ export async function registerRoutes(
           } as const;
         }
 
+        await bindReservationPayment(current, current.registrationPaymentAttemptKey!, link.paymentLinkId, tx);
         const saved = await tx.update(clients).set({
           stripeCheckoutUrl: link.url,
           stripePaymentLinkId: link.paymentLinkId,
@@ -6565,7 +6572,9 @@ export async function registerRoutes(
         // current, correctly attributed checkout.
         if (metaTenantId) {
           const webhookTenant = await storage.getTenantById(metaTenantId);
-          const linkedClient = webhookTenant?.paymentReconciliationEnabled === true
+          const protectedPayment = webhookTenant && (webhookTenant.paymentReconciliationEnabled === true ||
+            (isCyaPsychologyTenant(webhookTenant.id) && Boolean(await latestReservation(clientId))));
+          const linkedClient = protectedPayment && webhookTenant
             ? await db.select({ id: clients.id, status: clients.status, registrationPaymentAttemptKey: clients.registrationPaymentAttemptKey, stripePaymentLinkId: clients.stripePaymentLinkId })
               .from(clients).where(and(eq(clients.id, clientId), eq(clients.tenantId, webhookTenant.id))).limit(1).then(rows => rows[0])
             : undefined;
@@ -6574,8 +6583,10 @@ export async function registerRoutes(
           // through to the legacy handler, even when its signed metadata is
           // incomplete or belongs to a superseded attempt. In particular the
           // legacy handler deactivates the link before validating correlation.
-          if (webhookTenant?.paymentReconciliationEnabled === true &&
-              linkedClient?.registrationPaymentAttemptKey) {
+          if (webhookTenant && protectedPayment &&
+              (linkedClient?.registrationPaymentAttemptKey ||
+                (isCyaPsychologyTenant(webhookTenant?.id) && await latestReservation(clientId)))) {
+            if (!linkedClient) return acknowledge();
             if (!["RegistrationPending", "Scheduled", "BookingConfirmed"].includes(linkedClient.status) ||
                 linkedClient.stripePaymentLinkId !== eventLinkId ||
                 session.metadata?.tenantId !== webhookTenant.id ||

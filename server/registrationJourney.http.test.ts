@@ -3,6 +3,8 @@ import { createServer, type Server } from "http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bookingSnapshots } from "@shared/schema";
 import { PgDialect } from "drizzle-orm/pg-core";
+import { CYA_PSYCHOLOGY_TENANT_ID as CYA } from "@shared/practicePolicies";
+import { decryptSecret } from "./encryption";
 
 const h = vi.hoisted(() => {
   const state = {
@@ -20,6 +22,7 @@ const h = vi.hoisted(() => {
     submissions: [] as any[],
     deliveries: [] as any[],
     bookingSnapshots: [] as any[],
+    reservations: [] as any[],
     slotClaimFails: false,
     slotConflict: false,
     failOptionEvidenceWrite: false,
@@ -70,6 +73,7 @@ const h = vi.hoisted(() => {
         && state.registrationTemplate.tenantId === state.tenant?.id ? [state.registrationTemplate] : [];
       case "form_submissions": return state.submissions;
       case "booking_snapshots": return state.bookingSnapshots;
+      case "booking_reservations": return state.reservations;
       case "payment_charges": return state.charges;
       case "stripe_webhook_failures": return state.webhookFailures.filter(f =>
         f.tenantId === state.tenant.id && !f.resolvedAt && f.attempts >= 3);
@@ -138,6 +142,18 @@ const h = vi.hoisted(() => {
           // Enforce the real SQL ownership predicate for snapshot reads. A foreign
           // row with the same client ID must not satisfy an idempotent confirmation.
           const sql = new PgDialect().sqlToQuery(condition).sql;
+          if (sql.includes('"booking_reservations"')) {
+            const { params } = new PgDialect().sqlToQuery(condition);
+            return rows.filter(row => Object.entries({
+              id: "id", tenantId: "tenant_id", clientId: "client_id",
+              paymentAttemptKey: "payment_attempt_key", paymentLinkId: "payment_link_id",
+            }).every(([property, column]) => {
+              for (const match of sql.matchAll(new RegExp(`"${column}"\\s*=\\s*\\$(\\d+)`, "g"))) {
+                if (row[property] !== params[Number(match[1]) - 1]) return false;
+              }
+              return true;
+            }));
+          }
           if (sql.includes('"allocation_offer_deliveries"')) {
             return offerDeliveryRowsMatching(condition).filter(row => rows.includes(row));
           }
@@ -331,6 +347,10 @@ const h = vi.hoisted(() => {
         if (name === "payment_charges") {
           for (const charge of state.charges) Object.assign(charge, patch);
           return state.charges;
+        }
+        if (name === "booking_reservations") {
+          for (const reservation of state.reservations) Object.assign(reservation, patch);
+          return state.reservations;
         }
         if (name === "stripe_webhook_failures") {
           const failure = state.webhookFailures.find(f => f.tenantId === state.tenant.id && !f.resolvedAt);
@@ -714,6 +734,7 @@ function resetState(overrides: { client?: any; tenant?: any } = {}) {
   h.state.submissions = [];
   h.state.deliveries = [];
   h.state.bookingSnapshots = [];
+  h.state.reservations = [];
   h.state.slotClaimFails = false;
   h.state.slotConflict = false;
   h.state.failOptionEvidenceWrite = false;
@@ -741,6 +762,7 @@ function resetState(overrides: { client?: any; tenant?: any } = {}) {
   h.state.rateChangeBeforeTransaction = null;
   h.state.slotChangeBeforeTransaction = null;
   vi.clearAllMocks();
+  vi.mocked(decryptSecret).mockImplementation((value: string) => value);
 }
 
 beforeEach(async () => {
@@ -4184,5 +4206,121 @@ describe("registration journey HTTP routes", () => {
     expect(h.state.client.stripePaymentLinkId).toBe("plink_1");
     expect(h.state.client.registrationPaymentAttemptKey).not.toBe("old-attempt");
     expect(h.state.paymentLinks).toHaveLength(1);
+  });
+});
+
+describe.each([false, true])("held booking payment HTTP fences with reconciliation=%s", reconciliation => {
+  function heldPayment() {
+    resetState({
+      tenant: { id: CYA, paymentsEnabled: true, paymentReconciliationEnabled: reconciliation, flexibleBookingEnabled: true },
+      client: {
+        tenantId: CYA, status: "RegistrationPending", paymentType: "self_pay", paymentStatus: "setup_pending",
+        registrationToken: "registration-token", registrationTokenExpiresAt: new Date(Date.now() + 60_000),
+        registrationPaymentAttemptKey: ATTEMPT_KEY, stripePaymentLinkId: "plink_current",
+        stripeCheckoutUrl: "https://pay.test/current",
+      },
+    });
+    h.state.slot.tenantId = CYA;
+    h.state.slot.isBooked = true;
+    h.state.clinician.tenantId = CYA;
+    h.state.reservations = [{
+      id: "hold", tenantId: CYA, clientId: "client-a", slotId: "slot-a", clinicianId: "clinician-a",
+      status: "active", deadline: new Date(Date.now() + 60_000), createdAt: new Date(),
+      paymentAttemptKey: ATTEMPT_KEY, paymentLinkId: "plink_current",
+    }];
+    h.state.stripeLinkActive = false;
+  }
+  it.each(["public registration", "staff resend"])("never replaces an inactive reservation link through %s", async path => {
+    heldPayment();
+    const response = path === "public registration"
+      ? await request("/api/public/register/client-a/registration-token", { method: "POST", body: JSON.stringify({ paymentType: "self_pay" }) })
+      : await request("/api/clients/client-a/resend-payment-link", { method: "POST" });
+    expect(response.status).toBe(409);
+    expect(h.state.client.stripePaymentLinkId).toBe("plink_current");
+    expect(h.state.client.registrationPaymentAttemptKey).toBe(ATTEMPT_KEY);
+    expect(h.state.paymentLinks).toHaveLength(0);
+    expect(h.state.emails).toHaveLength(0);
+    expect(h.state.reservations[0].paymentLinkId).toBe("plink_current");
+  });
+  it("pins a resumed setup link to the existing hold and never creates a new attempt", async () => {
+    heldPayment();
+    Object.assign(h.state.client, { stripePaymentLinkId: null, stripeCheckoutUrl: null, registrationFormSubmissionId: "submission" });
+    h.state.reservations[0].paymentLinkId = null;
+    const response = await request("/api/clients/client-a/retry-payment-setup", { method: "POST" });
+    expect(response.status).toBe(200);
+    expect(h.state.paymentLinks).toHaveLength(1);
+    expect(h.state.reservations[0]).toMatchObject({ paymentAttemptKey: ATTEMPT_KEY, paymentLinkId: "plink_1" });
+    expect(h.state.paymentLinks[0]).toMatchObject({
+      registrationAttemptKey: ATTEMPT_KEY, tenantOwnedOnly: true,
+      idempotencyKey: `registration-payment-client-a-${ATTEMPT_KEY}`,
+    });
+  });
+  it("pins initial registration before Stripe is called and reuses it on retry", async () => {
+    heldPayment();
+    h.state.stripeLinkActive = true;
+    Object.assign(h.state.client, { status: "OptionSelected", paymentType: null, paymentStatus: "none", registrationPaymentAttemptKey: null, stripePaymentLinkId: null, stripeCheckoutUrl: null });
+    Object.assign(h.state.reservations[0], { paymentAttemptKey: null, paymentLinkId: null });
+    h.state.tenant.registrationFormTemplateId = "registration";
+    h.state.registrationTemplate = {
+      id: "registration", tenantId: CYA, title: "Registration", description: "Test",
+      updatedAt: new Date("2026-09-06T12:00:00.000Z"),
+      fields: [
+        { id: "terms-copy", type: "info", content: "Registration terms" },
+        { id: "agreement", type: "radio", label: "I agree to the terms and conditions", required: true, options: ["Yes"], isTermsAcceptance: true },
+      ],
+    };
+    const { createPaymentLink } = await import("./stripe");
+    vi.mocked(createPaymentLink).mockImplementationOnce(async input => {
+      expect(h.state.reservations[0].paymentAttemptKey).toBe(input.registrationAttemptKey);
+      expect(h.state.reservations[0].paymentLinkId).toBeNull();
+      h.state.paymentLinks.push(input);
+      return h.state.paymentResult;
+    });
+    const body = JSON.stringify({ paymentType: "self_pay", termsVersion: 4,
+      registrationTemplateUpdatedAt: "2026-09-06T12:00:00.000Z", registrationResponses: { agreement: "Yes" } });
+    const first = await request("/api/public/register/client-a/registration-token", { method: "POST", body });
+    expect(first.status).toBe(200);
+    expect(h.state.reservations[0]).toMatchObject({ paymentAttemptKey: h.state.client.registrationPaymentAttemptKey, paymentLinkId: "plink_1" });
+    expect((await request("/api/public/register/client-a/registration-token", { method: "POST", body })).status).toBe(200);
+    expect(h.state.paymentLinks).toHaveLength(1);
+  });
+  it("acknowledges duplicate earlier-link webhooks without releasing or confirming a replaced attempt", async () => {
+    heldPayment();
+    Object.assign(h.state.client, { registrationPaymentAttemptKey: "new-attempt", stripePaymentLinkId: "new-link" });
+    const { constructWebhookEvent } = await import("./stripe");
+    vi.mocked(constructWebhookEvent).mockReturnValue({
+      id: "evt_old", type: "checkout.session.completed",
+      data: { object: { id: "cs_old", status: "complete", payment_status: "paid", payment_link: "plink_current", payment_intent: "pi_old",
+        metadata: { tenantId: CYA, clientId: "client-a", registrationAttemptKey: ATTEMPT_KEY } } },
+    } as any);
+    const send = () => request("/api/stripe/webhook", {
+      method: "POST", headers: { "stripe-signature": "valid" }, body: JSON.stringify({ id: "evt_old" }),
+    });
+    expect((await Promise.all([send(), send()])).map(response => response.status)).toEqual([200, 200]);
+    expect(h.state.reservations[0]).toMatchObject({ status: "payment_review", paymentAttemptKey: ATTEMPT_KEY, paymentLinkId: "plink_current" });
+    expect(h.state.client.paymentStatus).toBe("setup_pending");
+    expect(h.state.slot.isBooked).toBe(true);
+    expect(h.state.bookingSnapshots).toHaveLength(0);
+    expect(h.state.charges).toHaveLength(0);
+    expect(h.state.deactivatedLinks).toHaveLength(0);
+  });
+  it("does not let a current-link webhook bypass review of an earlier attempt when the flag is off", async () => {
+    heldPayment();
+    Object.assign(h.state.client, { registrationPaymentAttemptKey: "new-attempt", stripePaymentLinkId: "new-link" });
+    const { constructWebhookEvent } = await import("./stripe");
+    vi.mocked(constructWebhookEvent).mockReturnValue({
+      id: "evt_new", type: "checkout.session.completed",
+      data: { object: { id: "cs_new", status: "complete", payment_status: "paid", payment_link: "new-link", payment_intent: "pi_new",
+        metadata: { tenantId: CYA, clientId: "client-a", registrationAttemptKey: "new-attempt" } } },
+    } as any);
+    const response = await request("/api/stripe/webhook", {
+      method: "POST", headers: { "stripe-signature": "valid" }, body: JSON.stringify({ id: "evt_new" }),
+    });
+    expect(response.status).toBe(503);
+    expect(h.state.client.paymentStatus).toBe("setup_pending");
+    expect(h.state.slot.isBooked).toBe(true);
+    expect(h.state.bookingSnapshots).toHaveLength(0);
+    expect(h.state.charges).toHaveLength(0);
+    expect(h.state.deactivatedLinks).toHaveLength(0);
   });
 });

@@ -87,11 +87,25 @@ Before restoring application code:
 This is a quick-to-identify code recovery option, not an instant production
 switch or a substitute for checking bookings created since publication.
 
-## Outstanding concern in the current version
+## Payment safety in the current version
 
 The earlier booking-feature review identified a payment reconciliation risk
 when flexible booking is enabled without payment reconciliation: a legacy path
 can replace a payment link, while reservation settlement checks the client's
 current link rather than reliably accounting for the earlier attempt. Preparing
-this recovery version does not repair that risk in the current application.
-Address and test it before enabling the new workflow.
+this recovery version did not repair that risk in the current application.
+
+The current workflow now requires payment reconciliation before new flexible
+bookings are available, fences payment-link replacement for reservations even if
+that setting is later disabled, and pins the payment attempt and link to the hold.
+Settlement, registration recovery and webhook confirmation cannot adopt a
+different current-client link in place of that evidence. Changed or missing
+historical identity retains the slot for staff payment review; it does not prove
+that an earlier link was unpaid. Expiry and cancellation preserve the original
+payment references.
+
+This is a conservative safeguard, not a historical data repair. No existing rows
+have been backfilled or released. Before enabling the workflow, staff must resolve
+any existing payment-review holds by checking all relevant attempts in the
+practice's own Stripe account. Do not clear payment references or swap links to
+bypass review. The saved recovery version remains unchanged and inactive.

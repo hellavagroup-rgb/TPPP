@@ -749,6 +749,7 @@ function FlexibleBookingSettings({ tenant }: { tenant: any }) {
   });
   const canEnable = tenant?.multiClinicianAllocationEnabled === true
     && tenant?.registrationFormEnabled === true
+    && tenant?.paymentReconciliationEnabled === true
     && !!tenant?.registrationFormId;
   if (!isCyaPsychologyTenant(tenant?.id)) return null;
   return <Card className="border-none shadow-sm" data-testid="flexible-booking-settings">
@@ -757,7 +758,7 @@ function FlexibleBookingSettings({ tenant }: { tenant: any }) {
       {isLoading ? <div className="h-16 animate-pulse rounded bg-muted" aria-label="Loading booking settings" /> :
         isError ? <Alert variant="destructive"><AlertDescription>Booking settings could not be loaded. <Button variant="link" className="h-auto p-0" onClick={() => refetch()}>Try again</Button></AlertDescription></Alert> :
         <>
-          {!canEnable && <Alert><AlertDescription>To enable this workflow, turn on multi-clinician allocation and registration, and select a registration form in Settings.</AlertDescription></Alert>}
+          {!canEnable && <Alert><AlertDescription>To enable this workflow, turn on multi-clinician allocation and registration, select a registration form in Settings, and ask a super administrator to enable payment reconciliation. New flexible bookings are unavailable without reconciliation; existing reservations stay protected.</AlertDescription></Alert>}
           <div className="flex items-center justify-between gap-4">
             <div><Label htmlFor="flexible-booking-enabled">Allow families to choose a clinician</Label><p className="mt-1 text-sm text-muted-foreground">New invitations ask for a clinician preference, not a specific appointment time.</p></div>
             <Switch id="flexible-booking-enabled" checked={settings?.enabled === true} disabled={save.isPending || (!canEnable && settings?.enabled !== true)} onCheckedChange={enabled => save.mutate(enabled)} aria-label="Allow flexible clinician booking" />

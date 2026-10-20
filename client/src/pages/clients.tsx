@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Client, ClientStatus, FormTemplate } from "@/lib/mockData";
 import { confirmationBlocker, confirmationBlockerCopy } from "@shared/confirmationRecovery";
 import { canInspectRegistrationPayment } from "@shared/paymentReconciliationEligibility";
+import { flexibleBookingAvailable } from "@shared/reservationPolicy";
 import { HistoricReconciliation, useHistoricReconciliation } from "@/components/HistoricReconciliation";
 import { CompactClientCard, ClientDetailPanel, hasRecordedAppointmentSelection } from "@/components/CompactClientCard";
 import { WriteUppAdminQueue } from "@/components/WriteUppAdminQueue";
@@ -241,7 +242,7 @@ export default function Clients() {
   const contactPreferenceEnabled = tenant?.contactPreferenceEnabled === true;
   const intakeClientSummaryEnabled = tenant?.intakeClientSummaryEnabled === true;
   const multiClinicianAllocationEnabled = tenant?.multiClinicianAllocationEnabled === true;
-  const flexibleBookingEnabled = isCyaPsychologyTenant(tenant?.id) && tenant?.flexibleBookingEnabled === true;
+  const flexibleBookingEnabled = flexibleBookingAvailable(tenant || {});
   const allocationVisibilityEnabled = tenant?.allocationVisibilityEnabled === true;
   const zoomLinkEmailEnabled = tenant?.zoomLinkEmailEnabled === true;
   const writeuppChecklistEnabled = tenant?.writeuppChecklistEnabled === true;

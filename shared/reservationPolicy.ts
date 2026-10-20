@@ -2,8 +2,8 @@ import { isCyaPsychologyTenant } from "./practicePolicies";
 
 export const DEFAULT_RESERVATION_HOURS = 12;
 export const MAX_RESERVATION_HOURS = 168;
-export function flexibleBookingAvailable(tenant: { id?: string | null; flexibleBookingEnabled?: boolean | null }): boolean {
-  return isCyaPsychologyTenant(tenant.id) && tenant.flexibleBookingEnabled === true;
+export function flexibleBookingAvailable(tenant: { id?: string | null; flexibleBookingEnabled?: boolean | null; paymentReconciliationEnabled?: boolean | null }): boolean {
+  return isCyaPsychologyTenant(tenant.id) && tenant.flexibleBookingEnabled === true && tenant.paymentReconciliationEnabled === true;
 }
 export function validReservationHours(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= MAX_RESERVATION_HOURS;

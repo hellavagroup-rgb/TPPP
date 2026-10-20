@@ -3,7 +3,7 @@ import { db } from "./db";
 import { confirmationBlocker, confirmationBlockerCopy } from "@shared/confirmationRecovery";
 import { ACTIVE_ALLOCATION_STATUSES } from "@shared/clientWorkflow";
 import { isCyaPsychologyTenant } from "@shared/practicePolicies";
-import { latestReservation, ReservationError } from "./reservationLifecycle";
+import { latestReservation, reservationPaymentMatches, ReservationError } from "./reservationLifecycle";
 import {
   bookingSnapshots,
   auditLogs,
@@ -128,6 +128,9 @@ export async function confirmBookingInTransaction(tx: any, input: BookingConfirm
     const status = confirmationStatus(tenant?.bookingConfirmedEmailEnabled === true);
     const reservation = isCyaPsychologyTenant(input.tenantId) ? await latestReservation(client.id, tx) : undefined;
     if (reservation) {
+      if (!reservationPaymentMatches(client, reservation)) {
+        throw new ReservationError(409, "Review the reservation's original payment attempt before confirming this booking.");
+      }
       const timelyDirectRegistration = input.source === "registration" && client.registrationFormSubmissionId &&
         client.termsAcceptedAt && client.termsAcceptedAt <= reservation.deadline &&
         (client.paymentType === "insurer" || !tenant?.paymentsEnabled);

@@ -29,6 +29,12 @@ async function checkUnallocated(tx: any, client: Client) {
   }
   const hold = await latestReservation(client.id, tx);
   if (hold && ["active", "payment_check", "payment_review"].includes(hold.status)) fail(409, "Resolve this client's existing reservation first.");
+  if (client.paymentStatus === "active" ||
+      ((client.registrationPaymentAttemptKey || client.stripePaymentLinkId) &&
+        (!hold || !["expired", "cancelled"].includes(hold.status) ||
+          hold.paymentAttemptKey !== client.registrationPaymentAttemptKey || hold.paymentLinkId !== client.stripePaymentLinkId))) {
+    fail(409, "Resolve the client's previous payment attempt before offering another booking.");
+  }
   const external = await tx.select({ id: auditLogs.id }).from(auditLogs).where(and(
     eq(auditLogs.tenantId, client.tenantId!), eq(auditLogs.resourceId, client.id),
     inArray(auditLogs.action, ["activity_external_booking_reviewed", "activity_writeupp_appointment_arranged", "activity_reservation_late_payment"]),
@@ -196,6 +202,7 @@ export function registerFlexibleBookingRoutes(app: Express) {
     }
     await db.transaction(async tx => {
       const [before] = await tx.select().from(tenants).where(eq(tenants.id, req.tenant!.id)).for("update");
+      if (enabled && !before.paymentReconciliationEnabled) fail(409, "Enable payment reconciliation before offering flexible bookings.");
       await tx.update(tenants).set({ flexibleBookingEnabled: enabled, reservationDurationHours: durationHours }).where(eq(tenants.id, before.id));
       await tx.insert(auditLogs).values({
         tenantId: before.id, userId: req.user!.id, action: "activity_booking_settings_changed", resourceType: "tenant", resourceId: before.id,

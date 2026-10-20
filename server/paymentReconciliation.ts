@@ -5,6 +5,14 @@ import { bookingSnapshots, clients, formSubmissions, paymentCharges, type Bookin
 import { canInspectRegistrationPayment } from "@shared/paymentReconciliationEligibility";
 import { confirmBooking } from "./bookingConfirmation";
 import { generateBookingConfirmedEmail, sendEmail } from "./email";
+import { isCyaPsychologyTenant } from "@shared/practicePolicies";
+import { latestReservation, reservationPaymentMatches } from "./reservationLifecycle";
+
+async function reservationPaymentSafe(client: Client, executor: any = db) {
+  if (!isCyaPsychologyTenant(client.tenantId)) return true;
+  const hold = await latestReservation(client.id, executor);
+  return !hold || (["active", "payment_check", "confirmed"].includes(hold.status) && reservationPaymentMatches(client, hold));
+}
 
 type State = "awaiting" | "open" | "paid_unrecorded" | "recorded" | "uncertain";
 export type PaymentInspection = {
@@ -33,7 +41,11 @@ async function hasSubmittedRegistration(client: Client, tenantId: string, execut
 async function inspect(tenant: Tenant, clientId: string, requestedSessionId?: string) {
   const [client] = await db.select().from(clients).where(and(eq(clients.id, clientId), eq(clients.tenantId, tenant.id))).limit(1);
   if (!client) return { state: "uncertain", detail: "Client not found in this practice." } as PaymentInspection;
-  if (!canInspectRegistrationPayment(client) || !client.agreedRatePence) {
+  if (!await reservationPaymentSafe(client)) {
+    return { state: "uncertain", detail: "The reservation's original payment needs staff review. No payment or booking was changed; do not request another payment." } as PaymentInspection;
+  }
+  if (!canInspectRegistrationPayment(client) || !client.agreedRatePence ||
+      !client.stripePaymentLinkId || !client.registrationPaymentAttemptKey) {
     return { state: "uncertain", detail: "No current registration payment link, attempt or agreed rate is recorded." } as PaymentInspection;
   }
   // A legacy awaiting-confirmation status is only eligible for provider
@@ -133,6 +145,7 @@ export async function reconcileRegistrationPayment(
     await db.transaction(async tx => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`${tenant.id}:${client.id}:reconcile-payment`}))`);
       const [current] = await tx.select().from(clients).where(and(eq(clients.id, client.id), eq(clients.tenantId, tenant.id))).for("update").limit(1);
+      if (current && !await reservationPaymentSafe(current, tx)) throw new Error("Reservation payment changed; staff review required.");
       if (!current || !canInspectRegistrationPayment(current) ||
           current.stripePaymentLinkId !== client.stripePaymentLinkId ||
           current.registrationPaymentAttemptKey !== client.registrationPaymentAttemptKey ||

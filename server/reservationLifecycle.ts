@@ -44,6 +44,35 @@ export class ReservationError extends Error {
 }
 export const liveReservationStatuses = ["active", "payment_check", "payment_review"] as const;
 
+/** Payment identity belongs to the hold, not the mutable client pointer. Missing
+ * historical identity is uncertainty too: never adopt an arbitrary current link. */
+export function reservationPaymentMatches(client: Client, hold: BookingReservation): boolean {
+  if ((client.registrationPaymentAttemptKey || null) !== hold.paymentAttemptKey ||
+      (client.stripePaymentLinkId || null) !== hold.paymentLinkId) return false;
+  if (hold.paymentAttemptKey || hold.paymentLinkId) return true;
+  // Null == null is not payment evidence after registration has progressed.
+  // Only a pristine, not-yet-submitted hold has no payment journey to close.
+  // Legacy/missing identities must never be reconstructed from current pointers.
+  return client.status === "OptionSelected" &&
+    !client.paymentType && client.paymentStatus === "none" &&
+    !client.stripeCheckoutUrl && !client.registrationFormSubmissionId && !client.termsAcceptedAt;
+}
+
+/** Only called under the payment-creation lock and client lock, before/after
+ * creating resources with the SAME provider idempotency key. Never replace. */
+export async function bindReservationPayment(client: Client, attemptKey: string, linkId: string | null, tx: any) {
+  if (!isCyaPsychologyTenant(client.tenantId)) return;
+  const hold = await assertReservationOpen(client, tx);
+  if (!hold) return;
+  if (hold.status !== "active") throw new ReservationError(409, "This reservation is not open for payment setup.");
+  if ((hold.paymentAttemptKey && hold.paymentAttemptKey !== attemptKey) ||
+      (hold.paymentLinkId && hold.paymentLinkId !== linkId)) {
+    throw new ReservationError(409, "Reservation payment changed. Staff must review the original payment; do not pay again.");
+  }
+  await tx.update(bookingReservations).set({ paymentAttemptKey: attemptKey, paymentLinkId: linkId })
+    .where(and(eq(bookingReservations.id, hold.id), eq(bookingReservations.tenantId, client.tenantId!)));
+}
+
 export async function latestReservation(clientId: string, executor: any = db): Promise<BookingReservation | undefined> {
   const [row] = await executor.select().from(bookingReservations).where(eq(bookingReservations.clientId, clientId))
     .orderBy(desc(bookingReservations.createdAt), desc(bookingReservations.id)).limit(1);
@@ -51,7 +80,7 @@ export async function latestReservation(clientId: string, executor: any = db): P
 }
 
 /** Called within the owning client's transaction too, not just at HTTP entry. */
-export async function assertReservationOpen(client: Pick<Client, "id" | "tenantId" | "assignedSlotId">, executor: any = db): Promise<BookingReservation | undefined> {
+export async function assertReservationOpen(client: Client, executor: any = db): Promise<BookingReservation | undefined> {
   if (!isCyaPsychologyTenant(client.tenantId)) return undefined;
   const hold = await latestReservation(client.id, executor);
   if (!hold) return undefined; // Legacy bookings never acquire retroactive deadlines.
@@ -61,6 +90,9 @@ export async function assertReservationOpen(client: Pick<Client, "id" | "tenantI
       hold.status === "payment_check" || hold.status === "payment_review"
         ? "Payment check needed. Please contact the practice; do not make another payment."
         : "This reservation has expired or was cancelled. Please contact the practice for fresh appointment choices.");
+  }
+  if (!reservationPaymentMatches(client, hold)) {
+    throw new ReservationError(409, "Reservation payment changed. Staff must review all earlier attempts; do not make another payment.");
   }
   return hold;
 }
@@ -87,13 +119,15 @@ export async function reservationAudit(tx: any, tenantId: string, clientId: stri
 
 /** Disable payment entry, close open checkouts, then prove nonpayment. Fail closed on ANY unknown. */
 export async function stopReservationPayment(stripe: Stripe, client: Client, hold: BookingReservation): Promise<"unpaid" | "paid"> {
+  if (client.tenantId !== hold.tenantId || client.id !== hold.clientId) throw new Error("Reservation ownership mismatch");
+  if (!reservationPaymentMatches(client, hold)) throw new Error("Reservation payment identity changed");
   if (client.paymentStatus === "active") return "paid";
-  if (!client.registrationPaymentAttemptKey && !client.stripePaymentLinkId) return "unpaid";
-  let linkId = client.stripePaymentLinkId;
+  if (!hold.paymentAttemptKey && !hold.paymentLinkId) return "unpaid";
+  const linkId = hold.paymentLinkId;
   if (!linkId) throw new Error("Payment setup outcome needs reconciliation");
   const link = await stripe.paymentLinks.retrieve(linkId);
   if (link.metadata.tenantId !== hold.tenantId || link.metadata.clientId !== client.id ||
-      link.metadata.registrationAttemptKey !== client.registrationPaymentAttemptKey) throw new Error("Payment ownership mismatch");
+      link.metadata.registrationAttemptKey !== hold.paymentAttemptKey) throw new Error("Payment ownership mismatch");
   await stripe.paymentLinks.update(linkId, { active: false });
   // Expiring an already-completed session may race with payment. Always re-read instead of assuming an error means unpaid.
   for await (const session of stripe.checkout.sessions.list({ payment_link: linkId, limit: 100 })) {
@@ -105,7 +139,7 @@ export async function stopReservationPayment(stripe: Stripe, client: Client, hol
   let paid = false;
   for await (const session of stripe.checkout.sessions.list({ payment_link: linkId, limit: 100 })) {
     if (session.metadata?.tenantId !== hold.tenantId || session.metadata?.clientId !== client.id ||
-        session.metadata?.registrationAttemptKey !== client.registrationPaymentAttemptKey) throw new Error("Checkout ownership mismatch");
+        session.metadata?.registrationAttemptKey !== hold.paymentAttemptKey) throw new Error("Checkout ownership mismatch");
     if (session.status === "open") throw new Error("Checkout is still open");
     if (session.payment_status === "paid") { paid = true; continue; }
     const intentId = typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id;
@@ -156,12 +190,14 @@ export async function settleReservation(reservationId: string, tenantId: string,
     const check = async (reason: string) => {
       const [checked] = await tx.update(bookingReservations).set({
         status: "payment_check", reason,
-        paymentAttemptKey: client.registrationPaymentAttemptKey, paymentLinkId: client.stripePaymentLinkId,
       }).where(eq(bookingReservations.id, hold.id)).returning();
       return { hold: checked };
     };
     if (client.assignedSlotId !== hold.slotId || client.assignedClinicianId !== hold.clinicianId) {
       return check("Reservation ownership changed. Staff must review before releasing this slot.");
+    }
+    if (!reservationPaymentMatches(client, hold)) {
+      return check("The reservation's original payment attempt cannot be matched. Staff must check all earlier payments; the slot remains reserved. Do not request another payment.");
     }
     if (client.status === "RegistrationPending" && (client.paymentType === "insurer" || !tenant.paymentsEnabled) &&
         client.registrationFormSubmissionId && client.termsAcceptedAt && client.termsAcceptedAt <= hold.deadline) {
@@ -196,6 +232,8 @@ export async function settleReservation(reservationId: string, tenantId: string,
           if (!recovered) throw new Error("Payment setup cannot be inspected");
           client.stripePaymentLinkId = recovered.paymentLinkId;
           await tx.update(clients).set({ stripePaymentLinkId: recovered.paymentLinkId }).where(eq(clients.id, client.id));
+          await tx.update(bookingReservations).set({ paymentLinkId: recovered.paymentLinkId }).where(eq(bookingReservations.id, hold.id));
+          hold.paymentLinkId = recovered.paymentLinkId;
         }
         const stripe = new Stripe(key, { apiVersion: "2026-05-27.dahlia" });
         paid = await stopReservationPayment(stripe, client, hold) === "paid";
@@ -227,7 +265,6 @@ export async function settleReservation(reservationId: string, tenantId: string,
     const [finished] = await tx.update(bookingReservations).set({
       status: cancel ? "cancelled" : "expired", endedAt,
       reason: cancel ? "Cancelled by staff. Send fresh clinician choices or agree a new slot." : "Reservation expired. Send fresh clinician choices or agree a new slot.",
-      paymentAttemptKey: client.registrationPaymentAttemptKey, paymentLinkId: client.stripePaymentLinkId,
     }).where(eq(bookingReservations.id, hold.id)).returning();
     await reservationAudit(tx, tenantId, client.id, cancel ? "activity_reservation_cancelled" : "activity_reservation_expired", { reservationId: hold.id }, userId);
     return { hold: finished };
@@ -282,9 +319,19 @@ export async function flagLateReservationPayment(tenantId: string, clientId: str
     const [old] = await tx.select().from(bookingReservations).where(and(
       eq(bookingReservations.clientId, clientId), eq(bookingReservations.tenantId, tenantId),
       eq(bookingReservations.paymentAttemptKey, attemptKey), eq(bookingReservations.paymentLinkId, linkId),
-      inArray(bookingReservations.status, ["expired", "cancelled"]),
+      inArray(bookingReservations.status, ["expired", "cancelled", ...liveReservationStatuses]),
     )).limit(1);
     if (!old) return false;
+    if (liveReservationStatuses.includes(old.status as any)) {
+      if (reservationPaymentMatches(client, old)) return false;
+      if (old.status === "payment_review" && old.latePaymentReviewRequired) return true;
+      await reservationAudit(tx, tenantId, clientId, "activity_reservation_payment_review", { reservationId: old.id, reviewRequired: true });
+      await tx.update(bookingReservations).set({
+        status: "payment_review", latePaymentReviewRequired: true,
+        reason: "Payment reported on the reservation's earlier link. Review all attempts in this practice's Stripe account; the slot remains reserved.",
+      }).where(eq(bookingReservations.id, old.id));
+      return true;
+    }
     // Keep the historical hold terminal (a new live hold may exist); expose a separate financial alert.
     await reservationAudit(tx, tenantId, clientId, "activity_reservation_late_payment", { reservationId: old.id, reviewRequired: true });
     await tx.update(bookingReservations).set({ latePaymentReviewRequired: true, reason: "Late payment reported on an expired reservation. Verify the payment in this practice's Stripe account; no booking was created from this event." })

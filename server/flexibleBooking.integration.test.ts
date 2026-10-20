@@ -302,6 +302,72 @@ describe("flexible booking with actual PostgreSQL ownership", () => {
     await overdue(held.reservation.id);
     return held;
   }
+  function configureConflictStripe(
+    linkAttempts: Record<string, string>,
+    sessionsByLink: Record<string, any[]> = {},
+    intents: Record<string, any> = {},
+    raceOnExpire = false,
+  ) {
+    const links = Object.fromEntries(Object.entries(linkAttempts).map(([id, registrationAttemptKey]) => [
+      id, { id, metadata: { tenantId: CYA, clientId: "client", registrationAttemptKey }, active: true },
+    ]));
+    const sessionRows = sessionsByLink;
+    const stripe = {
+      paymentLinks: {
+        retrieve: vi.fn(async (id: string) => {
+          if (!links[id]) throw new Error("No such payment link in this Stripe account");
+          return links[id];
+        }),
+        update: vi.fn(async (id: string) => {
+          if (!links[id]) throw new Error("No such payment link in this Stripe account");
+          links[id].active = false;
+          return links[id];
+        }),
+      },
+      checkout: { sessions: {
+        list: ({ payment_link }: { payment_link: string }) => ({
+          async *[Symbol.asyncIterator]() {
+            for (const session of sessionRows[payment_link] || []) yield session;
+          },
+        }),
+        expire: vi.fn(async (id: string) => {
+          const session = Object.values(sessionRows).flat().find((candidate: any) => candidate.id === id) as any;
+          if (!session) throw new Error("No such checkout session");
+          if (raceOnExpire) {
+            session.status = "complete";
+            session.payment_status = "paid";
+            throw new Error("Checkout completed while expiry was racing");
+          }
+          session.status = "expired";
+          return session;
+        }),
+      } },
+      paymentIntents: {
+        retrieve: vi.fn(async (id: string) => {
+          if (!intents[id]) throw new Error("No such payment intent in this Stripe account");
+          return intents[id];
+        }),
+        cancel: vi.fn(async (id: string) => {
+          if (!intents[id]) throw new Error("No such payment intent in this Stripe account");
+          intents[id].status = "canceled";
+          return intents[id];
+        }),
+      },
+      charges: {
+        retrieve: vi.fn(async (id: string) => {
+          const intent = Object.values(intents).find((candidate: any) => candidate.latest_charge === id) as any;
+          if (!intent) throw new Error("No such charge in this Stripe account");
+          return {
+            id, payment_intent: intent.id, paid: true, captured: true,
+            amount_captured: intent.amount_received, currency: intent.currency,
+            amount_refunded: 0, refunded: false, disputed: false,
+          };
+        }),
+      },
+    };
+    isolated.stripe = stripe;
+    return stripe;
+  }
   describe.each([false, true])("reservation safety with paymentReconciliationEnabled=%s", reconciliation => {
     it.each([
       ["paid", false], ["paid", true], ["processing", false], ["processing", true],
@@ -431,6 +497,228 @@ describe("flexible booking with actual PostgreSQL ownership", () => {
       expect(await flagLateReservationPayment(OTHER, "client", "attempt", "plink_test")).toBe(false);
       expect((await client()).assignedSlotId).toBe("slot");
     });
+  });
+  it("releases a conflicting hold only after every recorded link is closed and unpaid, then allows a fresh booking", async () => {
+    const held = await paymentFixture("unpaid");
+    await db.update(schema.bookingReservations).set({ status: "payment_check" }).where(eq(schema.bookingReservations.id, held.reservation.id));
+    await db.update(schema.clients).set({
+      registrationPaymentAttemptKey: "current-attempt", stripePaymentLinkId: "plink_current",
+      paymentStatus: "setup_pending",
+    }).where(eq(schema.clients.id, "client"));
+    const stripe = configureConflictStripe({ plink_test: "attempt", plink_current: "current-attempt" });
+    const payload = {
+      reservationId: held.reservation.id, decision: "release_unpaid", paymentLinkIds: [],
+      reviewedAllAttempts: true,
+    };
+    const responses = await Promise.all([
+      request("/api/clients/client/resolve-reservation-payment", payload),
+      request("/api/clients/client/resolve-reservation-payment", payload),
+    ]);
+    expect(responses.map(response => response.status).sort()).toEqual([200, 409]);
+    const successful = await Promise.all(responses.filter(response => response.status === 200).map(response => response.json()));
+    expect(successful[0]).toMatchObject({ status: "cancelled", resolved: true });
+    expect(await latestReservation("client")).toMatchObject({ status: "cancelled", paymentAttemptKey: "attempt", paymentLinkId: "plink_test" });
+    expect(await client()).toMatchObject({ stripePaymentLinkId: "plink_current", registrationPaymentAttemptKey: "current-attempt", assignedSlotId: null });
+    expect(stripe.paymentLinks.update).toHaveBeenCalledTimes(2);
+    expect(await db.select().from(schema.auditLogs).where(eq(schema.auditLogs.action, "activity_reservation_payment_conflict_resolution"))).toHaveLength(1);
+    expect((await db.select().from(schema.timeSlots).where(eq(schema.timeSlots.id, "slot")))[0].isBooked).toBe(false);
+    const fresh = await reserve("client", "slot-2");
+    expect(fresh.reservation.status).toBe("active");
+    expect(fresh.client.stripePaymentLinkId).toBeNull();
+  });
+  it("supports a deliberately supplied older Stripe link when the reservation's historic identity is missing", async () => {
+    const held = await paymentFixture("unpaid");
+    await db.update(schema.bookingReservations).set({ status: "payment_review", paymentAttemptKey: null, paymentLinkId: null })
+      .where(eq(schema.bookingReservations.id, held.reservation.id));
+    await db.update(schema.clients).set({
+      registrationPaymentAttemptKey: "current-attempt", stripePaymentLinkId: "plink_current",
+      paymentStatus: "setup_pending",
+    }).where(eq(schema.clients.id, "client"));
+    configureConflictStripe({
+      plink_current: "current-attempt", plink_historic: "historic-attempt",
+    });
+    const response = await request("/api/clients/client/resolve-reservation-payment", {
+      reservationId: held.reservation.id, decision: "release_unpaid",
+      paymentLinkIds: ["plink_historic"], reviewedAllAttempts: true,
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ status: "cancelled", resolved: true });
+    expect(await latestReservation("client")).toMatchObject({
+      status: "cancelled", paymentAttemptKey: null, paymentLinkId: null,
+    });
+    const [log] = await db.select().from(schema.auditLogs)
+      .where(eq(schema.auditLogs.action, "activity_reservation_payment_conflict_resolution"));
+    expect(log).toMatchObject({ userId: "admin" });
+    expect(log.details).toMatchObject({
+      decision: "release_unpaid", result: "released_unpaid",
+      additionalPaymentLinkIds: ["plink_historic"],
+    });
+  });
+  it("records and confirms exactly one tenant-verified payment without replacing the hold's original identity", async () => {
+    const held = await paymentFixture("paid");
+    await db.update(schema.bookingReservations).set({ status: "payment_review" }).where(eq(schema.bookingReservations.id, held.reservation.id));
+    await db.update(schema.clients).set({
+      registrationPaymentAttemptKey: "current-attempt", stripePaymentLinkId: "plink_current",
+      paymentStatus: "setup_pending",
+    }).where(eq(schema.clients.id, "client"));
+    const oldMetadata = { tenantId: CYA, clientId: "client", registrationAttemptKey: "attempt" };
+    const paidSession = {
+      id: "cs_original", payment_link: "plink_test", metadata: oldMetadata,
+      status: "complete", payment_status: "paid", payment_intent: "pi_original",
+      amount_total: 10000, currency: "gbp", customer: null,
+    };
+    configureConflictStripe(
+      { plink_test: "attempt", plink_current: "current-attempt" },
+      { plink_test: [paidSession] },
+      { pi_original: {
+        id: "pi_original", status: "succeeded", amount_received: 10000, amount: 10000,
+        currency: "gbp", metadata: oldMetadata, payment_method: null, latest_charge: "ch_original",
+      } },
+    );
+    const response = await request("/api/clients/client/resolve-reservation-payment", {
+      reservationId: held.reservation.id, decision: "confirm_verified_payment",
+      paymentLinkIds: [], reviewedAllAttempts: true,
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ status: "confirmed", resolved: true });
+    expect(await latestReservation("client")).toMatchObject({
+      status: "confirmed", paymentAttemptKey: "attempt", paymentLinkId: "plink_test",
+    });
+    expect(await client()).toMatchObject({
+      status: "Scheduled", paymentStatus: "active",
+      registrationPaymentAttemptKey: "current-attempt", stripePaymentLinkId: "plink_current",
+    });
+    expect(await db.select().from(schema.paymentCharges)).toMatchObject([
+      { stripePaymentIntentId: "pi_original", amountPence: 10000, status: "succeeded", tenantId: CYA },
+    ]);
+    expect(await db.select().from(schema.bookingSnapshots)).toHaveLength(1);
+    const [log] = await db.select().from(schema.auditLogs)
+      .where(eq(schema.auditLogs.action, "activity_reservation_payment_conflict_resolution"));
+    expect(log.details).toMatchObject({
+      decision: "confirm_verified_payment", result: "payment_verified", paymentIntentId: "pi_original",
+      inspectedPaymentLinks: [
+        { paymentLinkId: "plink_test", attemptKey: "attempt" },
+        { paymentLinkId: "plink_current", attemptKey: "current-attempt" },
+      ],
+      inspectedSessionIds: ["cs_original"], inspectedPaymentIntentIds: ["pi_original"],
+    });
+  });
+  it.each(["refunded", "disputed"] as const)("does not confirm a %s payment as a valid reservation payment", async paymentIssue => {
+    const held = await paymentFixture("paid");
+    await db.update(schema.bookingReservations).set({ status: "payment_review" }).where(eq(schema.bookingReservations.id, held.reservation.id));
+    await db.update(schema.clients).set({
+      registrationPaymentAttemptKey: "current-attempt", stripePaymentLinkId: "plink_current",
+      paymentStatus: "setup_pending",
+    }).where(eq(schema.clients.id, "client"));
+    const metadata = { tenantId: CYA, clientId: "client", registrationAttemptKey: "attempt" };
+    const stripe = configureConflictStripe(
+      { plink_test: "attempt", plink_current: "current-attempt" },
+      { plink_test: [{
+        id: "cs_review", payment_link: "plink_test", metadata,
+        status: "complete", payment_status: "paid", payment_intent: "pi_review",
+        amount_total: 10000, currency: "gbp", customer: null,
+      }] },
+      { pi_review: {
+        id: "pi_review", status: "succeeded", amount_received: 10000, amount: 10000,
+        currency: "gbp", metadata, payment_method: null, latest_charge: "ch_review",
+      } },
+    );
+    stripe.charges.retrieve.mockResolvedValueOnce({
+      id: "ch_review", payment_intent: "pi_review", paid: true, captured: true,
+      amount_captured: 10000, currency: "gbp",
+      amount_refunded: paymentIssue === "refunded" ? 10000 : 0,
+      refunded: paymentIssue === "refunded", disputed: paymentIssue === "disputed",
+    } as any);
+    const response = await request("/api/clients/client/resolve-reservation-payment", {
+      reservationId: held.reservation.id, decision: "confirm_verified_payment",
+      paymentLinkIds: [], reviewedAllAttempts: true,
+    });
+    expect(await response.json()).toMatchObject({ status: "payment_review", resolved: false });
+    expect(await db.select().from(schema.paymentCharges)).toHaveLength(0);
+    expect(await db.select().from(schema.bookingSnapshots)).toHaveLength(0);
+    expect((await db.select().from(schema.timeSlots).where(eq(schema.timeSlots.id, "slot")))[0].isBooked).toBe(true);
+  });
+  it("keeps the slot reserved when a Checkout Session completes while Stripe is expiring it", async () => {
+    const held = await paymentFixture("unpaid");
+    await db.update(schema.bookingReservations).set({ status: "payment_check" }).where(eq(schema.bookingReservations.id, held.reservation.id));
+    await db.update(schema.clients).set({
+      registrationPaymentAttemptKey: "current-attempt", stripePaymentLinkId: "plink_current",
+      paymentStatus: "setup_pending",
+    }).where(eq(schema.clients.id, "client"));
+    const metadata = { tenantId: CYA, clientId: "client", registrationAttemptKey: "attempt" };
+    const racedSession = {
+      id: "cs_race", payment_link: "plink_test", metadata,
+      status: "open", payment_status: "unpaid", payment_intent: "pi_race",
+      amount_total: 10000, currency: "gbp", customer: null,
+    };
+    const stripe = configureConflictStripe(
+      { plink_test: "attempt", plink_current: "current-attempt" },
+      { plink_test: [racedSession] },
+      { pi_race: {
+        id: "pi_race", status: "succeeded", amount_received: 10000, amount: 10000,
+        currency: "gbp", metadata, payment_method: null, latest_charge: "ch_race",
+      } },
+      true,
+    );
+    const response = await request("/api/clients/client/resolve-reservation-payment", {
+      reservationId: held.reservation.id, decision: "release_unpaid", paymentLinkIds: [],
+      reviewedAllAttempts: true,
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ status: "payment_review", resolved: false });
+    expect(stripe.checkout.sessions.expire).toHaveBeenCalledWith("cs_race");
+    expect(await latestReservation("client")).toMatchObject({ status: "payment_review" });
+    expect((await db.select().from(schema.timeSlots).where(eq(schema.timeSlots.id, "slot")))[0].isBooked).toBe(true);
+    expect(await db.select().from(schema.paymentCharges)).toHaveLength(0);
+  });
+  it("rejects clinicians and other practices from reservation conflict resolution", async () => {
+    const held = await paymentFixture("unpaid");
+    await db.update(schema.bookingReservations).set({ status: "payment_check" }).where(eq(schema.bookingReservations.id, held.reservation.id));
+    const payload = {
+      reservationId: held.reservation.id, decision: "release_unpaid", paymentLinkIds: [],
+      reviewedAllAttempts: true,
+    };
+    expect((await request("/api/clients/client/resolve-reservation-payment", payload, CYA, false)).status).toBe(403);
+    expect((await request("/api/clients/client/resolve-reservation-payment", payload, OTHER)).status).toBe(404);
+    expect(isolated.stripe.paymentLinks.retrieve).not.toHaveBeenCalled();
+  });
+  it("does not offer reservation conflict resolution for a late-payment alert", async () => {
+    const held = await paymentFixture("paid");
+    await db.update(schema.clients).set({
+      registrationPaymentAttemptKey: "current-attempt", stripePaymentLinkId: "plink_current",
+    }).where(eq(schema.clients.id, "client"));
+    expect(await flagLateReservationPayment(CYA, "client", "attempt", "plink_test")).toBe(true);
+    const response = await request("/api/booking-reservations");
+    const [summary] = await response.json();
+    expect(summary).toMatchObject({ id: held.reservation.id, status: "payment_review", canResolvePaymentConflict: false });
+  });
+  it("does not release an unpaid decision if any payment intent is still processing", async () => {
+    const held = await paymentFixture("unpaid");
+    await db.update(schema.bookingReservations).set({ status: "payment_check" }).where(eq(schema.bookingReservations.id, held.reservation.id));
+    await db.update(schema.clients).set({
+      registrationPaymentAttemptKey: "current-attempt", stripePaymentLinkId: "plink_current",
+      paymentStatus: "setup_pending",
+    }).where(eq(schema.clients.id, "client"));
+    const metadata = { tenantId: CYA, clientId: "client", registrationAttemptKey: "attempt" };
+    configureConflictStripe(
+      { plink_test: "attempt", plink_current: "current-attempt" },
+      { plink_test: [{
+        id: "cs_processing", payment_link: "plink_test", metadata,
+        status: "complete", payment_status: "unpaid", payment_intent: "pi_processing",
+        amount_total: 10000, currency: "gbp", customer: null,
+      }] },
+      { pi_processing: {
+        id: "pi_processing", status: "processing", amount_received: 0, amount: 10000,
+        currency: "gbp", metadata, payment_method: null,
+      } },
+    );
+    const response = await request("/api/clients/client/resolve-reservation-payment", {
+      reservationId: held.reservation.id, decision: "release_unpaid", paymentLinkIds: [],
+      reviewedAllAttempts: true,
+    });
+    expect(await response.json()).toMatchObject({ status: "payment_review", resolved: false });
+    expect(await latestReservation("client")).toMatchObject({ status: "payment_review" });
+    expect((await db.select().from(schema.timeSlots).where(eq(schema.timeSlots.id, "slot")))[0].isBooked).toBe(true);
   });
   it("disables the link and expires open Stripe sessions before releasing an unpaid slot", async () => {
     const held = await paymentFixture("unpaid");

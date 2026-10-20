@@ -14,6 +14,7 @@ import {
   timeSlots,
   users,
   bookingReservations,
+  paymentCharges,
   type BookingSnapshot,
   type Client,
 } from "@shared/schema";
@@ -56,6 +57,7 @@ export type BookingConfirmationInput = {
   expectedStatus?: Client["status"];
   expectedPaymentLinkId?: string;
   expectedPaymentAttemptKey?: string;
+  reservationPaymentResolution?: { reservationId: string; paymentIntentId: string };
 };
 
 export async function confirmBookingInTransaction(tx: any, input: BookingConfirmationInput): Promise<BookingConfirmationResult> {
@@ -127,15 +129,32 @@ export async function confirmBookingInTransaction(tx: any, input: BookingConfirm
     }
     const status = confirmationStatus(tenant?.bookingConfirmedEmailEnabled === true);
     const reservation = isCyaPsychologyTenant(input.tenantId) ? await latestReservation(client.id, tx) : undefined;
+    let reservationIdentityResolved = false;
     if (reservation) {
-      if (!reservationPaymentMatches(client, reservation)) {
+      const resolution = input.reservationPaymentResolution;
+      if (resolution?.reservationId === reservation.id && input.source === "stripe" && client.paymentStatus === "active") {
+        const [charge] = await tx.select().from(paymentCharges).where(and(
+          eq(paymentCharges.stripePaymentIntentId, resolution.paymentIntentId),
+          eq(paymentCharges.clientId, client.id), eq(paymentCharges.tenantId, input.tenantId),
+          eq(paymentCharges.amountPence, client.agreedRatePence || 0), eq(paymentCharges.status, "succeeded"),
+        )).limit(1);
+        const resolutionAudits = await tx.select({ details: auditLogs.details }).from(auditLogs).where(and(
+          eq(auditLogs.tenantId, input.tenantId), eq(auditLogs.resourceId, client.id),
+          eq(auditLogs.action, "activity_reservation_payment_conflict_resolution"),
+        ));
+        reservationIdentityResolved = !!charge && resolutionAudits.some(({ details }: { details: Record<string, unknown> | null }) =>
+          details?.reservationId === reservation.id && details?.decision === "confirm_verified_payment" &&
+          details?.result === "payment_verified" && details?.paymentIntentId === resolution.paymentIntentId);
+      }
+      if (!reservationPaymentMatches(client, reservation) && !reservationIdentityResolved) {
         throw new ReservationError(409, "Review the reservation's original payment attempt before confirming this booking.");
       }
       const timelyDirectRegistration = input.source === "registration" && client.registrationFormSubmissionId &&
         client.termsAcceptedAt && client.termsAcceptedAt <= reservation.deadline &&
         (client.paymentType === "insurer" || !tenant?.paymentsEnabled);
       const verifiedPayment = input.source === "stripe" && client.paymentStatus === "active";
-      if (!["active", "payment_check"].includes(reservation.status) || reservation.slotId !== client.assignedSlotId ||
+      if ((!["active", "payment_check"].includes(reservation.status) &&
+          !(reservationIdentityResolved && reservation.status === "payment_review")) || reservation.slotId !== client.assignedSlotId ||
           (!verifiedPayment && !timelyDirectRegistration && (reservation.status !== "active" || reservation.deadline.getTime() <= Date.now()))) {
         throw new ReservationError(409, "This reservation is no longer available for confirmation. Staff must review the payment and appointment.");
       }
@@ -227,7 +246,9 @@ export async function confirmBookingInTransaction(tx: any, input: BookingConfirm
     if (!updated) throw new Error("Client confirmation update failed");
     if (reservation) await tx.update(bookingReservations).set({
       status: "confirmed", endedAt: confirmedAt, reason: null, followUpPending: true,
-      paymentAttemptKey: client.registrationPaymentAttemptKey, paymentLinkId: client.stripePaymentLinkId,
+      ...(!reservationIdentityResolved
+        ? { paymentAttemptKey: client.registrationPaymentAttemptKey, paymentLinkId: client.stripePaymentLinkId }
+        : {}),
     }).where(eq(bookingReservations.id, reservation.id));
     return { client: updated, snapshot, status, newlyConfirmed: true };
   }

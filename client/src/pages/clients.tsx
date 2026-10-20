@@ -551,7 +551,7 @@ export default function Clients() {
     onError: (error: Error) => toast({ title: "Invitation not sent", description: mutationErrorMessage(error, "Please try again."), variant: "destructive" }),
   });
 
-  type ReservationSummary = { id: string; clientId: string; status: "active" | "payment_check" | "expired" | "cancelled" | "confirmed" | "payment_review"; deadline: string; durationHours: number; route: "online" | "phone"; reason?: string; clinicianName: string; appointmentLabel: string };
+  type ReservationSummary = { id: string; clientId: string; status: "active" | "payment_check" | "expired" | "cancelled" | "confirmed" | "payment_review"; deadline: string; durationHours: number; route: "online" | "phone"; reason?: string; clinicianName: string; appointmentLabel: string; canResolvePaymentConflict?: boolean };
   const { data: reservations = [], isError: reservationsError, refetch: refetchReservations } = useQuery<ReservationSummary[]>({
     queryKey: ["/api/booking-reservations"],
     queryFn: async () => {
@@ -563,6 +563,9 @@ export default function Clients() {
     refetchInterval: 30_000,
   });
   const [reservationToCancel, setReservationToCancel] = useState<ReservationSummary | null>(null);
+  const [reservationToResolve, setReservationToResolve] = useState<ReservationSummary | null>(null);
+  const [resolutionPaymentLinkIds, setResolutionPaymentLinkIds] = useState("");
+  const [reviewedAllPaymentAttempts, setReviewedAllPaymentAttempts] = useState(false);
   const reservationAction = useMutation({
     mutationFn: async ({ clientId, reservationId, action }: { clientId: string; reservationId: string; action: "cancel" | "check" }) => {
       const response = await apiRequest("POST", `/api/clients/${clientId}/${action === "cancel" ? "cancel-reservation" : "check-reservation"}`, { reservationId });
@@ -577,6 +580,34 @@ export default function Clients() {
       toast(reservationActionFeedback(result.status, result.reason));
     },
     onError: (error: Error) => toast({ title: "Reservation not updated", description: error.message, variant: "destructive" }),
+  });
+  const resolveReservationPaymentMutation = useMutation({
+    mutationFn: async ({ decision }: { decision: "release_unpaid" | "confirm_verified_payment" }) => {
+      if (!reservationToResolve) throw new Error("Choose a reservation to resolve.");
+      const response = await apiRequest("POST", `/api/clients/${reservationToResolve.clientId}/resolve-reservation-payment`, {
+        reservationId: reservationToResolve.id,
+        decision,
+        paymentLinkIds: Array.from(new Set(resolutionPaymentLinkIds.split(/[\s,]+/).map(id => id.trim()).filter(Boolean))),
+        reviewedAllAttempts: reviewedAllPaymentAttempts,
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "Payment conflict could not be reviewed.");
+      return body as { status?: string; reason?: string; resolved?: boolean };
+    },
+    onSuccess: result => {
+      queryClient.invalidateQueries({ queryKey: ["/api/booking-reservations"] });
+      invalidateOperationalData(queryClient);
+      setReservationToResolve(null);
+      setResolutionPaymentLinkIds("");
+      setReviewedAllPaymentAttempts(false);
+      toast({
+        title: result.resolved ? "Payment conflict resolved" : "Reservation remains held",
+        description: result.reason || (result.resolved
+          ? "The reservation was updated using verified Stripe evidence."
+          : "Stripe could not safely resolve every payment attempt. Do not send another payment request."),
+      });
+    },
+    onError: (error: Error) => toast({ title: "Payment conflict not resolved", description: error.message, variant: "destructive" }),
   });
 
   const resendAllocationOptionsMutation = useMutation({
@@ -2139,6 +2170,11 @@ export default function Clients() {
                   <div className="min-w-0"><p className="font-medium">{client?.displayId || reservation.clientId} · {reservation.clinicianName}</p><p className="text-sm text-muted-foreground">{reservation.appointmentLabel}</p><p className="text-xs text-muted-foreground">{reservation.status.replaceAll("_", " ")} · {reservation.route} · {reservation.durationHours}h hold · deadline {formatEuropeLondonDateTime(reservation.deadline)}</p>{reservation.reason && <p className="text-xs text-muted-foreground">{reservation.reason}</p>}</div>
                   <div className="flex shrink-0 gap-2">
                     {reservation.status === "payment_check" && <Button size="sm" variant="outline" disabled={reservationAction.isPending} onClick={() => reservationAction.mutate({ clientId: reservation.clientId, reservationId: reservation.id, action: "check" })}>Check reservation</Button>}
+                    {reservation.canResolvePaymentConflict && <Button size="sm" variant="outline" onClick={() => {
+                      setReservationToResolve(reservation);
+                      setResolutionPaymentLinkIds("");
+                      setReviewedAllPaymentAttempts(false);
+                    }}>Resolve payment</Button>}
                     {reservation.status === "payment_review" && <Button size="sm" variant="outline" disabled={!client} onClick={() => setSelectedPortalClientId(reservation.clientId)}>Review client</Button>}
                     {actionable && (reservation.status === "expired" || reservation.status === "cancelled") && client && <Button size="sm" variant="outline" onClick={() => { setSelectedClient(client); setSelectedOptions([]); setIsAllocateDialogOpen(true); }}>Review choices</Button>}
                     {(reservation.status === "active" || reservation.status === "payment_check") && <Button size="sm" variant="ghost" onClick={() => setReservationToCancel(reservation)}>Cancel hold</Button>}
@@ -2148,6 +2184,56 @@ export default function Clients() {
           <AlertDialog open={!!reservationToCancel} onOpenChange={open => { if (!open) setReservationToCancel(null); }}>
             <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Request cancellation?</AlertDialogTitle><AlertDialogDescription>This requests cancellation of the held appointment for {reservationToCancel?.clinicianName}. The slot is released only after any required payment check is complete; the result may remain payment_check or become confirmed. You will see the returned status and reason after the check.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Keep reservation</AlertDialogCancel><AlertDialogAction disabled={reservationAction.isPending} onClick={() => reservationToCancel && reservationAction.mutate({ clientId: reservationToCancel.clientId, reservationId: reservationToCancel.id, action: "cancel" })}>Request cancellation</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
           </AlertDialog>
+          <Dialog open={!!reservationToResolve} onOpenChange={open => {
+            if (!open) {
+              setReservationToResolve(null);
+              setResolutionPaymentLinkIds("");
+              setReviewedAllPaymentAttempts(false);
+            }
+          }}>
+            <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-xl overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>Resolve payment conflict</DialogTitle>
+                <DialogDescription>
+                  The reservation keeps its original payment identity. We will inspect its recorded links, the client’s current link, and any additional links you provide in this practice’s Stripe account. If any attempt is paid, pending, mismatched, or uncertain, the appointment stays reserved.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <Label htmlFor="reservation-resolution-links">Other Payment Link IDs for this reservation</Label>
+                  <Textarea
+                    id="reservation-resolution-links"
+                    value={resolutionPaymentLinkIds}
+                    onChange={event => setResolutionPaymentLinkIds(event.target.value)}
+                    placeholder="Paste any older or replacement Stripe Payment Link IDs, separated by spaces or commas"
+                    rows={3}
+                  />
+                </div>
+                <label className="flex items-start gap-2 text-sm">
+                  <Checkbox checked={reviewedAllPaymentAttempts} onCheckedChange={value => setReviewedAllPaymentAttempts(value === true)} />
+                  <span>I reviewed this practice’s Stripe account and included every other Payment Link related to this reservation.</span>
+                </label>
+                <p className="text-xs text-muted-foreground">
+                  This will not adopt or erase a link reference. A successful payment can confirm the existing appointment only when exactly one payment is verified and all other attempts are safely closed.
+                </p>
+              </div>
+              <DialogFooter className="flex-col sm:flex-row">
+                <Button
+                  variant="outline"
+                  disabled={!reviewedAllPaymentAttempts || resolveReservationPaymentMutation.isPending}
+                  onClick={() => resolveReservationPaymentMutation.mutate({ decision: "release_unpaid" })}
+                >
+                  Release only if all are unpaid
+                </Button>
+                <Button
+                  disabled={!reviewedAllPaymentAttempts || resolveReservationPaymentMutation.isPending}
+                  onClick={() => resolveReservationPaymentMutation.mutate({ decision: "confirm_verified_payment" })}
+                >
+                  Confirm verified payment
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </section>
       )}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">

@@ -14,7 +14,7 @@ import { isValidZoomLink } from "@shared/bookingZoom";
 import { findSessionFormatPreference, getSessionFormatMismatch } from "../client/src/lib/availability-utils";
 import { buildFromAddress, sendEmail, wrapInHtmlTemplate } from "./email";
 import { deliverRegistration } from "./registrationDelivery";
-import { assertReservationOpen, latestReservation, reconcileDueReservations, reservationAudit, ReservationError, settleReservation } from "./reservationLifecycle";
+import { assertReservationOpen, latestReservation, reconcileDueReservations, reservationAudit, ReservationError, resolveReservationPaymentConflict, settleReservation } from "./reservationLifecycle";
 
 function fail(status: number, message: string): never { throw new ReservationError(status, message); }
 async function clientLocked(tx: any, clientId: string, tenantId: string): Promise<Client> {
@@ -29,8 +29,14 @@ async function checkUnallocated(tx: any, client: Client) {
   }
   const hold = await latestReservation(client.id, tx);
   if (hold && ["active", "payment_check", "payment_review"].includes(hold.status)) fail(409, "Resolve this client's existing reservation first.");
+  const explicitlyReleasedUnpaidConflict = hold && (await tx.select({ details: auditLogs.details }).from(auditLogs).where(and(
+    eq(auditLogs.tenantId, client.tenantId!), eq(auditLogs.resourceId, client.id),
+    eq(auditLogs.action, "activity_reservation_payment_conflict_resolution"),
+  ))).some(({ details }: { details: Record<string, unknown> | null }) =>
+    details?.reservationId === hold.id && details?.result === "released_unpaid");
   if (client.paymentStatus === "active" ||
       ((client.registrationPaymentAttemptKey || client.stripePaymentLinkId) &&
+        !explicitlyReleasedUnpaidConflict &&
         (!hold || !["expired", "cancelled"].includes(hold.status) ||
           hold.paymentAttemptKey !== client.registrationPaymentAttemptKey || hold.paymentLinkId !== client.stripePaymentLinkId))) {
     fail(409, "Resolve the client's previous payment attempt before offering another booking.");
@@ -217,10 +223,15 @@ export function registerFlexibleBookingRoutes(app: Express) {
     const rows = await db.select().from(bookingReservations).where(eq(bookingReservations.tenantId, req.tenant!.id)).orderBy(desc(bookingReservations.createdAt), desc(bookingReservations.id));
     const financialReviews = new Map(rows.filter(row => row.latePaymentReviewRequired).map(row => [row.clientId, row]));
     const seen = new Set<string>();
-    res.json(rows.filter(row => !seen.has(row.clientId) && Boolean(seen.add(row.clientId))).map(
-      ({ id, clientId, status, deadline, durationHours, route, reason, clinicianName, appointmentLabel }) =>
-        ({ id, clientId, status: financialReviews.has(clientId) ? "payment_review" : status, deadline, durationHours, route,
-          reason: financialReviews.get(clientId)?.reason || reason, clinicianName, appointmentLabel })));
+    res.json(rows.filter(row => !seen.has(row.clientId) && Boolean(seen.add(row.clientId))).map(row =>
+      ({
+        id: row.id, clientId: row.clientId,
+        status: financialReviews.has(row.clientId) ? "payment_review" : row.status,
+        deadline: row.deadline, durationHours: row.durationHours, route: row.route,
+        reason: financialReviews.get(row.clientId)?.reason || row.reason,
+        clinicianName: row.clinicianName, appointmentLabel: row.appointmentLabel,
+        canResolvePaymentConflict: !row.latePaymentReviewRequired && ["payment_check", "payment_review"].includes(row.status),
+      })));
   }));
   for (const action of ["cancel", "check"] as const) app.post(`/api/clients/:clientId/${action}-reservation`, requireAdmin, route(async (req, res) => {
     const { reservationId } = z.object({ reservationId: z.string().min(1) }).parse(req.body);
@@ -228,6 +239,25 @@ export function registerFlexibleBookingRoutes(app: Express) {
     if (!hold || hold.id !== reservationId || hold.tenantId !== req.tenant?.id) fail(404, "Reservation not found");
     const result = await settleReservation(hold.id, hold.tenantId, action === "cancel", req.user!.id);
     res.json({ status: result?.status, reason: result?.reason });
+  }));
+  app.post("/api/clients/:clientId/resolve-reservation-payment", requireAdmin, route(async (req, res) => {
+    if (!req.tenant?.id || !req.user?.id) fail(403, "Practice administrator required");
+    const data = z.object({
+      reservationId: z.string().min(1),
+      decision: z.enum(["release_unpaid", "confirm_verified_payment"]),
+      paymentLinkIds: z.array(z.string().min(1).max(255)).max(20).default([]),
+      reviewedAllAttempts: z.literal(true),
+    }).parse(req.body);
+    const hold = await latestReservation(req.params.clientId);
+    if (!hold || hold.id !== data.reservationId || hold.tenantId !== req.tenant.id) fail(404, "Reservation not found");
+    const result = await resolveReservationPaymentConflict({
+      reservationId: hold.id,
+      tenantId: req.tenant.id,
+      userId: req.user.id,
+      decision: data.decision,
+      additionalPaymentLinkIds: data.paymentLinkIds,
+    });
+    res.json({ status: result?.status, reason: result?.reason, resolved: result?.status === "cancelled" || result?.status === "confirmed" });
   }));
   app.post("/api/clients/:clientId/reserve-slot", requireAdmin, route(async (req, res) => {
     if (!flexibleBookingAvailable(req.tenant || {})) fail(404, "Booking route unavailable");

@@ -159,6 +159,324 @@ export async function stopReservationPayment(stripe: Stripe, client: Client, hol
   return paid ? "paid" : "unpaid";
 }
 
+type ReservationResolutionDecision = "release_unpaid" | "confirm_verified_payment";
+type ReservationPaymentScan = {
+  paid: Array<{ intentId: string; amountPence: number }>;
+  blocked: string | null;
+  inspectedLinks: Array<{ paymentLinkId: string; attemptKey: string }>;
+  inspectedSessionIds: string[];
+  inspectedPaymentIntentIds: string[];
+};
+
+function stripeForReservation(tenant: Tenant) {
+  if (!tenant.stripeSecretKey) throw new Error("The practice's Stripe account is not configured.");
+  return new Stripe(decryptSecret(tenant.stripeSecretKey), { apiVersion: "2026-05-27.dahlia" });
+}
+
+async function scanReservationPaymentAttempts(
+  stripe: Stripe,
+  tenant: Tenant,
+  client: Client,
+  hold: BookingReservation,
+  additionalLinkIds: string[],
+  executor: any,
+): Promise<ReservationPaymentScan> {
+  const ids = Array.from(new Set([hold.paymentLinkId, client.stripePaymentLinkId, ...additionalLinkIds].filter((id): id is string => !!id)));
+  const knownAttempts = new Set([hold.paymentAttemptKey, client.registrationPaymentAttemptKey].filter((key): key is string => !!key));
+  const inspectedSessionIds: string[] = [];
+  const recordedCharges = await executor.select().from(paymentCharges).where(and(
+    eq(paymentCharges.clientId, client.id), eq(paymentCharges.tenantId, tenant.id),
+  ));
+  const hasRecordedIntent = recordedCharges.some((charge: any) => !!charge.stripePaymentIntentId);
+  if (!hold.paymentLinkId && additionalLinkIds.length === 0 && !hasRecordedIntent) {
+    return { paid: [], blocked: "The reservation's original payment identity is incomplete. Add every related Payment Link ID found in this practice's Stripe account before resolving it.", inspectedLinks: [], inspectedSessionIds, inspectedPaymentIntentIds: [] };
+  }
+  if (ids.length === 0 && !hasRecordedIntent) {
+    return { paid: [], blocked: "No verifiable payment attempt is recorded. The reservation remains held for review.", inspectedLinks: [], inspectedSessionIds, inspectedPaymentIntentIds: [] };
+  }
+
+  const paid = new Map<string, { intentId: string; amountPence: number }>();
+  const inspectedLinks: Array<{ paymentLinkId: string; attemptKey: string }> = [];
+  const seenAttempts = new Set<string>();
+  const seenIntents = new Set<string>();
+  const inspectIntent = async (intentId: string, expectedAttempt?: string, expectedAmount?: number) => {
+    if (seenIntents.has(intentId)) return;
+    seenIntents.add(intentId);
+    const intent = await stripe.paymentIntents.retrieve(intentId);
+    if (intent.metadata?.tenantId !== tenant.id || intent.metadata?.clientId !== client.id ||
+        !intent.metadata?.registrationAttemptKey ||
+        (expectedAttempt && intent.metadata.registrationAttemptKey !== expectedAttempt)) {
+      throw new Error("A payment intent has mismatched practice, client or attempt details.");
+    }
+    seenAttempts.add(intent.metadata.registrationAttemptKey);
+    if (intent.status === "succeeded") {
+      const amountPence = intent.amount_received ?? intent.amount;
+      if (!client.agreedRatePence || amountPence !== client.agreedRatePence || intent.currency !== "gbp" ||
+          (expectedAmount !== undefined && expectedAmount !== amountPence)) {
+        throw new Error("A completed payment does not match the client's agreed amount and currency.");
+      }
+      const chargeId = typeof intent.latest_charge === "string" ? intent.latest_charge : intent.latest_charge?.id;
+      if (!chargeId) throw new Error("The completed payment has no charge that can be checked for refunds or disputes.");
+      const charge: any = await stripe.charges.retrieve(chargeId);
+      const chargeIntentId = typeof charge.payment_intent === "string" ? charge.payment_intent : charge.payment_intent?.id;
+      if (chargeIntentId !== intent.id || charge.paid !== true || charge.captured !== true ||
+          charge.amount_captured !== client.agreedRatePence || charge.currency !== "gbp" ||
+          charge.refunded === true || (charge.amount_refunded || 0) > 0 || charge.disputed === true) {
+        throw new Error("The completed payment is refunded, disputed or otherwise not safe to confirm.");
+      }
+      paid.set(intent.id, { intentId: intent.id, amountPence });
+      return;
+    }
+    if (intent.status === "requires_payment_method") {
+      const cancelled = await stripe.paymentIntents.cancel(intent.id);
+      if (cancelled.status !== "canceled") throw new Error("A payment attempt could not be safely closed.");
+      const verified = await stripe.paymentIntents.retrieve(intent.id);
+      if (verified.status !== "canceled") throw new Error("A payment attempt is still active.");
+      return;
+    }
+    if (intent.status !== "canceled") throw new Error("A payment attempt is pending or has an uncertain outcome.");
+  };
+
+  for (const paymentLinkId of ids) {
+    const link = await stripe.paymentLinks.retrieve(paymentLinkId);
+    const attemptKey = link.metadata?.registrationAttemptKey;
+    if (!attemptKey || link.metadata?.tenantId !== tenant.id || link.metadata?.clientId !== client.id) {
+      throw new Error("A Payment Link does not belong to this client and practice.");
+    }
+    seenAttempts.add(attemptKey);
+    inspectedLinks.push({ paymentLinkId, attemptKey });
+    const deactivated = await stripe.paymentLinks.update(paymentLinkId, { active: false });
+    if (deactivated.active !== false) throw new Error("A Payment Link could not be disabled.");
+
+    const sessionsToExpire: string[] = [];
+    for await (const session of stripe.checkout.sessions.list({ payment_link: paymentLinkId, limit: 100 })) {
+      inspectedSessionIds.push(session.id);
+      const sessionLinkId = typeof session.payment_link === "string" ? session.payment_link : session.payment_link?.id;
+      if (sessionLinkId !== paymentLinkId || session.metadata?.tenantId !== tenant.id ||
+          session.metadata?.clientId !== client.id ||
+          session.metadata?.registrationAttemptKey !== attemptKey) {
+        throw new Error("A Checkout Session has mismatched practice, client, link or attempt details.");
+      }
+      if (session.status === "open") sessionsToExpire.push(session.id);
+    }
+    for (const sessionId of sessionsToExpire) {
+      try { await stripe.checkout.sessions.expire(sessionId); }
+      catch { /* A payment can complete while expiry races; the re-read below decides. */ }
+    }
+
+    for await (const session of stripe.checkout.sessions.list({ payment_link: paymentLinkId, limit: 100 })) {
+      if (!inspectedSessionIds.includes(session.id)) inspectedSessionIds.push(session.id);
+      const sessionLinkId = typeof session.payment_link === "string" ? session.payment_link : session.payment_link?.id;
+      if (sessionLinkId !== paymentLinkId || session.metadata?.tenantId !== tenant.id ||
+          session.metadata?.clientId !== client.id ||
+          session.metadata?.registrationAttemptKey !== attemptKey) {
+        throw new Error("A Checkout Session has mismatched practice, client, link or attempt details.");
+      }
+      if (session.status === "open") throw new Error("A Checkout Session is still open.");
+      const intentId = typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id;
+      if (session.payment_status === "paid" && !intentId) throw new Error("A paid Checkout Session has no verifiable payment intent.");
+      if (session.status === "complete" && (!client.agreedRatePence ||
+          session.amount_total !== client.agreedRatePence || session.currency !== "gbp")) {
+        throw new Error("A completed Checkout Session does not match the agreed amount and currency.");
+      }
+      if (intentId) await inspectIntent(intentId, attemptKey, session.amount_total ?? undefined);
+      if (session.status === "complete" && !intentId) throw new Error("A completed Checkout Session has an uncertain payment outcome.");
+    }
+  }
+
+  for (const attemptKey of Array.from(knownAttempts)) {
+    if (!seenAttempts.has(attemptKey)) throw new Error("A recorded payment attempt has no matching, verifiable Payment Link or intent.");
+  }
+
+  for (const charge of recordedCharges) {
+    if (charge.status === "succeeded" && !charge.stripePaymentIntentId)
+      throw new Error("A successful payment record has no Stripe intent to verify.");
+    if (charge.stripePaymentIntentId) await inspectIntent(charge.stripePaymentIntentId);
+    if (charge.status === "pending") throw new Error("A payment is already recorded as pending.");
+  }
+  return {
+    paid: Array.from(paid.values()), blocked: null, inspectedLinks, inspectedSessionIds,
+    inspectedPaymentIntentIds: Array.from(seenIntents),
+  };
+}
+
+/** An explicit staff resolution for conflicting/missing immutable payment identities.
+ * Provider checks run only with the owning practice's Stripe key. References on
+ * the hold and client are deliberately never rewritten or discarded. */
+export async function resolveReservationPaymentConflict(input: {
+  reservationId: string;
+  tenantId: string;
+  userId: string;
+  decision: ReservationResolutionDecision;
+  additionalPaymentLinkIds: string[];
+}) {
+  if (!isCyaPsychologyTenant(input.tenantId)) throw new ReservationError(404, "Reservation not found");
+  const outcome: {
+    hold: BookingReservation;
+    resolved: boolean;
+    paymentIntentId?: string;
+    tenant?: Tenant;
+  } = await db.transaction(async tx => {
+    const [observed] = await tx.select().from(bookingReservations).where(and(
+      eq(bookingReservations.id, input.reservationId), eq(bookingReservations.tenantId, input.tenantId),
+    ));
+    if (!observed) throw new ReservationError(404, "Reservation not found");
+    await reservationPaymentLock(tx, observed.clientId, input.tenantId);
+    const [client] = await tx.select().from(clients).where(and(
+      eq(clients.id, observed.clientId), eq(clients.tenantId, input.tenantId),
+    )).for("update");
+    const [hold] = await tx.select().from(bookingReservations).where(and(
+      eq(bookingReservations.id, input.reservationId), eq(bookingReservations.tenantId, input.tenantId),
+    )).for("update");
+    if (!client || !hold || !["payment_check", "payment_review"].includes(hold.status)) {
+      throw new ReservationError(409, "Only a reservation held for payment review can use this resolution.");
+    }
+    if (hold.latePaymentReviewRequired) {
+      throw new ReservationError(409, "A late-payment alert is attached. Review it separately before resolving this reservation.");
+    }
+    if (client.assignedSlotId !== hold.slotId || client.assignedClinicianId !== hold.clinicianId) {
+      throw new ReservationError(409, "The appointment allocation changed. Keep the reservation held and review it.");
+    }
+    const [tenant] = await tx.select().from(tenants).where(eq(tenants.id, input.tenantId));
+    if (!tenant) throw new ReservationError(404, "Practice not found");
+
+    let scan: ReservationPaymentScan | null = null;
+    let blocked: string | null = null;
+    try {
+      const stripe = stripeForReservation(tenant);
+      scan = await scanReservationPaymentAttempts(stripe, tenant, client, hold, input.additionalPaymentLinkIds, tx);
+      blocked = scan.blocked;
+    } catch {
+      blocked = "Stripe could not verify every payment attempt in this practice's account. The slot remains reserved; do not request another payment.";
+    }
+    const paymentStatus = scan?.paid.length === 1 ? "one_verified_payment" : scan?.paid.length ? "multiple_verified_payments" : "no_verified_payment";
+    if (!blocked && input.decision === "release_unpaid" && scan!.paid.length) {
+      blocked = "Stripe found a completed payment. The hold was not released; confirm the verified payment or review duplicate payments.";
+    } else if (!blocked && input.decision === "confirm_verified_payment" && scan!.paid.length !== 1) {
+      blocked = scan!.paid.length === 0
+        ? "No completed payment was verified. The hold remains reserved."
+        : "More than one completed payment was found. Keep the hold reserved and review the duplicate payments.";
+    }
+    if (client.paymentStatus === "active" && input.decision !== "confirm_verified_payment" && !blocked) {
+      blocked = "The client already has an active payment record. Keep the reservation held for review.";
+    }
+    if (client.paymentStatus === "active" && input.decision === "confirm_verified_payment" &&
+        scan?.paid.length !== 1 && !blocked) {
+      blocked = "The active payment record could not be matched to exactly one verified attempt. Keep the reservation held for review.";
+    }
+    if (blocked) {
+      const reason = blocked;
+      const [updated] = await tx.update(bookingReservations).set({ status: "payment_review", reason, lastCheckedAt: new Date() })
+        .where(eq(bookingReservations.id, hold.id)).returning();
+      await reservationAudit(tx, input.tenantId, client.id, "activity_reservation_payment_conflict_resolution", {
+        reservationId: hold.id, decision: input.decision, result: "blocked", paymentStatus,
+        inspectedPaymentLinks: scan?.inspectedLinks || [],
+        inspectedSessionIds: scan?.inspectedSessionIds || [],
+        inspectedPaymentIntentIds: scan?.inspectedPaymentIntentIds || [],
+        additionalPaymentLinkIds: input.additionalPaymentLinkIds,
+      }, input.userId);
+      return { hold: updated!, resolved: false };
+    }
+
+    if (input.decision === "confirm_verified_payment") {
+      const paid = scan!.paid[0];
+      const [tenantCharge] = await tx.select().from(paymentCharges).where(and(
+        eq(paymentCharges.stripePaymentIntentId, paid.intentId), eq(paymentCharges.tenantId, input.tenantId),
+      )).limit(1);
+      if (tenantCharge && (tenantCharge.clientId !== client.id || tenantCharge.amountPence !== paid.amountPence ||
+          tenantCharge.status !== "succeeded")) {
+        throw new ReservationError(409, "This Stripe payment is already associated with a different record.");
+      }
+      if (!tenantCharge) {
+        await tx.insert(paymentCharges).values({
+          clientId: client.id, tenantId: input.tenantId, amountPence: paid.amountPence,
+          stripePaymentIntentId: paid.intentId, status: "succeeded",
+          notes: "Initial session payment verified during reservation conflict resolution",
+        }).onConflictDoNothing();
+        const [charge] = await tx.select().from(paymentCharges).where(eq(paymentCharges.stripePaymentIntentId, paid.intentId)).limit(1);
+        if (!charge || charge.clientId !== client.id || charge.tenantId !== input.tenantId ||
+            charge.amountPence !== paid.amountPence || charge.status !== "succeeded") {
+          throw new ReservationError(409, "This Stripe payment is already associated with a different record.");
+        }
+      }
+      await tx.update(clients).set({ paymentStatus: "active", updatedAt: new Date() })
+        .where(and(eq(clients.id, client.id), eq(clients.tenantId, input.tenantId)));
+      await tx.update(bookingReservations).set({
+        status: "payment_review", reason: "Payment verified in this practice's Stripe account. Finishing booking confirmation.",
+        lastCheckedAt: new Date(),
+      }).where(eq(bookingReservations.id, hold.id));
+      await reservationAudit(tx, input.tenantId, client.id, "activity_reservation_payment_conflict_resolution", {
+        reservationId: hold.id, decision: input.decision, result: "payment_verified",
+        paymentIntentId: paid.intentId, amountPence: paid.amountPence,
+        inspectedPaymentLinks: scan!.inspectedLinks,
+        inspectedSessionIds: scan!.inspectedSessionIds,
+        inspectedPaymentIntentIds: scan!.inspectedPaymentIntentIds,
+        additionalPaymentLinkIds: input.additionalPaymentLinkIds,
+      }, input.userId);
+      return { hold, resolved: true, paymentIntentId: paid.intentId, tenant };
+    }
+
+    const [slot] = await tx.select().from(timeSlots).where(and(
+      eq(timeSlots.id, hold.slotId), eq(timeSlots.tenantId, input.tenantId),
+    )).for("update");
+    const otherOwners = await tx.select({ id: clients.id }).from(clients).where(and(
+      eq(clients.tenantId, input.tenantId), eq(clients.assignedSlotId, hold.slotId),
+      ne(clients.id, client.id),
+      inArray(clients.status, ["Assigned", "AwaitingConfirmation", "OptionSelected", "RegistrationPending", "Scheduled", "BookingConfirmed"]),
+    )).limit(1);
+    if (!slot || slot.retiredAt || otherOwners.length) {
+      const reason = "The payment attempts are unpaid, but appointment ownership needs staff review; the slot remains reserved.";
+      const [updated] = await tx.update(bookingReservations).set({ status: "payment_review", reason, lastCheckedAt: new Date() })
+        .where(eq(bookingReservations.id, hold.id)).returning();
+      await reservationAudit(tx, input.tenantId, client.id, "activity_reservation_payment_conflict_resolution", {
+        reservationId: hold.id, decision: input.decision, result: "blocked_appointment_ownership",
+        inspectedPaymentLinks: scan!.inspectedLinks,
+        inspectedSessionIds: scan!.inspectedSessionIds,
+        inspectedPaymentIntentIds: scan!.inspectedPaymentIntentIds,
+      }, input.userId);
+      return { hold: updated!, resolved: false };
+    }
+    const endedAt = new Date();
+    await tx.update(timeSlots).set({ isBooked: false }).where(and(eq(timeSlots.id, hold.slotId), isNull(timeSlots.retiredAt)));
+    await tx.update(clinicians).set({ currentLoad: sql`greatest(0, ${clinicians.currentLoad} - 1)` }).where(eq(clinicians.id, hold.clinicianId));
+    await tx.update(clients).set({
+      status: isClientStatus(hold.previousStatus) ? hold.previousStatus : "Forms Completed",
+      assignedSlotId: null, assignedClinicianId: null, assignedSlot: null,
+      registrationTokenRevokedAt: endedAt, stripeCheckoutUrl: null, paymentStatus: "none", updatedAt: endedAt,
+    }).where(and(eq(clients.id, client.id), eq(clients.tenantId, input.tenantId)));
+    if (hold.invitationId) await tx.update(clinicianInvitations).set({ status: "closed" }).where(eq(clinicianInvitations.id, hold.invitationId));
+    const [updated] = await tx.update(bookingReservations).set({
+      status: "cancelled", endedAt, reason: "Released by an administrator after every identified payment attempt was verified unpaid.",
+    }).where(eq(bookingReservations.id, hold.id)).returning();
+    await reservationAudit(tx, input.tenantId, client.id, "activity_reservation_payment_conflict_resolution", {
+      reservationId: hold.id, decision: input.decision, result: "released_unpaid",
+      inspectedPaymentLinks: scan!.inspectedLinks,
+      inspectedSessionIds: scan!.inspectedSessionIds,
+      inspectedPaymentIntentIds: scan!.inspectedPaymentIntentIds,
+      additionalPaymentLinkIds: input.additionalPaymentLinkIds,
+      originalPaymentAttemptKey: hold.paymentAttemptKey, originalPaymentLinkId: hold.paymentLinkId,
+    }, input.userId);
+    return { hold: updated!, resolved: true };
+  });
+  if (outcome.paymentIntentId) {
+    try {
+      await confirmBooking({
+        clientId: outcome.hold.clientId, tenantId: input.tenantId, source: "stripe",
+        idempotencyKey: `reservation-conflict-confirmation-${outcome.hold.id}-${outcome.paymentIntentId}`,
+        reservationPaymentResolution: { reservationId: outcome.hold.id, paymentIntentId: outcome.paymentIntentId },
+      });
+    } catch {
+      return { ...outcome.hold, status: "payment_review" as const,
+        reason: "Payment is verified and recorded. Booking confirmation needs staff review; do not request another payment." };
+    }
+    const confirmed = await latestReservation(outcome.hold.clientId);
+    const [tenant] = await db.select().from(tenants).where(eq(tenants.id, input.tenantId));
+    if (confirmed && tenant) await finishRecoveredReservation(confirmed, tenant);
+    return confirmed;
+  }
+  return outcome.hold;
+}
+
 export async function settleReservation(reservationId: string, tenantId: string, cancel = false, userId?: string) {
   if (!isCyaPsychologyTenant(tenantId)) throw new ReservationError(404, "Reservation not found");
   const [tenant] = await db.select().from(tenants).where(eq(tenants.id, tenantId));

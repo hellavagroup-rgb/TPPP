@@ -1,0 +1,853 @@
+diff --git a/client/src/components/RetireAvailabilityDialog.browser.test.tsx b/client/src/components/RetireAvailabilityDialog.browser.test.tsx
+index 46140c5..45fb43b 100644
+--- a/client/src/components/RetireAvailabilityDialog.browser.test.tsx
++++ b/client/src/components/RetireAvailabilityDialog.browser.test.tsx
+@@ -6,10 +6,16 @@ import { RetireAvailabilityDialog } from "./RetireAvailabilityDialog";
+ import { confirmedSlotRetirementCopy } from "@shared/slotRetirementCopy";
+ 
+ vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
++const auth = vi.hoisted(() => ({ role: "admin" as "admin" | "clinician" | null }));
++vi.mock("@/lib/auth", () => ({ useAuth: () => ({
++  user: auth.role ? { id: "user-a", role: auth.role } : null,
++}) }));
+ const caches: QueryClient[] = [];
+ afterEach(() => { cleanup(); caches.splice(0).forEach(cache => cache.clear()); vi.unstubAllGlobals(); });
+ 
+-function setup({ eligible = true, booked = true, failed = false, checkFails = false, confirmedBooking = false } = {}) {
++function setup({ eligible = true, booked = true, failed = false, checkFails = false, confirmedBooking = false,
++  role = "admin" as "admin" | "clinician" | null, cachedPreview = undefined as any } = {}) {
++  auth.role = role;
+   const writes: { method: string; path: string; body: any }[] = [];
+   const onClose = vi.fn();
+   vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
+@@ -23,6 +29,7 @@ function setup({ eligible = true, booked = true, failed = false, checkFails = fa
+   }));
+   const cache = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+   caches.push(cache);
++  if (cachedPreview) cache.setQueryData(["/api/timeslots/clinician-a/slot-a/writeupp-retirement"], cachedPreview);
+   render(<QueryClientProvider client={cache}><RetireAvailabilityDialog open
+     target={{ clinicianId: "clinician-a", slot: { id: "slot-a", isBooked: booked } as any }} onClose={onClose} /></QueryClientProvider>);
+   return { writes, onClose };
+@@ -80,3 +87,47 @@ it("fails closed when eligibility cannot be checked", async () => {
+   expect((screen.getByRole("button", { name: "Retire slot" }) as HTMLButtonElement).disabled).toBe(true);
+   expect(writes).toEqual([]);
+ });
++
++it("lets a clinician retire an unbooked slot without calling the administrator-only preview", async () => {
++  const { writes, onClose } = setup({ role: "clinician", booked: false, checkFails: true });
++  fireEvent.click(screen.getByRole("button", { name: "Retire slot" }));
++  await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
++  expect(writes).toEqual([{ method: "DELETE", path: "/api/timeslots/clinician-a/slot-a", body: null }]);
++  expect(fetch).toHaveBeenCalledTimes(1);
++  expect(screen.queryByText(/Could not check slot ownership/)).toBeNull();
++});
++
++it("keeps booked slots protected for clinicians, without calling an administrator-only endpoint", () => {
++  const { writes } = setup({ role: "clinician", booked: true });
++  expect(screen.getByText(/Ask a practice administrator/)).toBeTruthy();
++  const button = screen.getByRole("button", { name: "Retire slot" }) as HTMLButtonElement;
++  expect(button.disabled).toBe(true);
++  fireEvent.click(button);
++  expect(writes).toEqual([]);
++  expect(fetch).not.toHaveBeenCalled();
++});
++
++it("does not reuse an administrator's cached WriteUpp approval for a clinician", async () => {
++  const { writes, onClose } = setup({ role: "clinician", booked: false,
++    cachedPreview: { eligible: true, clientId: "client-a", clientDisplayId: "WU1" } });
++  expect(screen.queryByRole("button", { name: "Retire occupied WriteUpp slot" })).toBeNull();
++  fireEvent.click(screen.getByRole("button", { name: "Retire slot" }));
++  await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
++  expect(writes[0].method).toBe("DELETE");
++  expect(fetch).toHaveBeenCalledTimes(1);
++});
++
++it("preserves a server rejection if a seemingly free clinician slot has become occupied", async () => {
++  const { writes, onClose } = setup({ role: "clinician", booked: false, failed: true });
++  fireEvent.click(screen.getByRole("button", { name: "Retire slot" }));
++  await screen.findByText("The slot's client has changed. Refresh and review the slot again.");
++  expect(onClose).not.toHaveBeenCalled();
++  expect(writes).toHaveLength(1);
++  expect(fetch).toHaveBeenCalledTimes(1);
++});
++
++it("does not permit retirement without a signed-in user", () => {
++  setup({ role: null, booked: false });
++  expect((screen.getByRole("button", { name: "Retire slot" }) as HTMLButtonElement).disabled).toBe(true);
++  expect(fetch).not.toHaveBeenCalled();
++});
+diff --git a/client/src/components/RetireAvailabilityDialog.tsx b/client/src/components/RetireAvailabilityDialog.tsx
+index b1ccc10..466bae6 100644
+--- a/client/src/components/RetireAvailabilityDialog.tsx
++++ b/client/src/components/RetireAvailabilityDialog.tsx
+@@ -6,19 +6,25 @@ import { Button } from "@/components/ui/button";
+ import { useToast } from "@/hooks/use-toast";
+ import { apiRequest } from "@/lib/queryClient";
+ import { invalidateOperationalData } from "@/lib/operationalRefresh";
++import { useAuth } from "@/lib/auth";
+ 
+ export function RetireAvailabilityDialog({ open, target, onClose }: {
+   open: boolean; target: { slot: TimeSlot; clinicianId: string } | null; onClose: () => void;
+ }) {
+   const cache = useQueryClient();
+   const { toast } = useToast();
++  const { user } = useAuth();
++  const canPreviewWriteupp = user?.role === "admin";
+   const base = target ? `/api/timeslots/${target.clinicianId}/${target.slot.id}` : "";
+   const check = useQuery<{ eligible: boolean; confirmedBooking?: boolean; clientId?: string; clientDisplayId?: string; reason?: string }>({
+     queryKey: [base + "/writeupp-retirement"],
+     queryFn: async () => (await apiRequest("GET", base + "/writeupp-retirement")).json(),
+-    enabled: open && !!target, staleTime: 0, retry: false,
++    enabled: canPreviewWriteupp && open && !!target, staleTime: 0, retry: false,
+   });
+-  const external = check.data?.eligible === true;
++  // Ordinary clinician retirement uses the existing own-slot DELETE endpoint.
++  // Do not require an admin-only WriteUpp preview, or reuse its cached result.
++  const external = canPreviewWriteupp && check.data?.eligible === true;
++  const confirmedBooking = canPreviewWriteupp && check.data?.confirmedBooking === true;
+   const retirement = useMutation({
+     mutationFn: async () => {
+       if (!target) throw new Error("Select a slot first.");
+@@ -39,7 +45,7 @@ export function RetireAvailabilityDialog({ open, target, onClose }: {
+         : "Removed from portal availability. Historical records were preserved." });
+       onClose();
+     },
+-    onError: () => { check.refetch(); },
++    onError: () => { if (canPreviewWriteupp) check.refetch(); },
+   });
+   return <AlertDialog open={open} onOpenChange={value => { if (!value && !retirement.isPending) onClose(); }}>
+     <AlertDialogContent>
+@@ -48,21 +54,23 @@ export function RetireAvailabilityDialog({ open, target, onClose }: {
+         <AlertDialogDescription>
+           {external
+             ? `${check.data?.clientDisplayId}'s appointment is recorded as arranged in WriteUpp. Remove this slot from portal availability, including future weeks for a recurring slot? The client's appointment links, history, therapy status and payments will stay unchanged. No emails will be sent, and this time will not become available for another client.`
+-            : check.data?.confirmedBooking ? check.data.reason
++             : confirmedBooking ? check.data?.reason
+             : target?.slot.isBooked
+-              ? "This slot is booked. Active client reservations cannot normally be removed. Checking for an eligible appointment already arranged in WriteUpp does not change the client."
++               ? canPreviewWriteupp
++                 ? "This slot is booked. Active client reservations cannot normally be removed. Checking for an eligible appointment already arranged in WriteUpp does not change the client."
++                 : "This slot is booked and cannot be removed here. Ask a practice administrator to review the booking or any appointment arranged in WriteUpp."
+               : "Remove this slot from portal availability, including future weeks for a recurring slot? Historical records will be preserved rather than permanently deleted."}
+         </AlertDialogDescription>
+       </AlertDialogHeader>
+-      {check.isFetching && <p role="status">Checking slot ownership…</p>}
+-      {check.isError && <div role="alert">Could not check slot ownership. <Button variant="link" onClick={() => check.refetch()}>Retry check</Button></div>}
+-      {!check.isFetching && !external && !check.data?.confirmedBooking && target?.slot.isBooked && check.data?.reason &&
++      {canPreviewWriteupp && check.isFetching && <p role="status">Checking slot ownership…</p>}
++      {canPreviewWriteupp && check.isError && <div role="alert">Could not check slot ownership. <Button variant="link" onClick={() => check.refetch()}>Retry check</Button></div>}
++      {canPreviewWriteupp && !check.isFetching && !external && !confirmedBooking && target?.slot.isBooked && check.data?.reason &&
+         <p role="status">{check.data.reason}</p>}
+       {retirement.isError && <p role="alert" className="text-destructive">{retirement.error.message}</p>}
+       <AlertDialogFooter>
+         <AlertDialogCancel disabled={retirement.isPending}>Cancel</AlertDialogCancel>
+-        <AlertDialogAction disabled={check.isFetching || check.isError || retirement.isPending ||
+-           (!external && (!!target?.slot.isBooked || check.data?.confirmedBooking === true))} onClick={event => { event.preventDefault(); retirement.mutate(); }}>
++        <AlertDialogAction disabled={!user || (canPreviewWriteupp && (check.isFetching || check.isError)) || retirement.isPending ||
++            (!external && (!!target?.slot.isBooked || confirmedBooking))} onClick={event => { event.preventDefault(); retirement.mutate(); }}>
+           {retirement.isPending ? "Retiring…" : external ? "Retire occupied WriteUpp slot" : "Retire slot"}
+         </AlertDialogAction>
+       </AlertDialogFooter>
+diff --git a/client/src/lib/slotLocationPermissions.ts b/client/src/lib/slotLocationPermissions.ts
+new file mode 100644
+index 0000000..c0fb3a3
+--- /dev/null
++++ b/client/src/lib/slotLocationPermissions.ts
+@@ -0,0 +1,10 @@
++import type { Clinician, TimeSlot } from "@shared/schema";
++
++export function canEditSlotLocation(
++  user: { id: string; role: string } | null,
++  clinician: Pick<Clinician, "userId">,
++  slot: Pick<TimeSlot, "isBooked" | "retiredAt">,
++): boolean {
++  return !!user && !slot.isBooked && !slot.retiredAt &&
++    (user.role === "admin" || (user.role === "clinician" && clinician.userId === user.id));
++}
+diff --git a/client/src/pages/availability.location.browser.test.tsx b/client/src/pages/availability.location.browser.test.tsx
+new file mode 100644
+index 0000000..9578d9c
+--- /dev/null
++++ b/client/src/pages/availability.location.browser.test.tsx
+@@ -0,0 +1,95 @@
++// @vitest-environment jsdom
++import { afterEach, beforeEach, expect, it, vi } from "vitest";
++import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import Availability from "./availability";
++import { canEditSlotLocation } from "@/lib/slotLocationPermissions";
++
++const h = vi.hoisted(() => ({ role: "clinician", toast: vi.fn() }));
++vi.mock("@/lib/auth", () => ({ useAuth: () => ({ user: { id: "user-a", role: h.role } }) }));
++vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: h.toast }) }));
++vi.mock("@/lib/operationalRefresh", () => ({
++  useOperationalRefresh: () => ({ refresh: vi.fn(), lastUpdated: null }),
++  invalidateOperationalData: (cache: QueryClient) => cache.invalidateQueries({ queryKey: ["/api/clinicians"] }),
++}));
++
++const caches: QueryClient[] = [];
++beforeEach(() => { h.role = "clinician"; h.toast.mockClear(); window.history.replaceState({}, "", "/availability"); });
++afterEach(() => { cleanup(); caches.splice(0).forEach(cache => cache.clear()); vi.unstubAllGlobals(); });
++
++function setup({ role = "clinician", failed = false } = {}) {
++  h.role = role;
++  let locationType = "online";
++  const writes: any[] = [];
++  const fetchMock = vi.fn(async (input: string, init?: RequestInit) => {
++    const path = new URL(String(input), window.location.origin).pathname;
++    if (init?.method === "PATCH") {
++      const body = JSON.parse(String(init.body));
++      writes.push({ path, body });
++      if (!failed) locationType = body.locationType;
++      return new Response(JSON.stringify(failed ? { error: "This slot is linked to a booking or reservation and cannot change format. Refresh availability." } : { locationType }), { status: failed ? 409 : 200 });
++    }
++    const data = path === "/api/clinicians" ? [
++      { id: "own", userId: "user-a", name: "Own Clinician", avatar: "O", isActive: true, availability: [
++        { id: "own-slot", type: "Recurring", day: "Monday", startTime: "09:00", endTime: "10:00", isBooked: false, retiredAt: null, locationType },
++      ] },
++      { id: "colleague", userId: "user-b", name: "Other Clinician", avatar: "C", isActive: true, availability: [
++        { id: "other-slot", type: "Recurring", day: "Monday", startTime: "11:00", endTime: "12:00", isBooked: false, retiredAt: null, locationType: "online" },
++      ] },
++    ] : path === "/api/tenant/features" ? {} : [];
++    return new Response(JSON.stringify(data), { status: 200 });
++  });
++  vi.stubGlobal("fetch", fetchMock);
++  const cache = new QueryClient({ defaultOptions: { queries: {
++    retry: false, queryFn: async ({ queryKey }) => (await fetch(String(queryKey[0]))).json(),
++  }, mutations: { retry: false } } });
++  caches.push(cache);
++  render(<QueryClientProvider client={cache}><Availability /></QueryClientProvider>);
++  return { writes, fetchMock };
++}
++
++it("lets a clinician switch their own free slot in both directions and refreshes the displayed label", async () => {
++  const { writes } = setup();
++  const own = await screen.findByTestId("button-toggle-location-own-slot");
++  expect((own as HTMLButtonElement).disabled).toBe(false);
++  fireEvent.click(own);
++  await waitFor(() => expect(own.textContent).toBe("In-Person"));
++  await waitFor(() => expect((own as HTMLButtonElement).disabled).toBe(false));
++  fireEvent.click(own);
++  await waitFor(() => expect(own.textContent).toBe("Online"));
++  expect(writes).toEqual([
++    { path: "/api/timeslots/own-slot/location-type", body: { locationType: "in_person" } },
++    { path: "/api/timeslots/own-slot/location-type", body: { locationType: "online" } },
++  ]);
++});
++
++it("disables another clinician's format button", async () => {
++  const { writes } = setup();
++  const other = await screen.findByTestId("button-toggle-location-other-slot");
++  expect((other as HTMLButtonElement).disabled).toBe(true);
++  fireEvent.click(other);
++  expect(writes).toEqual([]);
++});
++
++it("preserves administrator access to other clinicians' free slots", async () => {
++  const { writes } = setup({ role: "admin" });
++  fireEvent.click(await screen.findByTestId("button-toggle-location-other-slot"));
++  await waitFor(() => expect(writes).toHaveLength(1));
++  expect(writes[0].path).toBe("/api/timeslots/other-slot/location-type");
++});
++
++it("shows the server's stale-booking rejection without presenting a successful format change", async () => {
++  setup({ failed: true });
++  fireEvent.click(await screen.findByTestId("button-toggle-location-own-slot"));
++  await waitFor(() => expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({
++    title: "Format not changed", description: expect.stringContaining("linked to a booking"), variant: "destructive",
++  })));
++  expect(screen.getByTestId("button-toggle-location-own-slot").textContent).toBe("Online");
++});
++
++it.each(["admin", "clinician"])("disables booked and retired slots for %s and requires authentication", role => {
++  const clinician = { userId: "user-a" };
++  expect(canEditSlotLocation({ id: "user-a", role }, clinician, { isBooked: true, retiredAt: null })).toBe(false);
++  expect(canEditSlotLocation({ id: "user-a", role }, clinician, { isBooked: false, retiredAt: new Date() })).toBe(false);
++  expect(canEditSlotLocation(null, clinician, { isBooked: false, retiredAt: null })).toBe(false);
++});
+diff --git a/client/src/pages/availability.tsx b/client/src/pages/availability.tsx
+index 80ebefa..f511ca6 100644
+--- a/client/src/pages/availability.tsx
++++ b/client/src/pages/availability.tsx
+@@ -30,6 +30,7 @@ import { apiRequest } from "@/lib/queryClient";
+ import type { Clinician, TimeSlot, Client } from "@shared/schema";
+ import { addOneHour, splitIntoHourlySlots, TIME_OPTIONS } from "@/lib/availability-utils";
+ import { useOperationalRefresh, invalidateOperationalData } from "@/lib/operationalRefresh";
++import { canEditSlotLocation } from "@/lib/slotLocationPermissions";
+ 
+ type SlotType = "Recurring" | "Vacation" | "SpecificDate";
+ 
+@@ -89,7 +90,15 @@ export default function Availability() {
+       if (!res.ok) throw new Error("Failed to update");
+     },
+     onSuccess: () => invalidateOperationalData(queryClient),
+-    onError: () => toast({ title: "Error", description: "Failed to update location type", variant: "destructive" }),
++    onError: (error: Error) => {
++      invalidateOperationalData(queryClient);
++      let description = "Failed to update location type.";
++      try {
++        const json = error.message.slice(error.message.indexOf("{"));
++        description = JSON.parse(json).error || description;
++      } catch { /* Keep a safe message for a network failure. */ }
++      toast({ title: "Format not changed", description, variant: "destructive" });
++    },
+   });
+ 
+   const [isAllocating, setIsAllocating] = useState(false);
+@@ -928,18 +937,19 @@ export default function Availability() {
+                                   )}
+                                   {!isAllocating ? (
+                                     <button
++                                      disabled={!canEditSlotLocation(user, clinician, slot) || toggleLocationMutation.isPending}
+                                       onClick={(e) => {
+                                         e.stopPropagation();
+                                         const next = (slot as any).locationType === "in_person" ? "online" : "in_person";
+                                         toggleLocationMutation.mutate({ slotId: slot.id, locationType: next });
+                                       }}
+-                                      className={`inline-block text-[8px] px-1 py-0 rounded-full border mt-0.5 leading-tight cursor-pointer hover:opacity-75 transition-opacity ${
++                                      className={`inline-block text-[8px] px-1 py-0 rounded-full border mt-0.5 leading-tight cursor-pointer hover:opacity-75 transition-opacity disabled:cursor-not-allowed disabled:opacity-60 ${
+                                         (slot as any).locationType === "in_person"
+                                           ? "bg-amber-100 text-amber-700 border-amber-300"
+                                           : "bg-blue-100 text-blue-700 border-blue-300"
+                                       }`}
+                                       data-testid={`button-toggle-location-${slot.id}`}
+-                                      title="Click to toggle Online / In-Person"
++                                      title={canEditSlotLocation(user, clinician, slot) ? "Click to toggle Online / In-Person" : "Only your own unbooked slots can change format (administrators can edit any unbooked slot)."}
+                                     >
+                                       {(slot as any).locationType === "in_person" ? "In-Person" : "Online"}
+                                     </button>
+diff --git a/migrations/0020_flexible_booking.sql b/migrations/0020_flexible_booking.sql
+new file mode 100644
+index 0000000..8117c01
+--- /dev/null
++++ b/migrations/0020_flexible_booking.sql
+@@ -0,0 +1,25 @@
++ALTER TABLE tenants ADD COLUMN IF NOT EXISTS flexible_booking_enabled boolean NOT NULL DEFAULT false;
++ALTER TABLE tenants ADD COLUMN IF NOT EXISTS reservation_duration_hours integer NOT NULL DEFAULT 12;
++CREATE TABLE IF NOT EXISTS clinician_invitations (
++  id varchar PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id varchar NOT NULL REFERENCES tenants(id),
++  client_id varchar NOT NULL REFERENCES clients(id) ON DELETE CASCADE, token text NOT NULL UNIQUE,
++  clinician_ids json NOT NULL, previous_status text NOT NULL DEFAULT 'Forms Completed',
++  status text NOT NULL, created_at timestamp NOT NULL DEFAULT now(), sent_at timestamp,
++  email_attempt_key text NOT NULL DEFAULT gen_random_uuid(), email_attempt_started_at timestamp NOT NULL DEFAULT now(), email_attempt_accepted_at timestamp
++);
++CREATE INDEX IF NOT EXISTS clinician_invitations_client_idx ON clinician_invitations(client_id);
++CREATE TABLE IF NOT EXISTS booking_reservations (
++  id varchar PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id varchar NOT NULL REFERENCES tenants(id),
++  client_id varchar NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
++  invitation_id varchar REFERENCES clinician_invitations(id),
++  clinician_id varchar NOT NULL REFERENCES clinicians(id), slot_id varchar NOT NULL REFERENCES time_slots(id),
++  route text NOT NULL, previous_status text NOT NULL DEFAULT 'Forms Completed',
++  duration_hours integer NOT NULL, deadline timestamp NOT NULL, status text NOT NULL,
++  reason text, clinician_name text NOT NULL, appointment_label text NOT NULL,
++  payment_attempt_key text, payment_link_id text, created_at timestamp NOT NULL DEFAULT now(), ended_at timestamp,
++  last_checked_at timestamp, late_payment_review_required boolean NOT NULL DEFAULT false,
++  follow_up_pending boolean NOT NULL DEFAULT false
++);
++CREATE INDEX IF NOT EXISTS booking_reservations_due_idx ON booking_reservations(status, deadline);
++CREATE UNIQUE INDEX IF NOT EXISTS booking_reservations_active_client_unique ON booking_reservations(client_id)
++  WHERE status IN ('active', 'payment_check', 'payment_review');
+diff --git a/server/authSession.test.ts b/server/authSession.test.ts
+index a90be22..a45d893 100644
+--- a/server/authSession.test.ts
++++ b/server/authSession.test.ts
+@@ -96,7 +96,7 @@ describe("login response handling", () => {
+   }
+ 
+   it("returns 401 for rejected credentials without trying to persist a session", async () => {
+-    const { handleLoginResult } = await import("./routes");
++    const { handleLoginResult } = await import("./loginResponse");
+     const logIn = vi.fn();
+     const res = responseRecorder();
+ 
+@@ -114,7 +114,7 @@ describe("login response handling", () => {
+   });
+ 
+   it("returns 503 when valid credentials cannot be persisted to the session store", async () => {
+-    const { handleLoginResult } = await import("./routes");
++    const { handleLoginResult } = await import("./loginResponse");
+     const logIn = vi.fn((_user, done) => done(new Error("session store unavailable")));
+     const res = responseRecorder();
+     const user = { id: "user-123", role: "admin" } as any;
+@@ -129,7 +129,7 @@ describe("login response handling", () => {
+   });
+ 
+   it("returns the authenticated user after the session is persisted", async () => {
+-    const { handleLoginResult } = await import("./routes");
++    const { handleLoginResult } = await import("./loginResponse");
+     const logIn = vi.fn((_user, done) => done());
+     const res = responseRecorder();
+     const user = { id: "user-123", role: "admin" } as any;
+diff --git a/server/gmailSync.ts b/server/gmailSync.ts
+index 1d78491..bed6d6f 100644
+--- a/server/gmailSync.ts
++++ b/server/gmailSync.ts
+@@ -3,7 +3,7 @@ import { db } from "./db";
+ import { gmailConnections, intakeMessages } from "../shared/schema";
+ import { eq, and } from "drizzle-orm";
+ import { parseIntakeEmailBody } from "./intakeParser";
+-import { log } from "./index";
++import { log } from "./log";
+ 
+ function getOAuthClient(redirectUri?: string) {
+   return new google.auth.OAuth2(
+diff --git a/server/index.ts b/server/index.ts
+index 6a40524..e80b81b 100644
+--- a/server/index.ts
++++ b/server/index.ts
+@@ -66,16 +66,8 @@ app.use(
+ 
+ app.use(express.urlencoded({ extended: false }));
+ 
+-export function log(message: string, source = "express") {
+-  const formattedTime = new Date().toLocaleTimeString("en-US", {
+-    hour: "numeric",
+-    minute: "2-digit",
+-    second: "2-digit",
+-    hour12: true,
+-  });
+-
+-  console.log(`${formattedTime} [${source}] ${message}`);
+-}
++import { log } from "./log";
++export { log } from "./log";
+ 
+ app.use((req, res, next) => {
+   const start = Date.now();
+diff --git a/server/log.ts b/server/log.ts
+new file mode 100644
+index 0000000..f2b8240
+--- /dev/null
++++ b/server/log.ts
+@@ -0,0 +1,7 @@
++/** Kept separate from server startup so service imports cannot boot Express. */
++export function log(message: string, source = "express") {
++  const formattedTime = new Date().toLocaleTimeString("en-US", {
++    hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true,
++  });
++  console.log(`${formattedTime} [${source}] ${message}`);
++}
+diff --git a/server/loginResponse.ts b/server/loginResponse.ts
+new file mode 100644
+index 0000000..fe9fc05
+--- /dev/null
++++ b/server/loginResponse.ts
+@@ -0,0 +1,28 @@
++import type { Request, Response } from "express";
++
++// Separate from route registration so session tests need not import/start every integration.
++export function handleLoginResult(
++  req: Request,
++  res: Response,
++  err: unknown,
++  user: Express.User | false | null,
++  info?: { message?: string },
++): void {
++  if (err) {
++    console.error("Authentication service failed during login:", err);
++    res.status(503).json({ error: "Login service is temporarily unavailable. Please try again." });
++    return;
++  }
++  if (!user) {
++    res.status(401).json({ error: info?.message || "Invalid credentials" });
++    return;
++  }
++  req.logIn(user, (loginError) => {
++    if (loginError) {
++      console.error("Failed to persist authenticated session:", loginError);
++      res.status(503).json({ error: "Login service is temporarily unavailable. Please try again." });
++      return;
++    }
++    res.json({ user });
++  });
++}
+diff --git a/server/registrationJourney.http.test.ts b/server/registrationJourney.http.test.ts
+index 3a8533b..50ce859 100644
+--- a/server/registrationJourney.http.test.ts
++++ b/server/registrationJourney.http.test.ts
+@@ -493,7 +493,13 @@ const h = vi.hoisted(() => {
+ });
+ 
+ vi.mock("./db", () => ({ db: h.db }));
+-vi.mock("./storage", () => ({ storage: h.storage, ClientAllocationUpdateError: class ClientAllocationUpdateError extends Error {} }));
++vi.mock("./storage", () => ({
++  storage: h.storage,
++  ClientAllocationUpdateError: class ClientAllocationUpdateError extends Error {},
++  SlotLocationEditError: class SlotLocationEditError extends Error {
++    constructor(public readonly status: number, message: string) { super(message); }
++  },
++}));
+ vi.mock("./auth", () => {
+   const pass = (req: any, res: any, next: any) => {
+     req.user = { id: "admin-1", name: "Admin", role: req.headers["x-role"] || "admin", tenantId: req.tenant?.id };
+@@ -760,6 +766,46 @@ afterEach(async () => {
+   if (server?.listening) await new Promise<void>((resolve, reject) => server!.close(error => error ? reject(error) : resolve()));
+ });
+ 
++describe("fallback slot format permission HTTP routes", () => {
++  const path = "/api/timeslots/slot-a/location-type";
++  beforeEach(() => { h.storage.updateTimeSlotLocationType.mockReset(); });
++  afterEach(() => { h.storage.updateTimeSlotLocationType.mockReset(); });
++  it.each(["admin", "clinician"])("passes the authenticated %s identity rather than body-supplied ownership", async role => {
++    h.storage.updateTimeSlotLocationType.mockResolvedValueOnce({
++      slot: { ...h.state.slot, locationType: "in_person" }, previousLocationType: "online",
++    });
++    const response = await request(path, {
++      method: "PATCH", headers: { "x-role": role },
++      body: JSON.stringify({ locationType: "in_person", tenantId: "spoofed", userId: "spoofed", role: "admin" }),
++    });
++    expect(response.status).toBe(200);
++    expect(response.body.locationType).toBe("in_person");
++    expect(h.storage.updateTimeSlotLocationType).toHaveBeenCalledWith("slot-a", "tenant-a", "in_person", { id: "admin-1", role });
++    expect(h.state.activities).toEqual(expect.arrayContaining([expect.objectContaining({
++      action: "activity_slot_location_changed", details: expect.objectContaining({ oldLocationType: "online", newLocationType: "in person" }),
++    })]));
++  });
++  it("does not reveal inaccessible slots or record successful changes", async () => {
++    h.storage.updateTimeSlotLocationType.mockResolvedValueOnce(undefined);
++    const response = await request(path, { method: "PATCH", headers: { "x-role": "clinician" }, body: JSON.stringify({ locationType: "online" }) });
++    expect(response.status).toBe(404);
++    expect(h.state.activities).toHaveLength(0);
++  });
++  it("returns the booking conflict without recording a successful edit", async () => {
++    const { SlotLocationEditError } = await import("./storage");
++    h.storage.updateTimeSlotLocationType.mockRejectedValueOnce(new SlotLocationEditError(409, "Booked slots cannot change format."));
++    const response = await request(path, { method: "PATCH", headers: { "x-role": "clinician" }, body: JSON.stringify({ locationType: "online" }) });
++    expect(response.status).toBe(409);
++    expect(response.body.error).toBe("Booked slots cannot change format.");
++    expect(h.state.activities).toHaveLength(0);
++  });
++  it.each([{ locationType: "invalid" }, {}, { locationType: null }])("rejects invalid format bodies: %j", async body => {
++    const response = await request(path, { method: "PATCH", body: JSON.stringify(body) });
++    expect(response.status).toBe(400);
++    expect(h.storage.updateTimeSlotLocationType).not.toHaveBeenCalled();
++  });
++});
++
+ describe("occupied WriteUpp slot retirement HTTP routes", () => {
+   const path = "/api/timeslots/clinician-a/slot-a/writeupp-retirement";
+   const arrange = () => {
+diff --git a/server/routes.ts b/server/routes.ts
+index c566a0d..d9fc98b 100644
+--- a/server/routes.ts
++++ b/server/routes.ts
+@@ -5,7 +5,7 @@ import path from "path";
+ import fs from "fs";
+ import multer from "multer";
+ import ExcelJS from "exceljs";
+-import { ClientAllocationUpdateError, ManualAssignmentError, SlotRetirementConflictError, storage } from "./storage";
++import { ClientAllocationUpdateError, ManualAssignmentError, SlotRetirementConflictError, SlotLocationEditError, storage } from "./storage";
+ import { getAllocationVisibility } from "./allocationVisibility";
+ import { clientCreationConflict } from "./clientCreationError";
+ import { writeuppSlotRetirement, WriteuppSlotRetirementError } from "./writeuppSlotRetirement";
+@@ -84,31 +84,8 @@ import {
+ } from "./paymentSetupRecovery";
+ import { deliverRegistration, RegistrationDeliveryError } from "./registrationDelivery";
+ 
+-export function handleLoginResult(
+-  req: Request,
+-  res: Response,
+-  err: unknown,
+-  user: Express.User | false | null,
+-  info?: { message?: string },
+-): void {
+-  if (err) {
+-    console.error("Authentication service failed during login:", err);
+-    res.status(503).json({ error: "Login service is temporarily unavailable. Please try again." });
+-    return;
+-  }
+-  if (!user) {
+-    res.status(401).json({ error: info?.message || "Invalid credentials" });
+-    return;
+-  }
+-  req.logIn(user, (loginError) => {
+-    if (loginError) {
+-      console.error("Failed to persist authenticated session:", loginError);
+-      res.status(503).json({ error: "Login service is temporarily unavailable. Please try again." });
+-      return;
+-    }
+-    res.json({ user });
+-  });
+-}
++import { handleLoginResult } from "./loginResponse";
++export { handleLoginResult } from "./loginResponse";
+ 
+ function formatActivitySlot(slot: { type?: string | null; day?: string | null; date?: string | null; startTime?: string | null; endTime?: string | null; locationType?: string | null }): string {
+   const day = slot.type === "SpecificDate" ? slot.date : slot.day;
+@@ -1164,28 +1141,31 @@ export async function registerRoutes(
+     }
+   });
+ 
+-  // Toggle location type on a single slot (admin only, tenant-scoped)
+-  app.patch("/api/timeslots/:slotId/location-type", requireAdmin, async (req, res) => {
++  // Clinicians may change only their own free slots; administrators may edit practice availability.
++  app.patch("/api/timeslots/:slotId/location-type", requireAuth, async (req, res) => {
+     try {
+-      const { locationType } = req.body as { locationType: string };
++      const locationType = req.body?.locationType;
+       if (locationType !== "online" && locationType !== "in_person") {
+         return res.status(400).json({ error: "Invalid locationType" });
+       }
+-      const slotBeforeUpdate = await storage.getTimeSlotById(req.params.slotId);
+-      const updated = await storage.updateTimeSlotLocationType(
++      if (!req.tenant?.id || !req.user) return res.status(403).json({ error: "Practice context is required" });
++      const result = await storage.updateTimeSlotLocationType(
+         req.params.slotId,
+         req.tenant!.id,
+         locationType,
++        { id: req.user.id, role: req.user.role },
+       );
+-      if (!updated) return res.status(404).json({ error: "Slot not found or access denied" });
++      if (!result) return res.status(404).json({ error: "Slot not found or access denied" });
++      const { slot: updated, previousLocationType } = result;
+       await recordActivity(req, "activity_slot_location_changed", "timeslot", updated.clinicianId, {
+         clinicianName: await getClinicianActivityName(updated.clinicianId),
+         slotDescription: formatActivitySlot(updated),
+-        oldLocationType: slotBeforeUpdate?.locationType === "in_person" ? "in person" : "online",
++        oldLocationType: previousLocationType === "in_person" ? "in person" : "online",
+         newLocationType: locationType === "in_person" ? "in person" : "online",
+       });
+       res.json(updated);
+     } catch (error) {
++      if (error instanceof SlotLocationEditError) return res.status(error.status).json({ error: error.message });
+       res.status(500).json({ error: "Failed to update slot location type" });
+     }
+   });
+diff --git a/server/slotLocation.integration.test.ts b/server/slotLocation.integration.test.ts
+new file mode 100644
+index 0000000..d7026d5
+--- /dev/null
++++ b/server/slotLocation.integration.test.ts
+@@ -0,0 +1,90 @@
++import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
++import { eq } from "drizzle-orm";
++import * as schema from "@shared/schema";
++
++const isolated = vi.hoisted(() => ({ pool: null as any, admin: null as any, schema: "" }));
++vi.mock("./db", async () => {
++  const { default: pg } = await import("pg");
++  const { drizzle } = await import("drizzle-orm/node-postgres");
++  const tables = await import("@shared/schema");
++  isolated.schema = `fallback_test_${crypto.randomUUID().replaceAll("-", "")}`;
++  isolated.admin = new pg.Pool({ connectionString: process.env.DATABASE_URL });
++  await isolated.admin.query(`CREATE SCHEMA "${isolated.schema}"`);
++  isolated.pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, options: `-c search_path=${isolated.schema}`, max: 4 });
++  for (const name of ["tenants", "users", "clients", "clinicians", "time_slots", "booking_snapshots", "client_clinician_options"]) {
++    await isolated.pool.query(`CREATE TABLE "${name}" (LIKE public."${name}" INCLUDING ALL)`);
++  }
++  return { db: drizzle(isolated.pool, { schema: tables }), pool: isolated.pool };
++});
++
++import { db } from "./db";
++import { storage } from "./storage";
++
++const actor = { id: "clinician-user", role: "clinician" as const };
++const admin = { id: "admin", role: "admin" as const };
++beforeEach(async () => {
++  await isolated.pool.query("TRUNCATE tenants, users, clients, clinicians, time_slots, booking_snapshots, client_clinician_options CASCADE");
++  await db.insert(schema.tenants).values([{ id: "practice", name: "Practice" }, { id: "other", name: "Other" }]);
++  await db.insert(schema.users).values({ id: actor.id, name: "Test Clinician", email: "clinician@example.invalid", password: "test-only", role: "clinician", tenantId: "practice" });
++  await db.insert(schema.clinicians).values([
++    { id: "clinician", userId: actor.id, avatar: "T", tenantId: "practice" },
++    { id: "colleague", avatar: "C", tenantId: "practice" },
++    { id: "other-clinician", avatar: "O", tenantId: "other" },
++  ]);
++  await db.insert(schema.timeSlots).values([
++    { id: "slot", clinicianId: "clinician", type: "Recurring", day: "Monday", startTime: "10:00", endTime: "11:00", tenantId: "practice" },
++    { id: "colleague-slot", clinicianId: "colleague", type: "Recurring", day: "Tuesday", startTime: "10:00", endTime: "11:00", tenantId: "practice" },
++    { id: "other-slot", clinicianId: "other-clinician", type: "Recurring", day: "Monday", startTime: "10:00", endTime: "11:00", tenantId: "other" },
++  ]);
++  await db.insert(schema.clients).values({ id: "client", displayId: "TEST-1", email: "family@example.invalid", status: "Forms Completed", tenantId: "practice" });
++});
++afterAll(async () => {
++  await isolated.pool?.end();
++  if (isolated.schema) await isolated.admin.query(`DROP SCHEMA "${isolated.schema}" CASCADE`);
++  await isolated.admin?.end();
++});
++
++describe("fallback preserves clinician permission fixes without online-booking code", () => {
++  it("allows both format directions for the owner's free slot", async () => {
++    expect(await storage.updateTimeSlotLocationType("slot", "practice", "in_person", actor)).toMatchObject({ previousLocationType: "online", slot: { locationType: "in_person" } });
++    expect(await storage.updateTimeSlotLocationType("slot", "practice", "online", actor)).toMatchObject({ previousLocationType: "in_person", slot: { locationType: "online" } });
++  });
++  it("preserves practice administrator access", async () => {
++    expect(await storage.updateTimeSlotLocationType("colleague-slot", "practice", "in_person", admin)).toMatchObject({ slot: { locationType: "in_person" } });
++  });
++  it("rejects a colleague's slot and cross-practice access", async () => {
++    expect(await storage.updateTimeSlotLocationType("colleague-slot", "practice", "in_person", actor)).toBeUndefined();
++    expect(await storage.updateTimeSlotLocationType("other-slot", "practice", "in_person", admin)).toBeUndefined();
++    expect(await storage.updateTimeSlotLocationType("slot", "other", "in_person", actor)).toBeUndefined();
++  });
++  it("authorises a legacy null-tenant slot through its parent", async () => {
++    await db.update(schema.timeSlots).set({ tenantId: null }).where(eq(schema.timeSlots.id, "slot"));
++    expect(await storage.updateTimeSlotLocationType("slot", "practice", "in_person", actor)).toMatchObject({ slot: { locationType: "in_person" } });
++    expect(await storage.updateTimeSlotLocationType("slot", "other", "online", admin)).toBeUndefined();
++  });
++  it("rejects a foreign per-slot tenant tag even with a matching parent", async () => {
++    await db.update(schema.timeSlots).set({ tenantId: "other" }).where(eq(schema.timeSlots.id, "slot"));
++    expect(await storage.updateTimeSlotLocationType("slot", "practice", "in_person", actor)).toBeUndefined();
++  });
++  it.each([actor, admin])("protects booked and retired slots for $role", async user => {
++    await db.update(schema.timeSlots).set({ isBooked: true }).where(eq(schema.timeSlots.id, "slot"));
++    await expect(storage.updateTimeSlotLocationType("slot", "practice", "in_person", user)).rejects.toMatchObject({ status: 409 });
++    await db.update(schema.timeSlots).set({ isBooked: false, retiredAt: new Date() }).where(eq(schema.timeSlots.id, "slot"));
++    await expect(storage.updateTimeSlotLocationType("slot", "practice", "in_person", user)).rejects.toMatchObject({ status: 409 });
++  });
++  it.each(["OptionSelected", "RegistrationPending", "BookingConfirmed"] as const)("protects a stale isBooked flag when client state is %s", async status => {
++    await db.update(schema.clients).set({ status, assignedClinicianId: "clinician", assignedSlotId: "slot" }).where(eq(schema.clients.id, "client"));
++    await expect(storage.updateTimeSlotLocationType("slot", "practice", "in_person", actor)).rejects.toMatchObject({ status: 409 });
++  });
++  it("protects legacy text-only assignments", async () => {
++    await db.update(schema.clients).set({ status: "Assigned", assignedClinicianId: "clinician", assignedSlot: "Monday 10:00" }).where(eq(schema.clients.id, "client"));
++    await expect(storage.updateTimeSlotLocationType("slot", "practice", "in_person", actor)).rejects.toMatchObject({ status: 409 });
++  });
++  it("preserves own-slot deletion without administrator promotion", async () => {
++    expect(await storage.deleteTimeSlotById("slot", "practice")).toBe(true);
++    expect((await db.select().from(schema.timeSlots).where(eq(schema.timeSlots.id, "slot")))[0].retiredAt).toBeTruthy();
++  });
++  it("rejects invalid formats", async () => {
++    await expect(storage.updateTimeSlotLocationType("slot", "practice", "invalid", actor)).rejects.toMatchObject({ status: 400 });
++  });
++});
+diff --git a/server/storage.ts b/server/storage.ts
+index dff1872..5417f8f 100644
+--- a/server/storage.ts
++++ b/server/storage.ts
+@@ -92,6 +92,15 @@ export class SlotRetirementConflictError extends Error {
+   }
+ }
+ 
++// Independent of the removed online-booking feature, so the permission fix
++// remains usable in the recovery version.
++export class SlotLocationEditError extends Error {
++  constructor(public readonly status: number, message: string) {
++    super(message);
++    this.name = "SlotLocationEditError";
++  }
++}
++
+ export type SlotIntegrityRow = {
+   slotId: string;
+   tenantId: string | null;
+@@ -153,7 +162,7 @@ export interface IStorage {
+   addTimeSlots(clinicianId: string, newSlots: Omit<TimeSlot, 'id' | 'createdAt'>[], tenantId?: string | null): Promise<TimeSlot[]>;
+   deleteTimeSlotById(id: string, tenantId?: string, reason?: string): Promise<boolean>;
+   getAllTimeSlots(): Promise<TimeSlot[]>;
+-  updateTimeSlotLocationType(id: string, tenantId: string, locationType: string): Promise<TimeSlot | undefined>;
++  updateTimeSlotLocationType(id: string, tenantId: string, locationType: string, actor: Pick<User, "id" | "role">): Promise<{ slot: TimeSlot; previousLocationType: string } | undefined>;
+   
+   // ============ CLIENTS ============
+   getAllClients(includeArchived?: boolean, tenantId?: string): Promise<Client[]>;
+@@ -505,16 +514,35 @@ export class DatabaseStorage implements IStorage {
+     return await db.select().from(timeSlots);
+   }
+ 
+-  async updateTimeSlotLocationType(id: string, tenantId: string, locationType: string): Promise<TimeSlot | undefined> {
+-    const [slot] = await db.select().from(timeSlots).where(eq(timeSlots.id, id));
+-    if (!slot) return undefined;
+-    const clinician = await db.select().from(clinicians).where(eq(clinicians.id, slot.clinicianId!)).limit(1);
+-    if (!clinician[0] || clinician[0].tenantId !== tenantId) return undefined;
+-    const [updated] = await db.update(timeSlots)
+-      .set({ locationType })
+-      .where(eq(timeSlots.id, id))
+-      .returning();
+-    return updated;
++  async updateTimeSlotLocationType(id: string, tenantId: string, locationType: string, actor: Pick<User, "id" | "role">): Promise<{ slot: TimeSlot; previousLocationType: string } | undefined> {
++    if (locationType !== "online" && locationType !== "in_person") throw new SlotLocationEditError(400, "Invalid locationType");
++    if (!actor || !["admin", "clinician"].includes(actor.role)) return undefined;
++    return db.transaction(async tx => {
++      const [observed] = await tx.select().from(timeSlots).where(eq(timeSlots.id, id));
++      if (!observed) return undefined;
++      const [clinician] = await tx.select().from(clinicians).where(and(
++        eq(clinicians.id, observed.clinicianId), eq(clinicians.tenantId, tenantId),
++      )).for("update");
++      if (!clinician || (actor.role === "clinician" && clinician.userId !== actor.id)) return undefined;
++      const [slot] = await tx.select().from(timeSlots).where(eq(timeSlots.id, id)).for("update");
++      if (!slot || slot.clinicianId !== clinician.id || (slot.tenantId && slot.tenantId !== tenantId)) return undefined;
++      if (slot.retiredAt) throw new SlotLocationEditError(409, "This slot has been retired. Add new availability instead.");
++      if (slot.isBooked) throw new SlotLocationEditError(409, "Booked slots cannot change format. Review the booking before changing availability.");
++      const owners = await tx.select({ id: clients.id }).from(clients).where(and(
++        inArray(clients.status, [...ACTIVE_ALLOCATION_STATUSES]),
++        or(eq(clients.assignedSlotId, slot.id), and(
++          isNull(clients.assignedSlotId), eq(clients.assignedClinicianId, clinician.id),
++          sql`lower(${clients.assignedSlot}) = lower(${`${slot.day || slot.date} ${slot.startTime}`})`,
++        )),
++      )).limit(1);
++      const snapshots = await tx.select({ id: bookingSnapshots.id }).from(bookingSnapshots)
++        .where(eq(bookingSnapshots.slotId, slot.id)).limit(1);
++      if (owners.length || snapshots.length) throw new SlotLocationEditError(409, "This slot is linked to a booking or reservation and cannot change format. Refresh availability.");
++      const [updated] = await tx.update(timeSlots).set({ locationType })
++        .where(and(eq(timeSlots.id, id), eq(timeSlots.clinicianId, clinician.id), isNull(timeSlots.retiredAt), eq(timeSlots.isBooked, false)))
++        .returning();
++      return updated ? { slot: updated, previousLocationType: slot.locationType } : undefined;
++    });
+   }
+ 
+   // ============ CLIENTS ============
+diff --git a/shared/schema.ts b/shared/schema.ts
+index 86d13b1..24fc907 100644
+--- a/shared/schema.ts
++++ b/shared/schema.ts
+@@ -59,6 +59,8 @@ export const tenants = pgTable("tenants", {
+   writeuppChecklistEnabled: boolean("writeup_checklist_enabled").default(false),
+   completedBookingsEnabled: boolean("completed_bookings_enabled").default(false),
+   oneOffSlotsEnabled: boolean("one_off_slots_enabled").default(false),
++  flexibleBookingEnabled: boolean("flexible_booking_enabled").notNull().default(false),
++  reservationDurationHours: integer("reservation_duration_hours").notNull().default(12),
+   createdAt: timestamp("created_at").defaultNow().notNull(),
+ });
+ 
+@@ -298,6 +300,53 @@ export const selectClientSchema = createSelectSchema(clients);
+ export type InsertClient = z.infer<typeof insertClientSchema>;
+ export type Client = typeof clients.$inferSelect;
+ 
++// New-generation bookings only. Legacy options and assignments never acquire a hold.
++export const clinicianInvitations = pgTable("clinician_invitations", {
++  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
++  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
++  clientId: varchar("client_id").notNull().references(() => clients.id, { onDelete: "cascade" }),
++  token: text("token").notNull().unique(),
++  clinicianIds: json("clinician_ids").$type<string[]>().notNull(),
++  previousStatus: text("previous_status").notNull().default("Forms Completed"),
++  status: text("status", { enum: ["prepared", "sent", "uncertain", "selected", "declined", "closed"] }).notNull(),
++  createdAt: timestamp("created_at").notNull().defaultNow(),
++  sentAt: timestamp("sent_at"),
++  emailAttemptKey: text("email_attempt_key").notNull().default(sql`gen_random_uuid()`),
++  emailAttemptStartedAt: timestamp("email_attempt_started_at").notNull().defaultNow(),
++  emailAttemptAcceptedAt: timestamp("email_attempt_accepted_at"),
++}, table => [index("clinician_invitations_client_idx").on(table.clientId)]);
++
++export const bookingReservations = pgTable("booking_reservations", {
++  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
++  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
++  clientId: varchar("client_id").notNull().references(() => clients.id, { onDelete: "cascade" }),
++  invitationId: varchar("invitation_id").references(() => clinicianInvitations.id),
++  clinicianId: varchar("clinician_id").notNull().references(() => clinicians.id),
++  slotId: varchar("slot_id").notNull().references(() => timeSlots.id),
++  route: text("route", { enum: ["online", "phone"] }).notNull(),
++  previousStatus: text("previous_status").notNull().default("Forms Completed"),
++  durationHours: integer("duration_hours").notNull(),
++  deadline: timestamp("deadline").notNull(),
++  status: text("status", { enum: ["active", "payment_check", "expired", "cancelled", "confirmed", "payment_review"] }).notNull(),
++  reason: text("reason"),
++  clinicianName: text("clinician_name").notNull(),
++  appointmentLabel: text("appointment_label").notNull(),
++  // Historic payment ownership survives the client's next reservation.
++  paymentAttemptKey: text("payment_attempt_key"),
++  paymentLinkId: text("payment_link_id"),
++  createdAt: timestamp("created_at").notNull().defaultNow(),
++  endedAt: timestamp("ended_at"),
++  lastCheckedAt: timestamp("last_checked_at"),
++  latePaymentReviewRequired: boolean("late_payment_review_required").notNull().default(false),
++  followUpPending: boolean("follow_up_pending").notNull().default(false),
++}, table => [
++  index("booking_reservations_due_idx").on(table.status, table.deadline),
++  uniqueIndex("booking_reservations_active_client_unique").on(table.clientId)
++    .where(sql`${table.status} in ('active', 'payment_check', 'payment_review')`),
++]);
++
++export type BookingReservation = typeof bookingReservations.$inferSelect;
++
+ // Immutable history of a confirmed appointment.  Assignment rows are retired
+ // after confirmation, so confirmation views and delivery retries must never
+ // depend on the live allocation relationship.

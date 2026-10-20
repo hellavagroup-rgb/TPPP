@@ -760,6 +760,50 @@ afterEach(async () => {
   if (server?.listening) await new Promise<void>((resolve, reject) => server!.close(error => error ? reject(error) : resolve()));
 });
 
+describe("slot format permission HTTP routes", () => {
+  const path = "/api/timeslots/slot-a/location-type";
+  beforeEach(() => { h.storage.updateTimeSlotLocationType.mockReset(); });
+  afterEach(() => { h.storage.updateTimeSlotLocationType.mockReset(); });
+
+  it.each(["admin", "clinician"])("passes the authenticated %s identity and practice to the guarded update", async role => {
+    h.storage.updateTimeSlotLocationType.mockResolvedValueOnce({
+      slot: { ...h.state.slot, locationType: "in_person" }, previousLocationType: "online",
+    });
+    const response = await request(path, {
+      method: "PATCH", headers: { "x-role": role },
+      body: JSON.stringify({ locationType: "in_person", tenantId: "spoofed", userId: "spoofed", role: "admin" }),
+    });
+    expect(response.status).toBe(200);
+    expect(response.body.locationType).toBe("in_person");
+    expect(h.storage.updateTimeSlotLocationType).toHaveBeenCalledWith("slot-a", "tenant-a", "in_person", { id: "admin-1", role });
+    expect(h.state.activities).toEqual(expect.arrayContaining([expect.objectContaining({
+      action: "activity_slot_location_changed", details: expect.objectContaining({ oldLocationType: "online", newLocationType: "in person" }),
+    })]));
+  });
+
+  it("returns a non-disclosing response for an inaccessible slot without activity", async () => {
+    h.storage.updateTimeSlotLocationType.mockResolvedValueOnce(undefined);
+    const response = await request(path, { method: "PATCH", headers: { "x-role": "clinician" }, body: JSON.stringify({ locationType: "online" }) });
+    expect(response.status).toBe(404);
+    expect(h.state.activities).toHaveLength(0);
+  });
+
+  it("returns the booking-conflict message without recording a successful change", async () => {
+    const { ReservationError } = await import("./reservationLifecycle");
+    h.storage.updateTimeSlotLocationType.mockRejectedValueOnce(new ReservationError(409, "Booked slots cannot change format."));
+    const response = await request(path, { method: "PATCH", headers: { "x-role": "clinician" }, body: JSON.stringify({ locationType: "online" }) });
+    expect(response.status).toBe(409);
+    expect(response.body.error).toBe("Booked slots cannot change format.");
+    expect(h.state.activities).toHaveLength(0);
+  });
+
+  it.each([{ locationType: "invalid" }, {}, { locationType: null }])("rejects an invalid format body before storage: %j", async body => {
+    const response = await request(path, { method: "PATCH", body: JSON.stringify(body) });
+    expect(response.status).toBe(400);
+    expect(h.storage.updateTimeSlotLocationType).not.toHaveBeenCalled();
+  });
+});
+
 describe("occupied WriteUpp slot retirement HTTP routes", () => {
   const path = "/api/timeslots/clinician-a/slot-a/writeupp-retirement";
   const arrange = () => {

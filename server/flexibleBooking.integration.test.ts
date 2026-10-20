@@ -41,6 +41,7 @@ import { db } from "./db";
 import { registerFlexibleBookingRoutes, reserveFlexibleSlot } from "./flexibleBooking";
 import { latestReservation, settleReservation, assertReservationOpen, flagLateReservationPayment } from "./reservationLifecycle";
 import { confirmBooking } from "./bookingConfirmation";
+import { storage } from "./storage";
 
 let server: Server;
 let base: string;
@@ -111,6 +112,70 @@ afterAll(async () => {
   if (isolated.schema) await isolated.admin.query(`DROP SCHEMA "${isolated.schema}" CASCADE`);
   await isolated.admin?.end();
   vi.unstubAllEnvs();
+});
+
+describe("slot format editing with real database ownership and booking guards", () => {
+  const actor = { id: "clinician-user", role: "clinician" as const };
+  const admin = { id: "admin", role: "admin" as const };
+  beforeEach(async () => {
+    await db.insert(schema.users).values({ id: actor.id, name: "Test Clinician", email: "clinician@example.invalid", password: "test-only", role: "clinician", tenantId: CYA });
+    await db.update(schema.clinicians).set({ userId: actor.id }).where(eq(schema.clinicians.id, "clinician"));
+  });
+  it("allows both directions on the clinician's own free slot", async () => {
+    expect(await storage.updateTimeSlotLocationType("slot", CYA, "in_person", actor))
+      .toMatchObject({ previousLocationType: "online", slot: { locationType: "in_person" } });
+    expect(await storage.updateTimeSlotLocationType("slot", CYA, "online", actor))
+      .toMatchObject({ previousLocationType: "in_person", slot: { locationType: "online" } });
+  });
+  it("keeps administrator access to a practice's free slot", async () => {
+    expect(await storage.updateTimeSlotLocationType("slot", CYA, "in_person", admin))
+      .toMatchObject({ slot: { locationType: "in_person" } });
+  });
+  it("rejects another clinician even within the same practice", async () => {
+    await db.insert(schema.clinicians).values({ id: "colleague", avatar: "C", tenantId: CYA });
+    await db.insert(schema.timeSlots).values({ id: "colleague-slot", clinicianId: "colleague", type: "Recurring", day: "Tuesday", startTime: "09:00", endTime: "10:00", tenantId: CYA });
+    expect(await storage.updateTimeSlotLocationType("colleague-slot", CYA, "in_person", actor)).toBeUndefined();
+    expect((await db.select().from(schema.timeSlots).where(eq(schema.timeSlots.id, "colleague-slot")))[0].locationType).toBe("online");
+  });
+  it.each(["admin", "clinician"] as const)("rejects a cross-practice slot for %s", async role => {
+    expect(await storage.updateTimeSlotLocationType("other-slot", CYA, "in_person", { id: role === "admin" ? "admin" : actor.id, role })).toBeUndefined();
+  });
+  it("uses the scoped parent for a legacy slot without a tenant tag", async () => {
+    await db.update(schema.timeSlots).set({ tenantId: null }).where(eq(schema.timeSlots.id, "slot"));
+    expect(await storage.updateTimeSlotLocationType("slot", CYA, "in_person", actor)).toMatchObject({ slot: { locationType: "in_person" } });
+    expect(await storage.updateTimeSlotLocationType("slot", OTHER, "online", admin)).toBeUndefined();
+  });
+  it("rejects an inconsistent non-null slot tenant tag", async () => {
+    await db.update(schema.timeSlots).set({ tenantId: OTHER }).where(eq(schema.timeSlots.id, "slot"));
+    expect(await storage.updateTimeSlotLocationType("slot", CYA, "in_person", actor)).toBeUndefined();
+  });
+  it.each(["admin", "clinician"] as const)("protects booked and retired slots from %s edits", async role => {
+    const user = { id: role === "admin" ? "admin" : actor.id, role };
+    await db.update(schema.timeSlots).set({ isBooked: true }).where(eq(schema.timeSlots.id, "slot"));
+    await expect(storage.updateTimeSlotLocationType("slot", CYA, "in_person", user)).rejects.toMatchObject({ status: 409 });
+    await db.update(schema.timeSlots).set({ isBooked: false, retiredAt: new Date() }).where(eq(schema.timeSlots.id, "slot"));
+    await expect(storage.updateTimeSlotLocationType("slot", CYA, "in_person", user)).rejects.toMatchObject({ status: 409 });
+  });
+  it.each(["OptionSelected", "RegistrationPending", "BookingConfirmed"] as const)("protects a %s assignment even if isBooked is stale", async status => {
+    await db.update(schema.clients).set({ status, assignedClinicianId: "clinician", assignedSlotId: "slot" }).where(eq(schema.clients.id, "client"));
+    await expect(storage.updateTimeSlotLocationType("slot", CYA, "in_person", actor)).rejects.toMatchObject({ status: 409 });
+  });
+  it("protects a legacy text-only assignment even if isBooked is stale", async () => {
+    await db.update(schema.clients).set({ status: "Assigned", assignedClinicianId: "clinician", assignedSlot: "Monday 10:00" }).where(eq(schema.clients.id, "client"));
+    await expect(storage.updateTimeSlotLocationType("slot", CYA, "in_person", actor)).rejects.toMatchObject({ status: 409 });
+  });
+  it("does not change a held slot's format when a reservation competes with editing", async () => {
+    const [held] = await Promise.allSettled([reserve(), storage.updateTimeSlotLocationType("slot", CYA, "in_person", actor)]);
+    expect(held.status).toBe("fulfilled");
+    const reservation = (await latestReservation("client"))!;
+    const [slot] = await db.select().from(schema.timeSlots).where(eq(schema.timeSlots.id, "slot"));
+    expect(reservation.appointmentLabel).toContain(slot.locationType === "in_person" ? "in person" : "online");
+    await expect(storage.updateTimeSlotLocationType("slot", CYA, "online", actor)).rejects.toMatchObject({ status: 409 });
+  });
+  it("rejects invalid format values without changing the slot", async () => {
+    await expect(storage.updateTimeSlotLocationType("slot", CYA, "invalid", actor)).rejects.toMatchObject({ status: 400 });
+    expect((await db.select().from(schema.timeSlots).where(eq(schema.timeSlots.id, "slot")))[0].locationType).toBe("online");
+  });
 });
 
 describe("flexible booking with actual PostgreSQL ownership", () => {

@@ -155,7 +155,7 @@ export interface IStorage {
   addTimeSlots(clinicianId: string, newSlots: Omit<TimeSlot, 'id' | 'createdAt'>[], tenantId?: string | null): Promise<TimeSlot[]>;
   deleteTimeSlotById(id: string, tenantId?: string, reason?: string): Promise<boolean>;
   getAllTimeSlots(): Promise<TimeSlot[]>;
-  updateTimeSlotLocationType(id: string, tenantId: string, locationType: string): Promise<TimeSlot | undefined>;
+  updateTimeSlotLocationType(id: string, tenantId: string, locationType: string, actor: Pick<User, "id" | "role">): Promise<{ slot: TimeSlot; previousLocationType: string } | undefined>;
   
   // ============ CLIENTS ============
   getAllClients(includeArchived?: boolean, tenantId?: string): Promise<Client[]>;
@@ -507,16 +507,39 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(timeSlots);
   }
 
-  async updateTimeSlotLocationType(id: string, tenantId: string, locationType: string): Promise<TimeSlot | undefined> {
-    const [slot] = await db.select().from(timeSlots).where(eq(timeSlots.id, id));
-    if (!slot) return undefined;
-    const clinician = await db.select().from(clinicians).where(eq(clinicians.id, slot.clinicianId!)).limit(1);
-    if (!clinician[0] || clinician[0].tenantId !== tenantId) return undefined;
-    const [updated] = await db.update(timeSlots)
-      .set({ locationType })
-      .where(eq(timeSlots.id, id))
-      .returning();
-    return updated;
+  async updateTimeSlotLocationType(id: string, tenantId: string, locationType: string, actor: Pick<User, "id" | "role">): Promise<{ slot: TimeSlot; previousLocationType: string } | undefined> {
+    if (locationType !== "online" && locationType !== "in_person") throw new ReservationError(400, "Invalid locationType");
+    if (!actor || !["admin", "clinician"].includes(actor.role)) return undefined;
+    return db.transaction(async tx => {
+      const [observed] = await tx.select().from(timeSlots).where(eq(timeSlots.id, id));
+      if (!observed) return undefined;
+      // Same clinician -> slot lock order as online reservations. Authorise through
+      // the parent, including legacy slots that have no per-slot tenant tag.
+      const [clinician] = await tx.select().from(clinicians).where(and(
+        eq(clinicians.id, observed.clinicianId), eq(clinicians.tenantId, tenantId),
+      )).for("update");
+      if (!clinician || (actor.role === "clinician" && clinician.userId !== actor.id)) return undefined;
+      const [slot] = await tx.select().from(timeSlots).where(eq(timeSlots.id, id)).for("update");
+      if (!slot || slot.clinicianId !== clinician.id || (slot.tenantId && slot.tenantId !== tenantId)) return undefined;
+      if (slot.retiredAt) throw new ReservationError(409, "This slot has been retired. Add new availability instead.");
+      if (slot.isBooked) throw new ReservationError(409, "Booked slots cannot change format. Review the booking before changing availability.");
+      // Do not trust a stale isBooked flag; protect active and legacy assignments,
+      // inconsistent cross-practice references and immutable booking history too.
+      const owners = await tx.select({ id: clients.id }).from(clients).where(and(
+        inArray(clients.status, [...ACTIVE_ALLOCATION_STATUSES]),
+        or(eq(clients.assignedSlotId, slot.id), and(
+          isNull(clients.assignedSlotId), eq(clients.assignedClinicianId, clinician.id),
+          sql`lower(${clients.assignedSlot}) = lower(${`${slot.day || slot.date} ${slot.startTime}`})`,
+        )),
+      )).limit(1);
+      const snapshots = await tx.select({ id: bookingSnapshots.id }).from(bookingSnapshots)
+        .where(eq(bookingSnapshots.slotId, slot.id)).limit(1);
+      if (owners.length || snapshots.length) throw new ReservationError(409, "This slot is linked to a booking or reservation and cannot change format. Refresh availability.");
+      const [updated] = await tx.update(timeSlots).set({ locationType })
+        .where(and(eq(timeSlots.id, id), eq(timeSlots.clinicianId, clinician.id), isNull(timeSlots.retiredAt), eq(timeSlots.isBooked, false)))
+        .returning();
+      return updated ? { slot: updated, previousLocationType: slot.locationType } : undefined;
+    });
   }
 
   // ============ CLIENTS ============

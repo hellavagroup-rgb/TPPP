@@ -1146,28 +1146,31 @@ export async function registerRoutes(
     }
   });
 
-  // Toggle location type on a single slot (admin only, tenant-scoped)
-  app.patch("/api/timeslots/:slotId/location-type", requireAdmin, async (req, res) => {
+  // Admins may edit practice availability; clinicians may edit only their own free slots.
+  app.patch("/api/timeslots/:slotId/location-type", requireAuth, async (req, res) => {
     try {
-      const { locationType } = req.body as { locationType: string };
+      const locationType = req.body?.locationType;
       if (locationType !== "online" && locationType !== "in_person") {
         return res.status(400).json({ error: "Invalid locationType" });
       }
-      const slotBeforeUpdate = await storage.getTimeSlotById(req.params.slotId);
-      const updated = await storage.updateTimeSlotLocationType(
+      if (!req.tenant?.id || !req.user) return res.status(403).json({ error: "Practice context is required" });
+      const result = await storage.updateTimeSlotLocationType(
         req.params.slotId,
         req.tenant!.id,
         locationType,
+        { id: req.user.id, role: req.user.role },
       );
-      if (!updated) return res.status(404).json({ error: "Slot not found or access denied" });
+      if (!result) return res.status(404).json({ error: "Slot not found or access denied" });
+      const { slot: updated, previousLocationType } = result;
       await recordActivity(req, "activity_slot_location_changed", "timeslot", updated.clinicianId, {
         clinicianName: await getClinicianActivityName(updated.clinicianId),
         slotDescription: formatActivitySlot(updated),
-        oldLocationType: slotBeforeUpdate?.locationType === "in_person" ? "in person" : "online",
+        oldLocationType: previousLocationType === "in_person" ? "in person" : "online",
         newLocationType: locationType === "in_person" ? "in person" : "online",
       });
       res.json(updated);
     } catch (error) {
+      if (error instanceof ReservationError) return res.status(error.status).json({ error: error.message });
       res.status(500).json({ error: "Failed to update slot location type" });
     }
   });

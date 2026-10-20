@@ -30,6 +30,7 @@ import { apiRequest } from "@/lib/queryClient";
 import type { Clinician, TimeSlot, Client } from "@shared/schema";
 import { addOneHour, splitIntoHourlySlots, TIME_OPTIONS } from "@/lib/availability-utils";
 import { useOperationalRefresh, invalidateOperationalData } from "@/lib/operationalRefresh";
+import { canEditSlotLocation } from "@/lib/slotLocationPermissions";
 
 type SlotType = "Recurring" | "Vacation" | "SpecificDate";
 
@@ -89,7 +90,15 @@ export default function Availability() {
       if (!res.ok) throw new Error("Failed to update");
     },
     onSuccess: () => invalidateOperationalData(queryClient),
-    onError: () => toast({ title: "Error", description: "Failed to update location type", variant: "destructive" }),
+    onError: (error: Error) => {
+      invalidateOperationalData(queryClient);
+      let description = "Failed to update location type.";
+      try {
+        const json = error.message.slice(error.message.indexOf("{"));
+        description = JSON.parse(json).error || description;
+      } catch { /* Keep a safe message for a network failure. */ }
+      toast({ title: "Format not changed", description, variant: "destructive" });
+    },
   });
 
   const [isAllocating, setIsAllocating] = useState(false);
@@ -928,18 +937,19 @@ export default function Availability() {
                                   )}
                                   {!isAllocating ? (
                                     <button
+                                      disabled={!canEditSlotLocation(user, clinician, slot) || toggleLocationMutation.isPending}
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         const next = (slot as any).locationType === "in_person" ? "online" : "in_person";
                                         toggleLocationMutation.mutate({ slotId: slot.id, locationType: next });
                                       }}
-                                      className={`inline-block text-[8px] px-1 py-0 rounded-full border mt-0.5 leading-tight cursor-pointer hover:opacity-75 transition-opacity ${
+                                      className={`inline-block text-[8px] px-1 py-0 rounded-full border mt-0.5 leading-tight cursor-pointer hover:opacity-75 transition-opacity disabled:cursor-not-allowed disabled:opacity-60 ${
                                         (slot as any).locationType === "in_person"
                                           ? "bg-amber-100 text-amber-700 border-amber-300"
                                           : "bg-blue-100 text-blue-700 border-blue-300"
                                       }`}
                                       data-testid={`button-toggle-location-${slot.id}`}
-                                      title="Click to toggle Online / In-Person"
+                                      title={canEditSlotLocation(user, clinician, slot) ? "Click to toggle Online / In-Person" : "Only your own unbooked slots can change format (administrators can edit any unbooked slot)."}
                                     >
                                       {(slot as any).locationType === "in_person" ? "In-Person" : "Online"}
                                     </button>

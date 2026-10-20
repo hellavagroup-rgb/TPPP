@@ -43,4 +43,4 @@
 - [Modal viewport access](modal-viewport-access.md) — long staff forms need internal scrolling; modal page-scroll locks otherwise leave action buttons unreachable.
 - [Reservation duration policy](reservation-duration-policy.md) — Tenant 2 requires admin-configurable holds; setting edits must preserve existing clients' deadlines.
 - [Server entrypoint imports](server-entrypoint-imports.md) — reusable helpers must not import app startup; cold imports can boot Express and cause initialisation races.
-- [Clinician availability permissions](clinician-availability-permissions.md) — ordinary own-slot deletion must not depend on an administrator-only WriteUpp preview.
+- [Clinician availability permissions](clinician-availability-permissions.md) — clinicians may edit/delete their own free slots; booked slots stay protected and occupied WriteUpp retirement is admin-only.

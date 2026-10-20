@@ -7,12 +7,15 @@ Replit timeline checkpoint. The current application still contains the online
 booking feature and both clinician permission fixes.
 
 - Recovery branch: `fallback/pre-online-booking-with-permission-fixes`
-- Pinned recovery tag: `recovery/pre-online-booking-with-permission-fixes`
-- Recovery commit: `b3a6629ae7bb80986736719fd1c77d8ef3d5c13d`
+- Pinned recovery tag: `recovery/pre-online-booking-visible-slot-controls`
+- Recovery commit: `1f6092b3ddc1a3bdaf8051fb56f0168b7d9ac57c`
 - Baseline before the booking feature: `137a403`
 - Current application source preserved during preparation: `52a8dff`
 - Portable source patch: `recovery/pre-online-booking.patch`
 - Preparation date: 2026-10-20
+- Visibility refresh: 2026-10-20, with permanently visible, labelled retirement
+  controls on clinicians' own free slots; other clinicians' and booked/retired
+  slots remain protected. Current source for this UI refresh: `6bd6d73`.
 
 The recovery version removes the new clinician invitation/online booking,
 flexible reservation, and reservation-sweeper runtime code. It restores the
@@ -38,7 +41,9 @@ the saved recovery version from its baseline.
 
 ## Verification
 
-- All 924 tests in the recovery version passed across 66 files.
+- At initial preparation, all 924 recovery tests passed across 66 files.
+- After the visibility refresh, all 37 focused calendar, retirement-dialog and
+  database ownership tests passed; the production build passed again.
 - Production client and server build succeeded.
 - Database-backed permission/ownership tests used temporary isolated schemas,
   not practice records.

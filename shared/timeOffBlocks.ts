@@ -1,3 +1,5 @@
+import { practiceToday } from "./slotEligibility";
+
 const HOUR_TIME = /^(?:0[7-9]|1\d|20):00$/;
 const END_TIME = /^(?:0[8-9]|1\d|20|21):00$/;
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -39,7 +41,7 @@ export function timeRangesOverlap(
 
 function weekStartDay(value: string): number {
   const date = new Date(`${value}T00:00:00.000Z`);
-  return Math.floor(date.getTime() / 86_400_000) - date.getUTCDay() + 1;
+  return Math.floor(date.getTime() / 86_400_000) - ((date.getUTCDay() + 6) % 7);
 }
 
 export function slotOccursOnDate(slot: DatedAvailabilitySlot, date: string): boolean {
@@ -73,4 +75,19 @@ export function isSlotCoveredByTimeOffBlocks(
   occurrenceDate?: string,
 ): boolean {
   return blocks.some(block => timeOffBlockOverlapsSlot(block, slot, occurrenceDate));
+}
+
+/** Calendar cells are date-specific; a new recurring booking reserves every future occurrence. */
+export function isSlotBlockedForBooking(
+  slot: DatedAvailabilitySlot,
+  blocks: readonly TimeOffBlockWindow[],
+  occurrenceDate?: string,
+  today = practiceToday(),
+): boolean {
+  if (slot.type !== "Recurring") return isSlotCoveredByTimeOffBlocks(slot, blocks, occurrenceDate);
+  return blocks.some(block =>
+    (block.date >= today || block.date === occurrenceDate)
+    && slotOccursOnDate(slot, block.date)
+    && timeRangesOverlap(block, slot),
+  );
 }

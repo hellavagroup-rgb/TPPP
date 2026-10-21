@@ -578,12 +578,30 @@ export class DatabaseStorage implements IStorage {
           ))
         : [];
       const snapshots = await tx.select({
+        type: bookingSnapshots.slotType,
+        date: bookingSnapshots.date,
+        day: bookingSnapshots.day,
         startTime: bookingSnapshots.startTime,
         endTime: bookingSnapshots.endTime,
-      }).from(bookingSnapshots).where(and(
+        startDate: timeSlots.startDate,
+        endDate: timeSlots.endDate,
+        frequency: timeSlots.frequency,
+      }).from(bookingSnapshots).innerJoin(clients, and(
+        eq(clients.id, bookingSnapshots.clientId),
+        eq(clients.tenantId, input.tenantId),
+        eq(clients.isArchived, false),
+        isNull(clients.completedAt),
+        inArray(clients.status, [...ACTIVE_ALLOCATION_STATUSES]),
+      )).leftJoin(timeSlots, and(
+        eq(timeSlots.id, bookingSnapshots.slotId),
+        eq(timeSlots.clinicianId, input.clinicianId),
+      )).where(and(
         eq(bookingSnapshots.tenantId, input.tenantId),
         eq(bookingSnapshots.clinicianId, input.clinicianId),
-        eq(bookingSnapshots.date, input.date),
+        or(
+          eq(bookingSnapshots.date, input.date),
+          and(isNull(bookingSnapshots.date), eq(bookingSnapshots.slotType, "Recurring")),
+        ),
       ));
 
       const occupied = relevantSlots.some(slot =>
@@ -593,7 +611,7 @@ export class DatabaseStorage implements IStorage {
           owner.assignedSlotId === slot.id
           || (!owner.assignedSlotId && owner.assignedSlot?.toLowerCase() === `${slot.day || slot.date} ${slot.startTime}`.toLowerCase()),
         ),
-      ) || snapshots.some(snapshot => timeRangesOverlap(snapshot, input));
+      ) || snapshots.some(snapshot => slotOccursOnDate(snapshot, input.date) && timeRangesOverlap(snapshot, input));
       if (occupied) throw new AvailabilityTimeOffConflictError();
 
       const [block] = await tx.insert(availabilityTimeOffBlocks).values(input).returning();

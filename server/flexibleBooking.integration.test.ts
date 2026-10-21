@@ -180,6 +180,129 @@ describe("slot format editing with real database ownership and booking guards", 
   });
 });
 
+describe("hourly time-off blocks with real PostgreSQL transactions", () => {
+  const blockInput = {
+    tenantId: CYA, clinicianId: "clinician", date: "2099-01-05",
+    startTime: "10:00", endTime: "11:00", createdByUserId: "admin",
+  };
+
+  it("creates and removes date-specific hours without changing recurring availability", async () => {
+    const before = await db.select().from(schema.timeSlots).where(eq(schema.timeSlots.id, "slot"));
+    const block = await storage.createAvailabilityTimeOffBlock({ ...blockInput, endTime: "12:00" });
+    expect(await storage.getAvailabilityTimeOffBlocks(OTHER)).toEqual([]);
+    expect(await storage.deleteAvailabilityTimeOffBlock(block.id, OTHER)).toBe(false);
+    expect(await storage.getAvailabilityTimeOffBlocks(CYA)).toHaveLength(1);
+    expect(await storage.deleteAvailabilityTimeOffBlock(block.id, CYA)).toBe(true);
+    expect(await storage.getAvailabilityTimeOffBlocks(CYA)).toEqual([]);
+    expect(await db.select().from(schema.timeSlots).where(eq(schema.timeSlots.id, "slot"))).toEqual(before);
+  });
+
+  it("rejects another practice's clinician and invalid whole-hour windows", async () => {
+    await expect(storage.createAvailabilityTimeOffBlock({ ...blockInput, clinicianId: "other-clinician" }))
+      .rejects.toMatchObject({ status: 404 });
+    await expect(storage.createAvailabilityTimeOffBlock({ ...blockInput, startTime: "10:30" }))
+      .rejects.toMatchObject({ status: 400 });
+    expect(await storage.getAvailabilityTimeOffBlocks(CYA)).toEqual([]);
+  });
+
+  it("serializes duplicate blocks but allows adjacent hours", async () => {
+    const results = await Promise.allSettled([
+      storage.createAvailabilityTimeOffBlock(blockInput),
+      storage.createAvailabilityTimeOffBlock(blockInput),
+    ]);
+    expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+    await storage.createAvailabilityTimeOffBlock({ ...blockInput, startTime: "11:00", endTime: "12:00" });
+    expect(await storage.getAvailabilityTimeOffBlocks(CYA)).toHaveLength(2);
+  });
+
+  it("rejects recurring assignment even when another week is selected, but allows a separate one-off date", async () => {
+    await storage.createAvailabilityTimeOffBlock(blockInput);
+    await expect(storage.assignClinicianToClient("client", "clinician", "slot", CYA, "manual", undefined, blockInput.date))
+      .rejects.toMatchObject({ reason: "slot_unavailable" });
+    expect((await client()).assignedSlotId).toBeNull();
+    expect((await storage.getTimeSlotById("slot"))?.isBooked).toBe(false);
+    await expect(storage.assignClinicianToClient("client", "clinician", "slot", CYA, "manual", undefined, "2099-01-12"))
+      .rejects.toMatchObject({ reason: "slot_unavailable" });
+    await db.insert(schema.timeSlots).values({
+      id: "unblocked-dated-slot", clinicianId: "clinician", type: "SpecificDate",
+      date: "2099-01-12", startTime: "10:00", endTime: "11:00", tenantId: CYA,
+    });
+    await expect(storage.assignClinicianToClient("client", "clinician", "unblocked-dated-slot", CYA, "manual"))
+      .resolves.toMatchObject({ assignedSlotId: "unblocked-dated-slot", status: "Assigned" });
+  });
+
+  it("rejects an invalid recurrence date and preserves the previous allocation on failed reassignment", async () => {
+    await storage.assignClinicianToClient("client", "clinician", "slot-2", CYA, "manual", undefined, "2099-01-06");
+    const before = await client();
+    await storage.createAvailabilityTimeOffBlock(blockInput);
+    await expect(storage.reassignClient("client", "clinician", "slot", "Assigned", CYA, undefined, "2099-01-06"))
+      .rejects.toMatchObject({ reason: "invalid_occurrence_date" });
+    await expect(storage.reassignClient("client", "clinician", "slot", "Assigned", CYA, undefined, blockInput.date))
+      .rejects.toMatchObject({ reason: "slot_unavailable" });
+    await expect(storage.reassignClient("client", "clinician", "slot", "Assigned", CYA, undefined, "2099-01-12"))
+      .rejects.toMatchObject({ reason: "slot_unavailable" });
+    expect(await client()).toEqual(before);
+    expect((await storage.getTimeSlotById("slot-2"))?.isBooked).toBe(true);
+    expect((await storage.getTimeSlotById("slot"))?.isBooked).toBe(false);
+  });
+
+  it("rejects time off over a booked recurring allocation without changing the client", async () => {
+    await storage.assignClinicianToClient("client", "clinician", "slot", CYA, "manual", undefined, blockInput.date);
+    const before = await client();
+    await expect(storage.createAvailabilityTimeOffBlock(blockInput)).rejects.toBeInstanceOf(AvailabilityTimeOffConflictError);
+    expect(await client()).toEqual(before);
+    expect((await storage.getTimeSlotById("slot"))?.isBooked).toBe(true);
+  });
+
+  it("protects confirmed recurring snapshots, respecting fortnightly weeks and completed bookings", async () => {
+    await db.update(schema.timeSlots).set({
+      retiredAt: new Date(), startDate: blockInput.date, frequency: "fortnightly",
+    }).where(eq(schema.timeSlots.id, "slot"));
+    await db.update(schema.clients).set({ status: "Scheduled" }).where(eq(schema.clients.id, "client"));
+    await db.insert(schema.bookingSnapshots).values({
+      tenantId: CYA, clientId: "client", clinicianId: "clinician", slotId: "slot",
+      clinicianName: "Test Clinician", slotType: "Recurring", day: "Monday",
+      startTime: "10:00", endTime: "11:00", locationType: "online", idempotencyKey: "test-confirmation",
+    });
+    await expect(storage.createAvailabilityTimeOffBlock({ ...blockInput, date: "2099-01-19" }))
+      .rejects.toBeInstanceOf(AvailabilityTimeOffConflictError);
+    await expect(storage.createAvailabilityTimeOffBlock({ ...blockInput, date: "2099-01-12" })).resolves.toBeDefined();
+    await db.update(schema.clients).set({ completedAt: new Date() }).where(eq(schema.clients.id, "client"));
+    await expect(storage.createAvailabilityTimeOffBlock({ ...blockInput, date: "2099-01-19" })).resolves.toBeDefined();
+  });
+
+  it("rejects a recurring reservation when time off was saved first", async () => {
+    await storage.createAvailabilityTimeOffBlock(blockInput);
+    await expect(reserve()).rejects.toMatchObject({ status: 409 });
+    expect(await latestReservation("client")).toBeUndefined();
+    expect((await client()).assignedSlotId).toBeNull();
+    expect((await storage.getTimeSlotById("slot"))?.isBooked).toBe(false);
+  });
+
+  it("removes blocked recurring choices from an existing invitation and rejects stale selection", async () => {
+    expect((await request("/api/clients/client/clinician-invitation", { clinicianIds: ["clinician"] })).status).toBe(200);
+    const [invitation] = await db.select().from(schema.clinicianInvitations);
+    await storage.createAvailabilityTimeOffBlock(blockInput);
+    const portal = await (await request(`/api/public/booking/${invitation.token}`)).json();
+    expect(portal.clinicians[0].slots.map((slot: any) => slot.id)).toEqual(["slot-2"]);
+    expect((await request(`/api/public/booking/${invitation.token}`, { clinicianId: "clinician", slotId: "slot" })).status).toBe(409);
+    expect(await latestReservation("client")).toBeUndefined();
+    expect((await storage.getTimeSlotById("slot"))?.isBooked).toBe(false);
+  });
+
+  it("never commits both a reservation and an overlapping time-off block under competition", async () => {
+    await db.insert(schema.timeSlots).values({
+      id: "dated-race-slot", clinicianId: "clinician", type: "SpecificDate",
+      date: blockInput.date, startTime: "10:00", endTime: "11:00", tenantId: CYA,
+    });
+    const results = await Promise.allSettled([
+      storage.createAvailabilityTimeOffBlock(blockInput),
+      reserveFlexibleSlot({ clientId: "client", slotId: "dated-race-slot", clinicianId: "clinician", tenantId: CYA, route: "phone" }),
+    ]);
+    expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+  });
+});
+
 describe("flexible booking with actual PostgreSQL ownership", () => {
   it("requires reconciliation for both availability and settings, without abandoning existing holds", async () => {
     expect(flexibleBookingAvailable({ id: CYA, flexibleBookingEnabled: true, paymentReconciliationEnabled: false })).toBe(false);

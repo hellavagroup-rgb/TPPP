@@ -31,7 +31,7 @@ import type { AvailabilityTimeOffBlock, Clinician, TimeSlot, Client } from "@sha
 import { addOneHour, splitIntoHourlySlots, TIME_OPTIONS } from "@/lib/availability-utils";
 import { useOperationalRefresh, invalidateOperationalData } from "@/lib/operationalRefresh";
 import { canEditSlotLocation } from "@/lib/slotLocationPermissions";
-import { isSlotCoveredByTimeOffBlocks } from "@shared/timeOffBlocks";
+import { isSlotBlockedForBooking, isSlotCoveredByTimeOffBlocks } from "@shared/timeOffBlocks";
 
 type SlotType = "Recurring" | "Vacation" | "SpecificDate" | "TimeOffBlock";
 
@@ -109,7 +109,7 @@ export default function Availability() {
   const [allocatingClient, setAllocatingClient] = useState<Client | null>(null);
   const [inPersonWarning, setInPersonWarning] = useState<{ slot: TimeSlot; clinicianId: string; occurrenceDate: string } | null>(null);
 
-  const { data: clinicians = [] } = useQuery<(Clinician & { name: string; availability?: TimeSlot[] })[]>({
+  const { data: clinicians = [] } = useQuery<(Clinician & { name: string; availability?: TimeSlot[]; availabilityTimeOffBlocks?: AvailabilityTimeOffBlock[] })[]>({
     queryKey: ["/api/clinicians"],
   });
 
@@ -139,7 +139,7 @@ export default function Availability() {
       ...clinician,
       avatar: clinician.name?.substring(0, 2).toUpperCase() || "??",
       slots: clinician.availability || [],
-      availabilityTimeOffBlocks: (clinician as any).availabilityTimeOffBlocks || [],
+      availabilityTimeOffBlocks: clinician.availabilityTimeOffBlocks || [],
     })),
   }), [clinicians]);
 
@@ -389,6 +389,7 @@ export default function Availability() {
 
     return results
       .filter(({ slot }) => !isSlotCoveredByTimeOffBlocks(slot, clinician.availabilityTimeOffBlocks || [], dateStr))
+      .filter(({ slot }) => !isAllocating || !isSlotBlockedForBooking(slot, clinician.availabilityTimeOffBlocks || [], dateStr))
       .sort((a, b) => (a.slot.startTime ?? "").localeCompare(b.slot.startTime ?? ""));
   };
 

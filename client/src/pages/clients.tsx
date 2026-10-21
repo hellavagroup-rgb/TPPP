@@ -16,7 +16,7 @@ import { classifyBookingProgress, getWriteUppArrangedIds, isStaffConfirmed } fro
 import { mergePaymentInspection, paymentInspectionOutcome, type PaymentInspectionResult } from "@/lib/paymentInspectionState";
 import { bookingCompletionBlockerCode, bookingCompletionBlockerCopy } from "@shared/bookingCompletion";
 import { practiceToday, slotUnavailableReason } from "@shared/slotEligibility";
-import { isSlotCoveredByTimeOffBlocks } from "@shared/timeOffBlocks";
+import { isSlotBlockedForBooking } from "@shared/timeOffBlocks";
 import {
   isAwaitingConfirmationStatus,
   isMatchedAllocationStatus,
@@ -973,7 +973,7 @@ export default function Clients() {
     ? clinicians.flatMap(clinician => clinician.availability || []).find(slot => slot.id === editStatusData.slotId)
     : undefined;
   const editStatusSelectedClinician = clinicians.find(clinician => clinician.id === editStatusData.clinicianId);
-  const editStatusTimeOffConflict = !!editStatusSelectedSlot && isSlotCoveredByTimeOffBlocks(
+  const editStatusTimeOffConflict = !!editStatusSelectedSlot && isSlotBlockedForBooking(
     editStatusSelectedSlot,
     editStatusSelectedClinician?.availabilityTimeOffBlocks || [],
     editStatusSelectedSlot.type === "SpecificDate" ? undefined : editStatusData.occurrenceDate || undefined,
@@ -1699,8 +1699,8 @@ export default function Clients() {
         toast({ title: "Choose the appointment date", description: "Select the date for this recurring slot before assigning it.", variant: "destructive" });
         return;
       }
-      if (selectedSlot && isSlotCoveredByTimeOffBlocks(selectedSlot, targetClinician?.availabilityTimeOffBlocks || [], occurrenceDate)) {
-        toast({ title: "Time off blocks this appointment", description: "Choose another date or slot.", variant: "destructive" });
+      if (selectedSlot && isSlotBlockedForBooking(selectedSlot, targetClinician?.availabilityTimeOffBlocks || [], occurrenceDate)) {
+        toast({ title: "Time off blocks this appointment", description: "Choose another slot or resolve the conflicting time off before booking this recurring appointment.", variant: "destructive" });
         return;
       }
       assignClientMutation.mutate({ 
@@ -3968,7 +3968,7 @@ export default function Clients() {
                           zoomLinkRequired: zoomLinkEmailEnabled && slot.locationType === "online" && !isValidZoomLink(clinician.zoomLink),
                         });
                         const occurrenceDate = slot.type === "SpecificDate" ? undefined : allocationOccurrenceDate || undefined;
-                        const timeOffBlocked = isSlotCoveredByTimeOffBlocks(slot, clinician.availabilityTimeOffBlocks || [], occurrenceDate);
+                        const timeOffBlocked = isSlotBlockedForBooking(slot, clinician.availabilityTimeOffBlocks || [], occurrenceDate);
                         const needsDate = !flexibleBookingEnabled && !multiClinicianAllocationEnabled
                           && hasTimeOffBlockData && slot.type === "Recurring" && !occurrenceDate;
                         return showUnavailableSlots || (!unavailable && !timeOffBlocked && !needsDate);
@@ -3989,11 +3989,11 @@ export default function Clients() {
                           zoomLinkRequired: missingZoomLink,
                         });
                         const occurrenceDate = slot.type === "SpecificDate" ? undefined : allocationOccurrenceDate || undefined;
-                        const timeOffBlocked = isSlotCoveredByTimeOffBlocks(slot, clinician.availabilityTimeOffBlocks || [], occurrenceDate);
+                        const timeOffBlocked = isSlotBlockedForBooking(slot, clinician.availabilityTimeOffBlocks || [], occurrenceDate);
                         const needsDate = !flexibleBookingEnabled && !multiClinicianAllocationEnabled
                           && hasTimeOffBlockData && slot.type === "Recurring" && !occurrenceDate;
                         const unavailableReason = timeOffBlocked
-                          ? "This date is blocked as clinician time off."
+                          ? "This appointment overlaps clinician time off, including future recurring sessions."
                           : needsDate
                             ? "Choose the appointment date before selecting this recurring slot."
                             : baseUnavailableReason;
@@ -4478,7 +4478,7 @@ export default function Clients() {
                             const isPending = isSlotPending(slot);
                             const pendingDate = getSlotPendingDate(slot);
                             const isSelected = editStatusData.slotId === slot.id && editStatusData.clinicianId === clinician.id;
-                            const blockedByTimeOff = isSlotCoveredByTimeOffBlocks(
+                            const blockedByTimeOff = isSlotBlockedForBooking(
                               slot,
                               clinician.availabilityTimeOffBlocks || [],
                               slot.type === "SpecificDate" ? undefined : editStatusData.occurrenceDate || undefined,
@@ -4490,7 +4490,7 @@ export default function Clients() {
                                 variant={isSelected ? "default" : "outline"}
                                 size="sm"
                                 disabled={blockedByTimeOff && !isSelected}
-                                title={blockedByTimeOff ? "This date is blocked as clinician time off." : undefined}
+                                title={blockedByTimeOff ? "This appointment overlaps clinician time off, including future recurring sessions." : undefined}
                                 className={`justify-start h-auto py-2 px-3 text-xs relative ${
                                   blockedByTimeOff ? "opacity-50 cursor-not-allowed" : isPending && !isSelected ? "bg-amber-50 border-amber-300 hover:border-amber-400 hover:bg-amber-100" : ""
                                 }`}
@@ -4540,7 +4540,7 @@ export default function Clients() {
                         data-testid="input-reassign-occurrence-date"
                       />
                       <p className="text-xs text-amber-800">A time-off block applies to this date only, not every week.</p>
-                      {editStatusTimeOffConflict && <p className="text-xs text-destructive" role="alert">Choose a different date or slot because this appointment overlaps time off.</p>}
+                      {editStatusTimeOffConflict && <p className="text-xs text-destructive" role="alert">Choose another slot or resolve the time off that overlaps this appointment or a future recurring session.</p>}
                     </div>
                   )}
 
@@ -4631,7 +4631,7 @@ export default function Clients() {
                       onChange={event => setAllocationOccurrenceDate(event.target.value)}
                       data-testid="input-phone-allocation-occurrence-date"
                     />
-                    <p className="text-xs text-amber-800">Time off affects this date only, not every week of the recurring slot.</p>
+                    <p className="text-xs text-amber-800">Blocks apply only to their dates. An ongoing recurring booking cannot overlap any future blocked occurrence.</p>
                   </div>
                 )}
                 <div className="flex items-center justify-between">
@@ -4682,12 +4682,12 @@ export default function Clients() {
                             zoomLinkRequired: zoomLinkEmailEnabled && slot.locationType === "online" && !isValidZoomLink(clinician.zoomLink),
                           });
                           const occurrenceDate = slot.type === "SpecificDate" ? undefined : allocationOccurrenceDate || undefined;
-                          const blocked = isSlotCoveredByTimeOffBlocks(slot, clinician.availabilityTimeOffBlocks || [], occurrenceDate);
+                          const blocked = isSlotBlockedForBooking(slot, clinician.availabilityTimeOffBlocks || [], occurrenceDate);
                           const needsDate = hasTimeOffBlockData && !flexibleBookingEnabled && slot.type === "Recurring" && !occurrenceDate;
                           return showUnavailableSlots || (!unavailable && !blocked && !needsDate);
                         }).map(slot => {
                           const occurrenceDate = slot.type === "SpecificDate" ? undefined : allocationOccurrenceDate || undefined;
-                          const timeOffBlocked = isSlotCoveredByTimeOffBlocks(slot, clinician.availabilityTimeOffBlocks || [], occurrenceDate);
+                          const timeOffBlocked = isSlotBlockedForBooking(slot, clinician.availabilityTimeOffBlocks || [], occurrenceDate);
                           const needsDate = hasTimeOffBlockData && !flexibleBookingEnabled && slot.type === "Recurring" && !occurrenceDate;
                           const unavailableReason = getSlotUnavailableReason({
                             isBooked: slot.isBooked,
@@ -4695,7 +4695,7 @@ export default function Clients() {
                             hasClinicianCapacity: (clinician.maxNewClients ?? 0) > 0,
                             adminOverride: showAllClinicians,
                             zoomLinkRequired: zoomLinkEmailEnabled && slot.locationType === "online" && !isValidZoomLink(clinician.zoomLink),
-                          }) || (timeOffBlocked ? "This date is blocked as clinician time off." : needsDate ? "Choose the appointment date before selecting this recurring slot." : null);
+                          }) || (timeOffBlocked ? "This appointment overlaps clinician time off, including future recurring sessions." : needsDate ? "Choose the appointment date before selecting this recurring slot." : null);
                           return (
                             <Button
                               key={slot.id}

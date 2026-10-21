@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { availabilityTimeOffBlocks, type AvailabilityTimeOffBlock } from "@shared/schema";
-import { timeOffBlockOverlapsSlot } from "@shared/timeOffBlocks";
+import { isSlotBlockedForBooking } from "@shared/timeOffBlocks";
 
 export async function findTimeOffBlockForSlot(
   tx: any,
@@ -9,11 +9,11 @@ export async function findTimeOffBlockForSlot(
   occurrenceDate?: string,
 ): Promise<AvailabilityTimeOffBlock | undefined> {
   const date = slot.type === "SpecificDate" ? slot.date : occurrenceDate;
-  if (!date) return undefined;
+  if (slot.type !== "Recurring" && !date) return undefined;
   const blocks: AvailabilityTimeOffBlock[] = await tx.select().from(availabilityTimeOffBlocks).where(and(
     eq(availabilityTimeOffBlocks.tenantId, tenantId),
     eq(availabilityTimeOffBlocks.clinicianId, slot.clinicianId),
-    eq(availabilityTimeOffBlocks.date, date),
+    slot.type === "SpecificDate" && date ? eq(availabilityTimeOffBlocks.date, date) : undefined,
   ));
-  return blocks.find(block => timeOffBlockOverlapsSlot(block, slot, occurrenceDate));
+  return blocks.find(block => isSlotBlockedForBooking(slot, [block], occurrenceDate));
 }

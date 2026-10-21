@@ -22,6 +22,7 @@ const h = vi.hoisted(() => {
     submissions: [] as any[],
     deliveries: [] as any[],
     bookingSnapshots: [] as any[],
+    timeOffBlocks: [] as any[],
     reservations: [] as any[],
     slotClaimFails: false,
     slotConflict: false,
@@ -73,6 +74,7 @@ const h = vi.hoisted(() => {
         && state.registrationTemplate.tenantId === state.tenant?.id ? [state.registrationTemplate] : [];
       case "form_submissions": return state.submissions;
       case "booking_snapshots": return state.bookingSnapshots;
+      case "availability_time_off_blocks": return state.timeOffBlocks;
       case "booking_reservations": return state.reservations;
       case "payment_charges": return state.charges;
       case "stripe_webhook_failures": return state.webhookFailures.filter(f =>
@@ -142,6 +144,17 @@ const h = vi.hoisted(() => {
           // Enforce the real SQL ownership predicate for snapshot reads. A foreign
           // row with the same client ID must not satisfy an idempotent confirmation.
           const sql = new PgDialect().sqlToQuery(condition).sql;
+          if (sql.includes('"availability_time_off_blocks"')) {
+            const { params } = new PgDialect().sqlToQuery(condition);
+            return rows.filter(row => Object.entries({
+              id: "id", tenantId: "tenant_id",
+            }).every(([property, column]) => {
+              for (const match of sql.matchAll(new RegExp(`"${column}"\\s*=\\s*\\$(\\d+)`, "g"))) {
+                if (row[property] !== params[Number(match[1]) - 1]) return false;
+              }
+              return true;
+            }));
+          }
           if (sql.includes('"booking_reservations"')) {
             const { params } = new PgDialect().sqlToQuery(condition);
             return rows.filter(row => Object.entries({
@@ -513,7 +526,11 @@ const h = vi.hoisted(() => {
 });
 
 vi.mock("./db", () => ({ db: h.db }));
-vi.mock("./storage", () => ({ storage: h.storage, ClientAllocationUpdateError: class ClientAllocationUpdateError extends Error {} }));
+vi.mock("./storage", () => ({
+  storage: h.storage,
+  ClientAllocationUpdateError: class ClientAllocationUpdateError extends Error {},
+  AvailabilityTimeOffConflictError: class AvailabilityTimeOffConflictError extends Error {},
+}));
 vi.mock("./auth", () => {
   const pass = (req: any, res: any, next: any) => {
     req.user = { id: "admin-1", name: "Admin", role: req.headers["x-role"] || "admin", tenantId: req.tenant?.id };
@@ -734,6 +751,7 @@ function resetState(overrides: { client?: any; tenant?: any } = {}) {
   h.state.submissions = [];
   h.state.deliveries = [];
   h.state.bookingSnapshots = [];
+  h.state.timeOffBlocks = [];
   h.state.reservations = [];
   h.state.slotClaimFails = false;
   h.state.slotConflict = false;
@@ -780,6 +798,97 @@ beforeEach(async () => {
 afterEach(async () => {
   delete process.env.APP_BASE_URL;
   if (server?.listening) await new Promise<void>((resolve, reject) => server!.close(error => error ? reject(error) : resolve()));
+});
+
+describe("hourly time-off permission HTTP routes", () => {
+  const path = "/api/clinicians/clinician-a/time-off-blocks";
+  const window = { date: "2099-01-05", startTime: "10:00", endTime: "12:00" };
+  beforeEach(() => {
+    h.state.tenant.timeOffBlocksEnabled = true;
+    h.storage.createAvailabilityTimeOffBlock.mockReset();
+    h.storage.deleteAvailabilityTimeOffBlock.mockReset();
+    h.storage.getClinicianByUserId.mockReset();
+  });
+  afterEach(() => {
+    h.storage.createAvailabilityTimeOffBlock.mockReset();
+    h.storage.deleteAvailabilityTimeOffBlock.mockReset();
+    h.storage.getClinicianByUserId.mockReset();
+  });
+
+  it.each(["admin", "clinician"])("uses authenticated ownership when %s creates a block", async role => {
+    h.storage.getClinicianByUserId.mockResolvedValue({ id: "clinician-a" });
+    h.storage.createAvailabilityTimeOffBlock.mockResolvedValue({ id: "block-a", ...window });
+    const response = await request(path, { method: "POST", headers: { "x-role": role },
+      body: JSON.stringify({ ...window, tenantId: "spoofed", clinicianId: "spoofed", createdByUserId: "spoofed" }) });
+    expect(response.status).toBe(201);
+    expect(h.storage.createAvailabilityTimeOffBlock).toHaveBeenCalledWith({
+      ...window, tenantId: "tenant-a", clinicianId: "clinician-a", createdByUserId: "admin-1",
+    });
+  });
+
+  it("does not let a clinician create time off for a colleague", async () => {
+    h.storage.getClinicianByUserId.mockResolvedValue({ id: "colleague" });
+    expect((await request(path, { method: "POST", headers: { "x-role": "clinician" }, body: JSON.stringify(window) })).status).toBe(403);
+    expect(h.storage.createAvailabilityTimeOffBlock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the capability off until explicitly enabled for the authenticated practice", async () => {
+    h.state.tenant.timeOffBlocksEnabled = false;
+    expect((await request(path, { method: "POST", body: JSON.stringify(window) })).status).toBe(404);
+    h.state.tenant.timeOffBlocksEnabled = true;
+    expect((await request(path, { method: "POST", headers: { "x-tenant": "foreign" }, body: JSON.stringify(window) })).status).toBe(404);
+    expect(h.storage.createAvailabilityTimeOffBlock).not.toHaveBeenCalled();
+  });
+
+  it.each(["assign", "reassign"])("requires an occurrence date for direct recurring %s while time off is enabled", async action => {
+    h.state.slot.type = "Recurring";
+    h.state.slot.date = null;
+    h.state.slot.day = "Monday";
+    const response = await request(`/api/clients/client-a/${action}`, {
+      method: "POST",
+      body: JSON.stringify({ clinicianId: "clinician-a", slotId: "slot-a", status: "Assigned" }),
+    });
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain("date");
+    expect(h.storage.assignClinicianToClient).not.toHaveBeenCalled();
+    expect(h.storage.reassignClient).not.toHaveBeenCalled();
+  });
+
+  it("rejects public recurring option selection when a future block was saved first", async () => {
+    h.state.slot.type = "Recurring";
+    h.state.slot.date = null;
+    h.state.slot.day = "Monday";
+    h.state.timeOffBlocks = [{
+      id: "future-block", tenantId: "tenant-a", clinicianId: "clinician-a",
+      date: "2099-01-05", startTime: "10:00", endTime: "11:00",
+    }];
+    const portal = await request("/api/public/options/selection-token-a");
+    expect(portal.status).toBe(200);
+    expect(portal.body.options[0].available).toBe(false);
+    const response = await request("/api/public/options/selection-token-a/select", {
+      method: "POST", body: JSON.stringify({ clinicianOptionId: "option-a" }),
+    });
+    expect(response.status).toBe(409);
+    expect(h.state.slot.isBooked).toBe(false);
+    expect(h.state.client.status).toBe("OptionsSent");
+    expect(h.state.options[0].status).toBe("pending");
+    expect(h.state.bookingSnapshots).toEqual([]);
+  });
+
+  it("permits own-block removal, but not colleague or cross-practice removal", async () => {
+    h.state.timeOffBlocks = [{ id: "block-a", tenantId: "tenant-a", clinicianId: "clinician-a", ...window }];
+    h.storage.getClinicianByUserId.mockResolvedValue({ id: "colleague" });
+    const init = { method: "DELETE", headers: { "x-role": "clinician" } };
+    expect((await request("/api/time-off-blocks/block-a", init)).status).toBe(403);
+    h.state.timeOffBlocks[0].tenantId = "foreign";
+    expect((await request("/api/time-off-blocks/block-a", init)).status).toBe(404);
+    expect(h.storage.deleteAvailabilityTimeOffBlock).not.toHaveBeenCalled();
+    h.state.timeOffBlocks[0].tenantId = "tenant-a";
+    h.storage.getClinicianByUserId.mockResolvedValue({ id: "clinician-a" });
+    h.storage.deleteAvailabilityTimeOffBlock.mockResolvedValue(true);
+    expect((await request("/api/time-off-blocks/block-a", init)).status).toBe(200);
+    expect(h.storage.deleteAvailabilityTimeOffBlock).toHaveBeenCalledWith("block-a", "tenant-a");
+  });
 });
 
 describe("slot format permission HTTP routes", () => {

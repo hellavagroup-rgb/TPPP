@@ -223,7 +223,6 @@ export const clients = pgTable("clients", {
   assignedClinicianId: varchar("assigned_clinician_id").references(() => clinicians.id),
   assignedSlotId: varchar("assigned_slot_id").references(() => timeSlots.id),
   assignedSlot: text("assigned_slot"), // Display string for UI
-  assignedOccurrenceDate: text("assigned_occurrence_date"),
   allocationMethod: text("allocation_method", { enum: ["form", "manual"] }), // How client was allocated
   allocationReason: text("allocation_reason"), // Admin's reason for this allocation
   isArchived: boolean("is_archived").default(false).notNull(),

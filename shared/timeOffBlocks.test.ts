@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isSlotCoveredByTimeOffBlocks,
+  isSlotBlockedForBooking,
   isValidTimeOffBlockWindow,
   slotOccursOnDate,
   timeRangesOverlap,
@@ -51,6 +52,28 @@ describe("date-specific time-off blocks", () => {
       type: "SpecificDate",
       date: block.date,
     }, [block])).toBe(true);
+  });
+
+  it("anchors a Sunday start date to the preceding Monday for fortnightly schedules", () => {
+    const slot = {
+      type: "Recurring", day: "Monday", startDate: "2026-10-11", frequency: "fortnightly",
+      startTime: "10:00", endTime: "11:00",
+    };
+    expect(slotOccursOnDate(slot, "2026-10-12")).toBe(false);
+    expect(slotOccursOnDate(slot, "2026-10-19")).toBe(true);
+  });
+
+  it("rejects ongoing bookings with a future blocked occurrence even when another date is selected", () => {
+    const slot = { type: "Recurring", day: "Wednesday", startTime: "10:00", endTime: "11:00" };
+    expect(isSlotBlockedForBooking(slot, [block], undefined, "2026-10-01")).toBe(true);
+    expect(isSlotBlockedForBooking(slot, [block], "2026-10-14", "2026-10-01")).toBe(true);
+    expect(isSlotBlockedForBooking(slot, [block], "2026-10-28", "2026-10-01")).toBe(true);
+    expect(isSlotCoveredByTimeOffBlocks(slot, [block], "2026-10-28")).toBe(false);
+    expect(isSlotBlockedForBooking(slot, [block], undefined, "2026-10-22")).toBe(false);
+    expect(isSlotBlockedForBooking({ ...slot, endDate: "2026-10-14" }, [block], undefined, "2026-10-01")).toBe(false);
+    expect(isSlotBlockedForBooking({ ...slot, startDate: "2026-10-28" }, [block], undefined, "2026-10-01")).toBe(false);
+    expect(isSlotBlockedForBooking({ ...slot, startDate: "2026-10-14", frequency: "fortnightly" }, [block], undefined, "2026-10-01")).toBe(false);
+    expect(isSlotBlockedForBooking({ ...slot, type: "SpecificDate", date: "2026-10-28" }, [block])).toBe(false);
   });
 
   it("uses half-open overlap boundaries so adjacent hours do not conflict", () => {

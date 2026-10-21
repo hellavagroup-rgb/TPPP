@@ -9,7 +9,7 @@ import { tenants, clients, clinicians, timeSlots, availabilityTimeOffBlocks, use
 import { flexibleBookingAvailable, reservationDeadline, validReservationHours, formatReservationDeadline } from "@shared/reservationPolicy";
 import { isCyaPsychologyTenant } from "@shared/practicePolicies";
 import { slotUnavailableReason } from "@shared/slotEligibility";
-import { isSlotCoveredByTimeOffBlocks } from "@shared/timeOffBlocks";
+import { isSlotBlockedForBooking } from "@shared/timeOffBlocks";
 import { findTimeOffBlockForSlot } from "./availabilityTimeOff";
 import { regularSessionConstraints, FIRST_SESSION_TO_AGREE } from "@shared/regularSessionCopy";
 import { isValidZoomLink } from "@shared/bookingZoom";
@@ -97,7 +97,7 @@ async function liveClinicians(tx: any, client: Client, tenant: Tenant, ids: stri
     ));
     const available = slots.filter(slot =>
       slotEligible(slot, clinician, tenant, preference)
-      && !isSlotCoveredByTimeOffBlocks(slot, timeOffBlocks)
+      && !isSlotBlockedForBooking(slot, timeOffBlocks)
       && !owners.some(owner =>
         owner.assignedSlotId === slot.id || (!owner.assignedSlotId && owner.assignedSlot?.toLowerCase() === `${slot.day || slot.date} ${slot.startTime}`.toLowerCase())),
     );
@@ -147,7 +147,7 @@ export async function reserveFlexibleSlot(input: { clientId: string; tenantId: s
     const preference = await formatPreference(tx, client);
     if (!slot || !slotEligible(slot, clinician, tenant, preference)) fail(409, "This slot is no longer eligible or available. Please choose another.");
     if (await findTimeOffBlockForSlot(tx, tenant.id, slot)) {
-      fail(409, "This date-specific appointment is blocked as clinician time off. Please choose another.");
+      fail(409, "This appointment overlaps clinician time off, including a future recurring session. Please choose another.");
     }
     const owners = await tx.select({ id: clients.id }).from(clients).where(and(
       eq(clients.tenantId, tenant.id), ne(clients.id, client.id),

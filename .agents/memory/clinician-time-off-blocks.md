@@ -26,3 +26,9 @@ Time-off edits must validate the replacement while the original block remains in
 **Why:** Deleting and recreating a block would temporarily expose the original hours and lose the block on rejection. Opposite clinician/block lock orders can deadlock concurrent edits and removals.
 
 **How to apply:** Keep updates atomic and preserve block identity and creation evidence. Maintain a consistent clinician-first lock order for time-off mutations.
+
+Present hourly blocks inside **Time Off / Vacation**, not as a separate type. Default **All day** on for the existing date-range holiday workflow; switch it off for a single date and whole-hour range. Keep the optional one-off availability feature separate.
+
+**Why:** The user approved keeping the two familiar availability/time-off choices and combining both lengths of absence within time off.
+
+**How to apply:** Preserve this unified entry point when changing scheduling controls; do not reintroduce a separate hourly-block option.

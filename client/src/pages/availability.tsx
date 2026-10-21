@@ -24,6 +24,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { DatePicker } from "@/components/ui/date-picker";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
@@ -33,7 +34,7 @@ import { useOperationalRefresh, invalidateOperationalData } from "@/lib/operatio
 import { canEditSlotLocation } from "@/lib/slotLocationPermissions";
 import { isSlotBlockedForBooking, isSlotCoveredByTimeOffBlocks, isValidTimeOffBlockWindow } from "@shared/timeOffBlocks";
 
-type SlotType = "Recurring" | "Vacation" | "SpecificDate" | "TimeOffBlock";
+type SlotType = "Recurring" | "Vacation" | "SpecificDate";
 
 interface ClinicianWithSlots extends Clinician {
   name: string;
@@ -72,6 +73,7 @@ export default function Availability() {
   const [timeOffEditError, setTimeOffEditError] = useState<string | null>(null);
 
   const [newSlotType, setNewSlotType] = useState<SlotType>("Recurring");
+  const [isAllDayTimeOff, setIsAllDayTimeOff] = useState(true);
   const [newDate, setNewDate] = useState(format(new Date(), "yyyy-MM-dd"));
   const [endDate, setEndDate] = useState(format(new Date(), "yyyy-MM-dd"));
   const [hasEndDate, setHasEndDate] = useState(false);
@@ -88,6 +90,7 @@ export default function Availability() {
   });
 
   const [newLocationType, setNewLocationType] = useState<"online" | "in_person">("online");
+  const isHourlyTimeOff = newSlotType === "Vacation" && !isAllDayTimeOff && !!tenant?.timeOffBlocksEnabled;
 
   const toggleLocationMutation = useMutation({
     mutationFn: async ({ slotId, locationType }: { slotId: string; locationType: string }) => {
@@ -420,6 +423,7 @@ export default function Availability() {
 
   const resetForm = () => {
     setNewSlotType("Recurring");
+    setIsAllDayTimeOff(true);
     setNewDate(format(new Date(), "yyyy-MM-dd"));
     setEndDate(format(new Date(), "yyyy-MM-dd"));
     setHasEndDate(false);
@@ -435,7 +439,7 @@ export default function Availability() {
     const clinician = allCliniciansData.find(c => c.id === dialogClinicianId);
     if (!clinician) return;
 
-    if (newSlotType === "TimeOffBlock") {
+    if (isHourlyTimeOff) {
       addTimeOffBlockMutation.mutate({
         clinicianId: dialogClinicianId,
         date: newDate,
@@ -747,16 +751,20 @@ export default function Availability() {
 
                 <div className="grid gap-2">
                   <Label>Type</Label>
-                  <Select value={newSlotType} onValueChange={(v) => setNewSlotType(v as SlotType)}>
+                  <Select value={newSlotType} onValueChange={(v) => {
+                    if (v === "Vacation") {
+                      setIsAllDayTimeOff(true);
+                      setNewSlotType("Vacation");
+                    } else {
+                      setNewSlotType(v as SlotType);
+                    }
+                  }}>
                     <SelectTrigger data-testid="select-slot-type">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="Recurring">Availability</SelectItem>
                       <SelectItem value="Vacation">Time Off / Vacation</SelectItem>
-                      {tenant?.timeOffBlocksEnabled && (
-                        <SelectItem value="TimeOffBlock">Block Hours on a Date</SelectItem>
-                      )}
                       {tenant?.oneOffSlotsEnabled && (
                         <SelectItem value="SpecificDate">One-off Slot</SelectItem>
                       )}
@@ -764,7 +772,7 @@ export default function Availability() {
                   </Select>
                 </div>
 
-                {newSlotType !== "Vacation" && newSlotType !== "TimeOffBlock" && (
+                {newSlotType !== "Vacation" && (
                   <div className="grid gap-2">
                     <Label>Location Type</Label>
                     <div className="flex gap-4">
@@ -861,14 +869,35 @@ export default function Availability() {
                   </>
                 )}
 
-                {(newSlotType === "SpecificDate" || newSlotType === "TimeOffBlock") && (
+                {newSlotType === "Vacation" && tenant?.timeOffBlocksEnabled && (
+                  <div className="flex items-center justify-between rounded-md border p-3">
+                    <Label htmlFor="time-off-all-day" className="cursor-pointer">All day</Label>
+                    <Switch
+                      id="time-off-all-day"
+                      checked={isAllDayTimeOff}
+                      onCheckedChange={(checked) => {
+                        if (!checked) {
+                          const wholeHourStart = `${newStartTime.slice(0, 2)}:00`;
+                          const wholeHourEnd = `${newEndTime.slice(0, 2)}:00`;
+                          setNewStartTime(wholeHourStart);
+                          setNewEndTime(wholeHourEnd > wholeHourStart ? wholeHourEnd : addOneHour(wholeHourStart));
+                        }
+                        setIsAllDayTimeOff(checked);
+                      }}
+                      aria-label="All day"
+                      data-testid="switch-time-off-all-day"
+                    />
+                  </div>
+                )}
+
+                {(newSlotType === "SpecificDate" || isHourlyTimeOff) && (
                   <div className="grid gap-2">
-                    <Label>{newSlotType === "TimeOffBlock" ? "Time-Off Date" : "Date"}</Label>
+                    <Label>{isHourlyTimeOff ? "Time-Off Date" : "Date"}</Label>
                     <DatePicker value={newDate} onChange={setNewDate} placeholder="Select date" />
                   </div>
                 )}
 
-                {newSlotType === "Vacation" && (
+                {newSlotType === "Vacation" && !isHourlyTimeOff && (
                   <div className="grid grid-cols-2 gap-4">
                     <div className="grid gap-2">
                       <Label>Start Date</Label>
@@ -881,7 +910,7 @@ export default function Availability() {
                   </div>
                 )}
 
-                {newSlotType !== "Vacation" && (
+                {(newSlotType !== "Vacation" || isHourlyTimeOff) && (
                   <div className="grid grid-cols-2 gap-4">
                     <div className="grid gap-2">
                       <Label>Start Time</Label>
@@ -893,7 +922,7 @@ export default function Availability() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent className="max-h-[200px]">
-                          {TIME_OPTIONS.filter(t => t <= "20:00" && (newSlotType !== "TimeOffBlock" || t.endsWith(":00"))).map(time => (
+                          {TIME_OPTIONS.filter(t => t <= "20:00" && (!isHourlyTimeOff || t.endsWith(":00"))).map(time => (
                             <SelectItem key={`start-${time}`} value={time}>{time}</SelectItem>
                           ))}
                         </SelectContent>
@@ -906,7 +935,7 @@ export default function Availability() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent className="max-h-[200px]">
-                          {TIME_OPTIONS.filter(t => newSlotType !== "TimeOffBlock" || t.endsWith(":00")).map(time => (
+                          {TIME_OPTIONS.filter(t => !isHourlyTimeOff || t.endsWith(":00")).map(time => (
                             <SelectItem key={`end-${time}`} value={time}>{time}</SelectItem>
                           ))}
                         </SelectContent>
@@ -915,7 +944,7 @@ export default function Availability() {
                   </div>
                 )}
 
-                {newSlotType === "TimeOffBlock" ? (
+                {isHourlyTimeOff ? (
                   <div className="text-xs text-muted-foreground bg-amber-50 p-2 rounded">
                     This blocks {newStartTime}–{newEndTime} on {newDate}; your recurring availability stays unchanged on other dates.
                   </div>
@@ -936,7 +965,11 @@ export default function Availability() {
                   disabled={!dialogClinicianId || addSlotsMutation.isPending || addTimeOffBlockMutation.isPending}
                   data-testid="button-save-availability"
                 >
-                  {addSlotsMutation.isPending || addTimeOffBlockMutation.isPending ? "Saving..." : newSlotType === "TimeOffBlock" ? "Block These Hours" : "Save to Schedule"}
+                  {addSlotsMutation.isPending || addTimeOffBlockMutation.isPending
+                    ? "Saving..."
+                    : newSlotType === "Vacation"
+                      ? "Save Time Off"
+                      : "Save to Schedule"}
                 </Button>
               </DialogFooter>
             </DialogContent>

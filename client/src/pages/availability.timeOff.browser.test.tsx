@@ -46,6 +46,7 @@ function setup({ enabled = true, conflict = false, existing = false, beforeWrite
       writes.push({ path, body });
       await beforeWrite();
       if (conflict) return new Response(JSON.stringify({ error: "Resolve the existing appointment before saving." }), { status: 409 });
+      if (path.startsWith("/api/timeslots/")) return new Response(JSON.stringify(body), { status: 201 });
       const colleague = path.endsWith("/colleague-block");
       const block = { id: colleague ? "colleague-block" : "own-block", clinicianId: colleague ? "colleague" : "own", ...body };
       if (colleague) colleagueBlocks = [block];
@@ -75,8 +76,9 @@ function setup({ enabled = true, conflict = false, existing = false, beforeWrite
 async function chooseBlock() {
   await screen.findByText("Own Clinician");
   fireEvent.click(screen.getByTestId("button-add-availability"));
-  await screen.findByRole("option", { name: "Block Hours on a Date" });
-  fireEvent.change(screen.getAllByRole("combobox")[0], { target: { value: "TimeOffBlock" } });
+  await screen.findByRole("option", { name: "Time Off / Vacation" });
+  fireEvent.change(screen.getAllByRole("combobox")[0], { target: { value: "Vacation" } });
+  fireEvent.click(await screen.findByRole("switch", { name: "All day" }));
 }
 
 it("keeps hourly block creation hidden for practices that have not enabled it", async () => {
@@ -84,6 +86,47 @@ it("keeps hourly block creation hidden for practices that have not enabled it", 
   await screen.findByText("Own Clinician");
   fireEvent.click(screen.getByTestId("button-add-availability"));
   expect(screen.queryByRole("option", { name: "Block Hours on a Date" })).toBeNull();
+  fireEvent.change(screen.getAllByRole("combobox")[0], { target: { value: "Vacation" } });
+  expect(screen.queryByRole("switch", { name: "All day" })).toBeNull();
+  expect(screen.getAllByLabelText("Selected calendar date")).toHaveLength(2);
+  expect(screen.getByRole("button", { name: "Save Time Off" })).toBeTruthy();
+});
+
+it("offers only availability and time off, defaulting time off to an all-day date range", async () => {
+  const { writes, date } = setup();
+  await screen.findByText("Own Clinician");
+  fireEvent.click(screen.getByTestId("button-add-availability"));
+  expect(screen.getAllByRole("combobox")[0].querySelectorAll("option")).toHaveLength(2);
+  expect(screen.queryByRole("option", { name: "Block Hours on a Date" })).toBeNull();
+  fireEvent.change(screen.getAllByRole("combobox")[0], { target: { value: "Vacation" } });
+  const allDay = await screen.findByRole("switch", { name: "All day" });
+  expect(allDay.getAttribute("aria-checked")).toBe("true");
+  expect(screen.getAllByRole("combobox")).toHaveLength(1);
+  const dates = screen.getAllByLabelText("Selected calendar date");
+  fireEvent.change(dates[0], { target: { value: date } });
+  fireEvent.change(dates[1], { target: { value: format(addDays(new Date(`${date}T12:00:00`), 1), "yyyy-MM-dd") } });
+  fireEvent.click(screen.getByRole("button", { name: "Save Time Off" }));
+  await waitFor(() => expect(writes).toHaveLength(1));
+  expect(writes[0].path).toBe("/api/timeslots/own");
+  expect(writes[0].body).toEqual([
+    expect.objectContaining({ type: "Vacation", date }),
+    expect.objectContaining({ type: "Vacation", date: format(addDays(new Date(`${date}T12:00:00`), 1), "yyyy-MM-dd") }),
+  ]);
+});
+
+it("returns to all-day time off when switching type or reopening the dialog", async () => {
+  setup();
+  await chooseBlock();
+  expect(screen.getByRole("switch", { name: "All day" }).getAttribute("aria-checked")).toBe("false");
+  expect((screen.getAllByRole("combobox")[0] as HTMLSelectElement).value).toBe("Vacation");
+  fireEvent.change(screen.getAllByRole("combobox")[0], { target: { value: "Recurring" } });
+  fireEvent.change(screen.getAllByRole("combobox")[0], { target: { value: "Vacation" } });
+  expect(screen.getByRole("switch", { name: "All day" }).getAttribute("aria-checked")).toBe("true");
+  fireEvent.click(screen.getByRole("switch", { name: "All day" }));
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  fireEvent.click(screen.getByTestId("button-add-availability"));
+  fireEvent.change(screen.getAllByRole("combobox")[0], { target: { value: "Vacation" } });
+  expect(screen.getByRole("switch", { name: "All day" }).getAttribute("aria-checked")).toBe("true");
 });
 
 it("saves a clinician's multi-hour block through the real page mutation", async () => {
@@ -97,6 +140,21 @@ it("saves a clinician's multi-hour block through the real page mutation", async 
     body: { date, startTime: "09:00", endTime: "11:00" },
   }]));
   await screen.findByTestId("time-off-block-own-block");
+});
+
+it("normalizes earlier availability minute choices when switching to hourly time off", async () => {
+  setup();
+  await screen.findByText("Own Clinician");
+  fireEvent.click(screen.getByTestId("button-add-availability"));
+  const recurringTimes = screen.getAllByRole("combobox");
+  fireEvent.change(recurringTimes[2], { target: { value: "09:30" } });
+  fireEvent.change(screen.getAllByRole("combobox")[0], { target: { value: "Vacation" } });
+  fireEvent.click(await screen.findByRole("switch", { name: "All day" }));
+  const hourlyTimes = screen.getAllByRole("combobox").slice(1) as HTMLSelectElement[];
+  expect(hourlyTimes[0].value).toBe("09:00");
+  expect(hourlyTimes[1].value).toBe("10:00");
+  expect(hourlyTimes.every(select => [...select.options].every(option => option.value.endsWith(":00")))).toBe(true);
+  expect(screen.getAllByLabelText("Selected calendar date")).toHaveLength(1);
 });
 
 it("keeps the form open and displays a booking conflict rather than claiming success", async () => {

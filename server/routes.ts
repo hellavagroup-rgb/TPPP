@@ -1025,6 +1025,38 @@ export async function registerRoutes(
     }
   });
 
+  app.patch("/api/time-off-blocks/:id", requireAuth, async (req, res) => {
+    if (!req.tenant?.id || !req.tenant.timeOffBlocksEnabled) {
+      return res.status(404).json({ error: "Time-off blocks are not enabled for this practice" });
+    }
+    if (!["admin", "clinician"].includes(req.user!.role)) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+    const parsed = z.object({
+      date: z.string(), startTime: z.string(), endTime: z.string(),
+    }).strict().safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Choose a valid date and whole-hour time range." });
+    try {
+      const block = await storage.updateAvailabilityTimeOffBlock(
+        req.params.id, req.tenant.id, parsed.data, req.user!,
+      );
+      try {
+        await recordActivity(req, "activity_availability_time_off_updated", "availability_time_off_block", block.id, {
+          clinicianName: await getClinicianActivityName(block.clinicianId, req.tenant.id),
+          date: block.date, startTime: block.startTime, endTime: block.endTime,
+        });
+      } catch (activityError) {
+        console.error("Could not record edited time-off block activity:", activityError);
+      }
+      res.json(block);
+    } catch (error) {
+      if (error instanceof AvailabilityTimeOffConflictError) return res.status(409).json({ error: error.message });
+      if (error instanceof ReservationError) return res.status(error.status).json({ error: error.message });
+      console.error("Failed to edit time-off block:", error);
+      res.status(500).json({ error: "Failed to save time-off block" });
+    }
+  });
+
   app.delete("/api/time-off-blocks/:id", requireAuth, async (req, res) => {
     if (!req.tenant?.id) return res.status(403).json({ error: "Access denied" });
     try {

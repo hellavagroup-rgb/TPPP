@@ -185,6 +185,102 @@ describe("hourly time-off blocks with real PostgreSQL transactions", () => {
     tenantId: CYA, clinicianId: "clinician", date: "2099-01-05",
     startTime: "10:00", endTime: "11:00", createdByUserId: "admin",
   };
+  const admin = { id: "admin", role: "admin" as const };
+  const editedWindow = { date: "2099-01-06", startTime: "12:00", endTime: "14:00" };
+
+  it("lets owners and practice admins edit in place, preserving provenance and recurring slots", async () => {
+    await db.update(schema.clinicians).set({ userId: admin.id }).where(eq(schema.clinicians.id, "clinician"));
+    const slots = await db.select().from(schema.timeSlots);
+    const block = await storage.createAvailabilityTimeOffBlock(blockInput);
+    const edited = await storage.updateAvailabilityTimeOffBlock(block.id, CYA, editedWindow, { ...admin, role: "clinician" });
+    expect(edited).toEqual({ ...block, ...editedWindow });
+    // Unchanged range must not conflict with itself.
+    expect(await storage.updateAvailabilityTimeOffBlock(block.id, CYA, editedWindow, admin)).toEqual(edited);
+    expect(await storage.getAvailabilityTimeOffBlocks(CYA)).toEqual([edited]);
+    expect(await db.select().from(schema.timeSlots)).toEqual(slots);
+  });
+
+  it("rejects colleague, unsupported-role, missing-block and cross-practice edits", async () => {
+    const block = await storage.createAvailabilityTimeOffBlock(blockInput);
+    await expect(storage.updateAvailabilityTimeOffBlock(block.id, CYA, editedWindow, { id: "colleague", role: "clinician" }))
+      .rejects.toMatchObject({ status: 403 });
+    await expect(storage.updateAvailabilityTimeOffBlock(block.id, CYA, editedWindow, { id: "unknown", role: "unknown" }))
+      .rejects.toMatchObject({ status: 403 });
+    await expect(storage.updateAvailabilityTimeOffBlock(block.id, OTHER, editedWindow, admin))
+      .rejects.toMatchObject({ status: 404 });
+    await expect(storage.updateAvailabilityTimeOffBlock("missing", CYA, editedWindow, admin))
+      .rejects.toMatchObject({ status: 404 });
+    expect(await storage.getAvailabilityTimeOffBlocks(CYA)).toEqual([block]);
+  });
+
+  it.each([
+    { startTime: "10:30" }, { endTime: "21:30" }, { startTime: "06:00" },
+    { date: "2099-02-30" }, { endTime: "10:00" }, { endTime: "09:00" },
+  ])("preserves the original after invalid edit %j", async patch => {
+    const block = await storage.createAvailabilityTimeOffBlock(blockInput);
+    await expect(storage.updateAvailabilityTimeOffBlock(block.id, CYA, { ...blockInput, ...patch }, admin))
+      .rejects.toMatchObject({ status: 400 });
+    expect(await storage.getAvailabilityTimeOffBlocks(CYA)).toEqual([block]);
+  });
+
+  it("rejects overlapping edits but allows adjacent hours and excludes the edited block itself", async () => {
+    const block = await storage.createAvailabilityTimeOffBlock(blockInput);
+    const other = await storage.createAvailabilityTimeOffBlock({ ...blockInput, startTime: "12:00", endTime: "14:00" });
+    await expect(storage.updateAvailabilityTimeOffBlock(block.id, CYA, { ...blockInput, endTime: "13:00" }, admin))
+      .rejects.toMatchObject({ status: 409 });
+    expect(await storage.getAvailabilityTimeOffBlocks(CYA)).toEqual(expect.arrayContaining([block, other]));
+    await expect(storage.updateAvailabilityTimeOffBlock(block.id, CYA, { ...blockInput, endTime: "12:00" }, admin))
+      .resolves.toMatchObject({ id: block.id, endTime: "12:00" });
+  });
+
+  it.each(["assignment", "reservation", "snapshot"])("preserves the old block and %s after a booking conflict", async kind => {
+    const block = await storage.createAvailabilityTimeOffBlock({ ...blockInput, startTime: "12:00", endTime: "13:00" });
+    if (kind === "assignment") {
+      await storage.assignClinicianToClient("client", "clinician", "slot", CYA, "manual", undefined, blockInput.date);
+    } else if (kind === "reservation") {
+      await reserve();
+    } else {
+      await db.update(schema.timeSlots).set({ retiredAt: new Date() }).where(eq(schema.timeSlots.id, "slot"));
+      await db.update(schema.clients).set({ status: "Scheduled" }).where(eq(schema.clients.id, "client"));
+      await db.insert(schema.bookingSnapshots).values({
+        tenantId: CYA, clientId: "client", clinicianId: "clinician", slotId: "slot",
+        clinicianName: "Test Clinician", slotType: "Recurring", day: "Monday",
+        startTime: "10:00", endTime: "11:00", locationType: "online", idempotencyKey: "edit-conflict",
+      });
+    }
+    const before = await client();
+    const slots = await db.select().from(schema.timeSlots);
+    const reservation = await latestReservation("client");
+    await expect(storage.updateAvailabilityTimeOffBlock(block.id, CYA, blockInput, admin))
+      .rejects.toBeInstanceOf(AvailabilityTimeOffConflictError);
+    expect(await storage.getAvailabilityTimeOffBlocks(CYA)).toEqual([block]);
+    expect(await client()).toEqual(before);
+    expect(await db.select().from(schema.timeSlots)).toEqual(slots);
+    expect(await latestReservation("client")).toEqual(reservation);
+  });
+
+  it("serializes competing edits and never saves overlapping blocks", async () => {
+    const first = await storage.createAvailabilityTimeOffBlock(blockInput);
+    const second = await storage.createAvailabilityTimeOffBlock({ ...blockInput, startTime: "12:00", endTime: "13:00" });
+    const results = await Promise.allSettled([
+      storage.updateAvailabilityTimeOffBlock(first.id, CYA, editedWindow, admin),
+      storage.updateAvailabilityTimeOffBlock(second.id, CYA, editedWindow, admin),
+    ]);
+    expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+    expect(await storage.getAvailabilityTimeOffBlocks(CYA)).toHaveLength(2);
+  });
+
+  it.each(["reservation", "assignment"])("never commits both an edit and an overlapping %s under competition", async kind => {
+    const block = await storage.createAvailabilityTimeOffBlock({ ...blockInput, startTime: "12:00", endTime: "13:00" });
+    const results = await Promise.allSettled([
+      storage.updateAvailabilityTimeOffBlock(block.id, CYA, blockInput, admin),
+      kind === "reservation" ? reserve()
+        : storage.assignClinicianToClient("client", "clinician", "slot", CYA, "manual", undefined, blockInput.date),
+    ]);
+    expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+    const [saved] = await storage.getAvailabilityTimeOffBlocks(CYA);
+    expect(saved.startTime).toBe(results[0].status === "fulfilled" ? "10:00" : "12:00");
+  });
 
   it("creates and removes date-specific hours without changing recurring availability", async () => {
     const before = await db.select().from(schema.timeSlots).where(eq(schema.timeSlots.id, "slot"));

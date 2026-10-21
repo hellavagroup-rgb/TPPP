@@ -167,6 +167,7 @@ export interface IStorage {
   getAllTimeSlots(): Promise<TimeSlot[]>;
   getAvailabilityTimeOffBlocks(tenantId: string): Promise<AvailabilityTimeOffBlock[]>;
   createAvailabilityTimeOffBlock(input: Omit<AvailabilityTimeOffBlock, "id" | "createdAt">): Promise<AvailabilityTimeOffBlock>;
+  updateAvailabilityTimeOffBlock(id: string, tenantId: string, input: Pick<AvailabilityTimeOffBlock, "date" | "startTime" | "endTime">, actor: Pick<User, "id" | "role">): Promise<AvailabilityTimeOffBlock>;
   deleteAvailabilityTimeOffBlock(id: string, tenantId: string): Promise<boolean>;
   updateTimeSlotLocationType(id: string, tenantId: string, locationType: string, actor: Pick<User, "id" | "role">): Promise<{ slot: TimeSlot; previousLocationType: string } | undefined>;
   
@@ -528,25 +529,62 @@ export class DatabaseStorage implements IStorage {
   async createAvailabilityTimeOffBlock(
     input: Omit<AvailabilityTimeOffBlock, "id" | "createdAt">,
   ): Promise<AvailabilityTimeOffBlock> {
+    return this.saveAvailabilityTimeOffBlock(input);
+  }
+
+  async updateAvailabilityTimeOffBlock(
+    id: string,
+    tenantId: string,
+    input: Pick<AvailabilityTimeOffBlock, "date" | "startTime" | "endTime">,
+    actor: Pick<User, "id" | "role">,
+  ): Promise<AvailabilityTimeOffBlock> {
+    const [block] = await db.select().from(availabilityTimeOffBlocks).where(and(
+      eq(availabilityTimeOffBlocks.id, id),
+      eq(availabilityTimeOffBlocks.tenantId, tenantId),
+    ));
+    if (!block) throw new ReservationError(404, "Time-off block not found");
+    return this.saveAvailabilityTimeOffBlock({
+      ...block, date: input.date, startTime: input.startTime, endTime: input.endTime,
+    }, { id, actor });
+  }
+
+  private async saveAvailabilityTimeOffBlock(
+    input: Omit<AvailabilityTimeOffBlock, "id" | "createdAt">,
+    edit?: { id: string; actor: Pick<User, "id" | "role"> },
+  ): Promise<AvailabilityTimeOffBlock> {
     if (!isValidTimeOffBlockWindow(input)) {
       throw new ReservationError(400, "Choose a valid date and a whole-hour range between 07:00 and 21:00.");
     }
 
     return db.transaction(async tx => {
       // Assignment and reservation paths lock the clinician too, so a block
-      // cannot be created in parallel with a new booking for the same clinician.
+      // cannot be created or edited in parallel with a booking for this clinician.
       const [clinician] = await tx.select().from(clinicians).where(and(
         eq(clinicians.id, input.clinicianId),
         eq(clinicians.tenantId, input.tenantId),
       )).for("update");
       if (!clinician) throw new ReservationError(404, "Clinician not found");
 
+      if (edit) {
+        if (edit.actor.role !== "admin" && !(edit.actor.role === "clinician" && clinician.userId === edit.actor.id)) {
+          throw new ReservationError(403, "Clinicians may only manage their own time off");
+        }
+        // Re-read after acquiring the clinician lock: a concurrent delete may
+        // have removed the block while this transaction waited.
+        const [current] = await tx.select().from(availabilityTimeOffBlocks).where(and(
+          eq(availabilityTimeOffBlocks.id, edit.id),
+          eq(availabilityTimeOffBlocks.tenantId, input.tenantId),
+          eq(availabilityTimeOffBlocks.clinicianId, clinician.id),
+        )).for("update");
+        if (!current) throw new ReservationError(404, "Time-off block not found");
+      }
+
       const existingBlocks: AvailabilityTimeOffBlock[] = await tx.select().from(availabilityTimeOffBlocks).where(and(
         eq(availabilityTimeOffBlocks.tenantId, input.tenantId),
         eq(availabilityTimeOffBlocks.clinicianId, input.clinicianId),
         eq(availabilityTimeOffBlocks.date, input.date),
       ));
-      if (existingBlocks.some(block => timeRangesOverlap(block, input))) {
+      if (existingBlocks.some(block => block.id !== edit?.id && timeRangesOverlap(block, input))) {
         throw new ReservationError(409, "This time already overlaps another time-off block.");
       }
 
@@ -614,7 +652,15 @@ export class DatabaseStorage implements IStorage {
       ) || snapshots.some(snapshot => slotOccursOnDate(snapshot, input.date) && timeRangesOverlap(snapshot, input));
       if (occupied) throw new AvailabilityTimeOffConflictError();
 
-      const [block] = await tx.insert(availabilityTimeOffBlocks).values(input).returning();
+      const [block] = edit
+        ? await tx.update(availabilityTimeOffBlocks).set({
+            date: input.date, startTime: input.startTime, endTime: input.endTime,
+          }).where(and(
+            eq(availabilityTimeOffBlocks.id, edit.id),
+            eq(availabilityTimeOffBlocks.tenantId, input.tenantId),
+            eq(availabilityTimeOffBlocks.clinicianId, clinician.id),
+          )).returning()
+        : await tx.insert(availabilityTimeOffBlocks).values(input).returning();
       await tx.update(clinicians).set({ lastUpdatedAvailability: new Date() }).where(eq(clinicians.id, clinician.id));
       return block;
     });
@@ -625,7 +671,7 @@ export class DatabaseStorage implements IStorage {
       const [block] = await tx.select().from(availabilityTimeOffBlocks).where(and(
         eq(availabilityTimeOffBlocks.id, id),
         eq(availabilityTimeOffBlocks.tenantId, tenantId),
-      )).for("update");
+      ));
       if (!block) return false;
       const [clinician] = await tx.select({ id: clinicians.id }).from(clinicians).where(and(
         eq(clinicians.id, block.clinicianId),

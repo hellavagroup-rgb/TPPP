@@ -20,3 +20,9 @@ The reverse protection is required too: an existing future time-off exception pr
 **Why:** Checking only the chosen date let reservations and option selection bypass future time off, despite ongoing bookings correctly preventing those same blocks when created in the opposite order.
 
 **How to apply:** Use date-local checks for ordinary calendar display, and whole-upcoming-schedule checks for all booking eligibility, offers, reservations, direct assignments and reassignments.
+
+Time-off edits must validate the replacement while the original block remains in place. Serialize changes with booking operations using the clinician lock, acquired before locking individual time-off rows.
+
+**Why:** Deleting and recreating a block would temporarily expose the original hours and lose the block on rejection. Opposite clinician/block lock orders can deadlock concurrent edits and removals.
+
+**How to apply:** Keep updates atomic and preserve block identity and creation evidence. Maintain a consistent clinician-first lock order for time-off mutations.

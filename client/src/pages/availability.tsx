@@ -5,7 +5,7 @@ import { useLocation } from "wouter";
 import { Card } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { ChevronLeft, ChevronRight, Plus, Trash2, UserPlus, X, RefreshCw } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, Trash2, Pencil, UserPlus, X, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { format, addDays, startOfDay, startOfWeek, parseISO, isWithinInterval, isBefore, differenceInWeeks } from "date-fns";
@@ -31,7 +31,7 @@ import type { AvailabilityTimeOffBlock, Clinician, TimeSlot, Client } from "@sha
 import { addOneHour, splitIntoHourlySlots, TIME_OPTIONS } from "@/lib/availability-utils";
 import { useOperationalRefresh, invalidateOperationalData } from "@/lib/operationalRefresh";
 import { canEditSlotLocation } from "@/lib/slotLocationPermissions";
-import { isSlotBlockedForBooking, isSlotCoveredByTimeOffBlocks } from "@shared/timeOffBlocks";
+import { isSlotBlockedForBooking, isSlotCoveredByTimeOffBlocks, isValidTimeOffBlockWindow } from "@shared/timeOffBlocks";
 
 type SlotType = "Recurring" | "Vacation" | "SpecificDate" | "TimeOffBlock";
 
@@ -68,6 +68,8 @@ export default function Availability() {
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [deletingSlot, setDeletingSlot] = useState<{ slot: TimeSlot; clinicianId: string } | null>(null);
   const [deletingTimeOffBlock, setDeletingTimeOffBlock] = useState<AvailabilityTimeOffBlock | null>(null);
+  const [editingTimeOffBlock, setEditingTimeOffBlock] = useState<AvailabilityTimeOffBlock | null>(null);
+  const [timeOffEditError, setTimeOffEditError] = useState<string | null>(null);
 
   const [newSlotType, setNewSlotType] = useState<SlotType>("Recurring");
   const [newDate, setNewDate] = useState(format(new Date(), "yyyy-MM-dd"));
@@ -174,6 +176,29 @@ export default function Availability() {
         description = parsed?.error || description;
       } catch {}
       toast({ title: "Time off not saved", description, variant: "destructive" });
+    },
+  });
+
+  const editTimeOffBlockMutation = useMutation({
+    mutationFn: async (block: AvailabilityTimeOffBlock) => {
+      const response = await apiRequest("PATCH", `/api/time-off-blocks/${block.id}`, {
+        date: block.date, startTime: block.startTime, endTime: block.endTime,
+      });
+      return response.json();
+    },
+    onSuccess: () => {
+      invalidateOperationalData(queryClient);
+      setEditingTimeOffBlock(null);
+      setTimeOffEditError(null);
+      toast({ title: "Time off updated", description: "The revised hours are unavailable on that date." });
+    },
+    onError: (error: Error) => {
+      invalidateOperationalData(queryClient);
+      let description = "Failed to save time-off block. Your original block has not changed.";
+      try {
+        description = JSON.parse(error.message.slice(error.message.indexOf("{")))?.error || description;
+      } catch {}
+      setTimeOffEditError(description);
     },
   });
 
@@ -1072,16 +1097,33 @@ export default function Availability() {
                           {timeOffBlocks.map((block: AvailabilityTimeOffBlock) => (
                             <div
                               key={block.id}
-                              className="p-1.5 pr-7 rounded text-[10px] border border-amber-300 bg-amber-50 text-amber-900 relative"
+                              className="p-1.5 pr-7 min-h-14 rounded text-[10px] border border-amber-300 bg-amber-50 text-amber-900 relative"
                               data-testid={`time-off-block-${block.id}`}
                             >
                               <div className="font-semibold">TIME OFF</div>
                               <div>{block.startTime}–{block.endTime}</div>
                               {!isAllocating && (user?.role === "admin" || (user?.role === "clinician" && clinician.userId === user.id)) && (
+                                <>
+                                {tenant?.timeOffBlocksEnabled && (
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="absolute right-0.5 top-0.5 h-6 w-6 bg-white/80 hover:bg-white p-0"
+                                    aria-label="Edit time-off block"
+                                    title="Edit time-off block"
+                                    onClick={() => {
+                                      setTimeOffEditError(null);
+                                      setEditingTimeOffBlock({ ...block });
+                                    }}
+                                    data-testid={`button-edit-time-off-${block.id}`}
+                                  >
+                                    <Pencil className="h-2.5 w-2.5" />
+                                  </Button>
+                                )}
                                 <Button
                                   variant="ghost"
                                   size="icon"
-                                  className="absolute right-0.5 top-0.5 h-6 w-6 bg-white/80 hover:bg-white text-destructive p-0"
+                                  className="absolute right-0.5 bottom-0.5 h-6 w-6 bg-white/80 hover:bg-white text-destructive p-0"
                                   aria-label="Remove time-off block"
                                   title="Remove time-off block"
                                   onClick={() => setDeletingTimeOffBlock(block)}
@@ -1089,6 +1131,7 @@ export default function Availability() {
                                 >
                                   <Trash2 className="h-2.5 w-2.5" />
                                 </Button>
+                                </>
                               )}
                             </div>
                           ))}
@@ -1126,6 +1169,67 @@ export default function Availability() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={!!editingTimeOffBlock} onOpenChange={(open) => {
+        if (!open && !editTimeOffBlockMutation.isPending) setEditingTimeOffBlock(null);
+      }}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit time-off block</DialogTitle>
+            <DialogDescription>
+              Change the date or whole-hour range. Existing appointments and recurring availability will not be changed.
+            </DialogDescription>
+          </DialogHeader>
+          {editingTimeOffBlock && (
+            <form onSubmit={(event) => {
+              event.preventDefault();
+              if (!isValidTimeOffBlockWindow(editingTimeOffBlock) || editTimeOffBlockMutation.isPending) return;
+              setTimeOffEditError(null);
+              editTimeOffBlockMutation.mutate(editingTimeOffBlock);
+            }} className="grid gap-4">
+              <fieldset disabled={editTimeOffBlockMutation.isPending} className="grid gap-4">
+                <div className="grid gap-2">
+                  <Label>Time-Off Date</Label>
+                  <DatePicker value={editingTimeOffBlock.date} onChange={(date) =>
+                    setEditingTimeOffBlock({ ...editingTimeOffBlock, date })} />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="edit-time-off-start">Start time</Label>
+                    <select id="edit-time-off-start" className="h-10 rounded-md border bg-background px-3 text-sm"
+                      value={editingTimeOffBlock.startTime} onChange={(event) =>
+                        setEditingTimeOffBlock({ ...editingTimeOffBlock, startTime: event.target.value })}>
+                      {TIME_OPTIONS.filter(time => time <= "20:00" && time.endsWith(":00")).map(time =>
+                        <option key={time} value={time}>{time}</option>)}
+                    </select>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="edit-time-off-end">End time</Label>
+                    <select id="edit-time-off-end" className="h-10 rounded-md border bg-background px-3 text-sm"
+                      value={editingTimeOffBlock.endTime} onChange={(event) =>
+                        setEditingTimeOffBlock({ ...editingTimeOffBlock, endTime: event.target.value })}>
+                      {TIME_OPTIONS.filter(time => time >= "08:00" && time.endsWith(":00")).map(time =>
+                        <option key={time} value={time}>{time}</option>)}
+                    </select>
+                  </div>
+                </div>
+              </fieldset>
+              {!isValidTimeOffBlockWindow(editingTimeOffBlock) && (
+                <p role="alert" className="text-sm text-destructive">Choose a valid date and an end time after the start time.</p>
+              )}
+              {timeOffEditError && <p role="alert" className="text-sm text-destructive">{timeOffEditError} Your original block has not changed.</p>}
+              <DialogFooter>
+                <Button type="button" variant="outline" disabled={editTimeOffBlockMutation.isPending}
+                  onClick={() => setEditingTimeOffBlock(null)}>Cancel</Button>
+                <Button type="submit" disabled={editTimeOffBlockMutation.isPending || !isValidTimeOffBlockWindow(editingTimeOffBlock)}
+                  data-testid="button-save-time-off-edit">
+                  {editTimeOffBlockMutation.isPending ? "Saving..." : "Save changes"}
+                </Button>
+              </DialogFooter>
+            </form>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog open={!!deletingTimeOffBlock} onOpenChange={(open) => { if (!open) setDeletingTimeOffBlock(null); }}>
         <AlertDialogContent>

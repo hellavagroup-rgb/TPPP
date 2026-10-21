@@ -891,6 +891,67 @@ describe("hourly time-off permission HTTP routes", () => {
   });
 });
 
+describe("time-off editing HTTP routes", () => {
+  const path = "/api/time-off-blocks/block-a";
+  const window = { date: "2099-01-05", startTime: "10:00", endTime: "12:00" };
+  beforeEach(() => {
+    h.state.tenant.timeOffBlocksEnabled = true;
+    h.storage.updateAvailabilityTimeOffBlock.mockReset();
+  });
+  afterEach(() => { h.storage.updateAvailabilityTimeOffBlock.mockReset(); });
+
+  it.each(["admin", "clinician"])("passes the authenticated %s and practice to the locked edit", async role => {
+    h.storage.updateAvailabilityTimeOffBlock.mockResolvedValue({
+      id: "block-a", clinicianId: "clinician-a", tenantId: "tenant-a", ...window,
+    });
+    const response = await request(path, { method: "PATCH", headers: { "x-role": role }, body: JSON.stringify(window) });
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ id: "block-a", ...window });
+    expect(h.storage.updateAvailabilityTimeOffBlock).toHaveBeenCalledWith(
+      "block-a", "tenant-a", window, expect.objectContaining({ id: "admin-1", role }),
+    );
+    expect(h.state.activities).toHaveLength(1);
+  });
+
+  it.each([
+    {}, { ...window, endTime: null }, { ...window, tenantId: "foreign" },
+    { ...window, clinicianId: "colleague" }, { ...window, createdByUserId: "spoofed" },
+  ])("rejects malformed windows or ownership changes: %j", async body => {
+    expect((await request(path, { method: "PATCH", body: JSON.stringify(body) })).status).toBe(400);
+    expect(h.storage.updateAvailabilityTimeOffBlock).not.toHaveBeenCalled();
+  });
+
+  it("hides editing when disabled or outside the authenticated practice", async () => {
+    h.state.tenant.timeOffBlocksEnabled = false;
+    expect((await request(path, { method: "PATCH", body: JSON.stringify(window) })).status).toBe(404);
+    h.state.tenant.timeOffBlocksEnabled = true;
+    expect((await request(path, { method: "PATCH", headers: { "x-tenant": "foreign" }, body: JSON.stringify(window) })).status).toBe(404);
+    expect(h.storage.updateAvailabilityTimeOffBlock).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsupported roles before calling storage", async () => {
+    expect((await request(path, { method: "PATCH", headers: { "x-role": "viewer" }, body: JSON.stringify(window) })).status).toBe(403);
+    expect(h.storage.updateAvailabilityTimeOffBlock).not.toHaveBeenCalled();
+  });
+
+  it.each([403, 404, 400])("returns storage rejection %s without recording success", async status => {
+    const { ReservationError } = await import("./reservationLifecycle");
+    h.storage.updateAvailabilityTimeOffBlock.mockRejectedValueOnce(new ReservationError(status, "Edit rejected"));
+    const response = await request(path, { method: "PATCH", body: JSON.stringify(window) });
+    expect(response).toEqual({ status, body: { error: "Edit rejected" } });
+    expect(h.state.activities).toHaveLength(0);
+  });
+
+  it("returns an actionable booking conflict without recording success", async () => {
+    const { AvailabilityTimeOffConflictError } = await import("./storage");
+    h.storage.updateAvailabilityTimeOffBlock.mockRejectedValueOnce(new AvailabilityTimeOffConflictError("Resolve the appointment first"));
+    expect(await request(path, { method: "PATCH", body: JSON.stringify(window) })).toEqual({
+      status: 409, body: { error: "Resolve the appointment first" },
+    });
+    expect(h.state.activities).toHaveLength(0);
+  });
+});
+
 describe("slot format permission HTTP routes", () => {
   const path = "/api/timeslots/slot-a/location-type";
   beforeEach(() => { h.storage.updateTimeSlotLocationType.mockReset(); });

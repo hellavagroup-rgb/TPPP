@@ -2,11 +2,11 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { format, startOfWeek } from "date-fns";
+import { addDays, format, startOfWeek } from "date-fns";
 import Availability from "./availability";
 
-const h = vi.hoisted(() => ({ toast: vi.fn() }));
-vi.mock("@/lib/auth", () => ({ useAuth: () => ({ user: { id: "user-a", role: "clinician" } }) }));
+const h = vi.hoisted(() => ({ toast: vi.fn(), role: "clinician" }));
+vi.mock("@/lib/auth", () => ({ useAuth: () => ({ user: { id: "user-a", role: h.role } }) }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: h.toast }) }));
 vi.mock("@/lib/operationalRefresh", () => ({
   useOperationalRefresh: () => ({ refresh: vi.fn(), lastUpdated: null }),
@@ -29,22 +29,27 @@ afterEach(() => {
   cleanup();
   caches.splice(0).forEach(cache => cache.clear());
   h.toast.mockClear();
+  h.role = "clinician";
   vi.unstubAllGlobals();
 });
 
-function setup({ enabled = true, conflict = false, existing = false } = {}) {
+function setup({ enabled = true, conflict = false, existing = false, beforeWrite = async () => {} } = {}) {
   window.history.replaceState({}, "", "/availability");
   const date = format(startOfWeek(new Date(), { weekStartsOn: 1 }), "yyyy-MM-dd");
   let blocks = existing ? [{ id: "own-block", clinicianId: "own", date, startTime: "09:00", endTime: "11:00" }] : [];
+  let colleagueBlocks = existing ? [{ id: "colleague-block", clinicianId: "colleague", date, startTime: "10:00", endTime: "11:00" }] : [];
   const writes: any[] = [];
   vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
     const path = new URL(String(input), window.location.origin).pathname;
-    if (init?.method === "POST") {
+    if (init?.method === "POST" || init?.method === "PATCH") {
       const body = JSON.parse(String(init.body));
       writes.push({ path, body });
+      await beforeWrite();
       if (conflict) return new Response(JSON.stringify({ error: "Resolve the existing appointment before saving." }), { status: 409 });
-      const block = { id: "own-block", clinicianId: "own", ...body };
-      blocks = [block];
+      const colleague = path.endsWith("/colleague-block");
+      const block = { id: colleague ? "colleague-block" : "own-block", clinicianId: colleague ? "colleague" : "own", ...body };
+      if (colleague) colleagueBlocks = [block];
+      else blocks = [block];
       return new Response(JSON.stringify(block), { status: 201 });
     }
     if (init?.method === "DELETE") {
@@ -55,8 +60,8 @@ function setup({ enabled = true, conflict = false, existing = false } = {}) {
     const data = path === "/api/clinicians" ? [
       { id: "own", userId: "user-a", name: "Own Clinician", isActive: true, availability: [], availabilityTimeOffBlocks: blocks },
       { id: "colleague", userId: "user-b", name: "Colleague", isActive: true, availability: [],
-        availabilityTimeOffBlocks: existing ? [{ id: "colleague-block", clinicianId: "colleague", date, startTime: "10:00", endTime: "11:00" }] : [] },
-    ] : path === "/api/tenant/features" ? { timeOffBlocksEnabled: enabled } : {};
+        availabilityTimeOffBlocks: colleagueBlocks },
+    ] : path === "/api/tenant/features" ? { timeOffBlocksEnabled: enabled } : path === "/api/clients" ? [] : {};
     return new Response(JSON.stringify(data));
   }));
   const cache = new QueryClient({ defaultOptions: { queries: {
@@ -113,4 +118,83 @@ it("removes an own block after confirmation but offers no delete control for a c
   await waitFor(() => expect(writes).toEqual([{ path: "/api/time-off-blocks/own-block" }]));
   await waitFor(() => expect(screen.queryByTestId("time-off-block-own-block")).toBeNull());
   expect(screen.getByTestId("time-off-block-colleague-block")).toBeTruthy();
+});
+
+it("prefills an own block, saves revised date/hours, and refreshes the calendar without a delete", async () => {
+  const { writes, date } = setup({ existing: true });
+  fireEvent.click(await screen.findByTestId("button-edit-time-off-own-block"));
+  expect(screen.queryByTestId("button-edit-time-off-colleague-block")).toBeNull();
+  expect((screen.getByLabelText("Selected calendar date") as HTMLInputElement).value).toBe(date);
+  expect((screen.getByLabelText("Start time") as HTMLSelectElement).value).toBe("09:00");
+  expect((screen.getByLabelText("End time") as HTMLSelectElement).value).toBe("11:00");
+  const nextDate = format(addDays(new Date(`${date}T12:00:00`), 1), "yyyy-MM-dd");
+  fireEvent.change(screen.getByLabelText("Selected calendar date"), { target: { value: nextDate } });
+  fireEvent.change(screen.getByLabelText("Start time"), { target: { value: "12:00" } });
+  fireEvent.change(screen.getByLabelText("End time"), { target: { value: "14:00" } });
+  fireEvent.click(screen.getByTestId("button-save-time-off-edit"));
+  await waitFor(() => expect(writes).toEqual([{
+    path: "/api/time-off-blocks/own-block", body: { date: nextDate, startTime: "12:00", endTime: "14:00" },
+  }]));
+  await waitFor(() => expect(screen.queryByTestId("button-save-time-off-edit")).toBeNull());
+  await waitFor(() => expect(screen.getByTestId("time-off-block-own-block").textContent).toContain("12:00–14:00"));
+});
+
+it("keeps failed edit values and the original calendar block, then allows cancellation", async () => {
+  const { writes } = setup({ existing: true, conflict: true });
+  fireEvent.click(await screen.findByTestId("button-edit-time-off-own-block"));
+  fireEvent.change(screen.getByLabelText("End time"), { target: { value: "13:00" } });
+  fireEvent.click(screen.getByTestId("button-save-time-off-edit"));
+  expect(await screen.findByRole("alert")).toHaveProperty("textContent", expect.stringContaining("Resolve the existing appointment"));
+  expect((screen.getByLabelText("End time") as HTMLSelectElement).value).toBe("13:00");
+  expect(screen.getByTestId("time-off-block-own-block").textContent).toContain("09:00–11:00");
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(screen.queryByTestId("button-save-time-off-edit")).toBeNull());
+  expect(writes).toHaveLength(1);
+});
+
+it("cancels without writing and blocks reversed ranges", async () => {
+  const { writes } = setup({ existing: true });
+  fireEvent.click(await screen.findByTestId("button-edit-time-off-own-block"));
+  fireEvent.change(screen.getByLabelText("End time"), { target: { value: "08:00" } });
+  expect((screen.getByTestId("button-save-time-off-edit") as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(writes).toEqual([]);
+});
+
+it("lets admins edit a colleague's block", async () => {
+  h.role = "admin";
+  const { writes, date } = setup({ existing: true });
+  fireEvent.click(await screen.findByTestId("button-edit-time-off-colleague-block"));
+  expect((screen.getByLabelText("Start time") as HTMLSelectElement).value).toBe("10:00");
+  fireEvent.change(screen.getByLabelText("End time"), { target: { value: "12:00" } });
+  fireEvent.click(screen.getByTestId("button-save-time-off-edit"));
+  await waitFor(() => expect(writes).toEqual([{
+    path: "/api/time-off-blocks/colleague-block", body: { date, startTime: "10:00", endTime: "12:00" },
+  }]));
+  await waitFor(() => expect(screen.queryByTestId("button-save-time-off-edit")).toBeNull());
+  await waitFor(() => expect(screen.getByTestId("time-off-block-colleague-block").textContent).toContain("10:00–12:00"));
+  expect(screen.getByTestId("time-off-block-own-block").textContent).toContain("09:00–11:00");
+});
+
+it("prevents duplicate submissions and closing while an edit is saving", async () => {
+  let finish!: () => void;
+  const pending = new Promise<void>(resolve => { finish = resolve; });
+  const { writes } = setup({ existing: true, beforeWrite: () => pending });
+  fireEvent.click(await screen.findByTestId("button-edit-time-off-own-block"));
+  fireEvent.click(screen.getByTestId("button-save-time-off-edit"));
+  await waitFor(() => expect(writes).toHaveLength(1));
+  expect((screen.getByTestId("button-save-time-off-edit") as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByTestId("button-save-time-off-edit"));
+  fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+  expect(screen.getByRole("dialog")).toBeTruthy();
+  expect(writes).toHaveLength(1);
+  finish();
+  await waitFor(() => expect(screen.queryByTestId("button-save-time-off-edit")).toBeNull());
+});
+
+it("does not offer edits for disabled practices", async () => {
+  setup({ existing: true, enabled: false });
+  await screen.findByTestId("time-off-block-own-block");
+  expect(screen.queryByTestId("button-edit-time-off-own-block")).toBeNull();
 });

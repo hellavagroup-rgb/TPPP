@@ -1,10 +1,10 @@
 import { 
-  users, clients, clinicians, timeSlots, formTemplates, formSubmissions, formDeliveries, formDeliveryAttempts, clientCreationRequests, tasks, auditLogs, emailTemplates, inviteTokens, passwordResetTokens, nonEngagementCategories, customInsurers, paymentCharges, intakeMessages, tenants, clientClinicianOptions, bookingSnapshots,
+  users, clients, clinicians, timeSlots, availabilityTimeOffBlocks, bookingReservations, formTemplates, formSubmissions, formDeliveries, formDeliveryAttempts, clientCreationRequests, tasks, auditLogs, emailTemplates, inviteTokens, passwordResetTokens, nonEngagementCategories, customInsurers, paymentCharges, intakeMessages, tenants, clientClinicianOptions, bookingSnapshots,
   type User, type InsertUser, type SafeUser,
   type Tenant,
   type Client, type InsertClient, type FormDelivery,
   type Clinician, type InsertClinician,
-  type TimeSlot, type InsertTimeSlot,
+  type TimeSlot, type InsertTimeSlot, type AvailabilityTimeOffBlock,
   type FormTemplate, type InsertFormTemplate,
   type FormSubmission, type InsertFormSubmission,
   type Task, type InsertTask,
@@ -29,6 +29,8 @@ import {
 import { shouldResetZoomDelivery } from "@shared/bookingZoom";
 import { visibleCalendarSlots } from "@shared/calendarBooking";
 import { slotUnavailableReason } from "@shared/slotEligibility";
+import { isValidTimeOffBlockWindow, slotOccursOnDate, timeRangesOverlap } from "@shared/timeOffBlocks";
+import { findTimeOffBlockForSlot } from "./availabilityTimeOff";
 import { isCyaPsychologyTenant } from "@shared/practicePolicies";
 import { guardReservationMutation, ReservationError } from "./reservationLifecycle";
 import { UNALLOCATED_CLIENT_STATUSES } from "./strandedAllocationRepair";
@@ -73,6 +75,7 @@ export type ManualAssignmentFailure =
   | "access_denied"
   | "client_already_assigned"
   | "slot_clinician_mismatch"
+  | "invalid_occurrence_date"
   | "slot_unavailable"
   | "mutation_failed";
 
@@ -91,6 +94,13 @@ export class SlotRetirementConflictError extends Error {
   constructor(public readonly clientIds: string[], ownerStatuses: readonly string[] = []) {
     super(slotRetirementConflictCopy(ownerStatuses));
     this.name = "SlotRetirementConflictError";
+  }
+}
+
+export class AvailabilityTimeOffConflictError extends Error {
+  constructor(message = "This time-off block overlaps an existing appointment or reservation. Resolve it before saving.") {
+    super(message);
+    this.name = "AvailabilityTimeOffConflictError";
   }
 }
 
@@ -155,6 +165,9 @@ export interface IStorage {
   addTimeSlots(clinicianId: string, newSlots: Omit<TimeSlot, 'id' | 'createdAt'>[], tenantId?: string | null): Promise<TimeSlot[]>;
   deleteTimeSlotById(id: string, tenantId?: string, reason?: string): Promise<boolean>;
   getAllTimeSlots(): Promise<TimeSlot[]>;
+  getAvailabilityTimeOffBlocks(tenantId: string): Promise<AvailabilityTimeOffBlock[]>;
+  createAvailabilityTimeOffBlock(input: Omit<AvailabilityTimeOffBlock, "id" | "createdAt">): Promise<AvailabilityTimeOffBlock>;
+  deleteAvailabilityTimeOffBlock(id: string, tenantId: string): Promise<boolean>;
   updateTimeSlotLocationType(id: string, tenantId: string, locationType: string, actor: Pick<User, "id" | "role">): Promise<{ slot: TimeSlot; previousLocationType: string } | undefined>;
   
   // ============ CLIENTS ============
@@ -169,7 +182,7 @@ export interface IStorage {
   archiveClient(id: string, reason?: string, category?: string): Promise<Client | undefined>;
   restoreClient(id: string): Promise<Client | undefined>;
   deleteClientPermanently(id: string): Promise<boolean>;
-  assignClinicianToClient(clientId: string, clinicianId: string, slotId: string, tenantId: string, allocationMethod?: "form" | "manual", allocationReason?: string): Promise<Client>;
+  assignClinicianToClient(clientId: string, clinicianId: string, slotId: string, tenantId: string, allocationMethod?: "form" | "manual", allocationReason?: string, occurrenceDate?: string): Promise<Client>;
   reassignClient(
     clientId: string,
     newClinicianId: string | null,
@@ -177,6 +190,7 @@ export interface IStorage {
     newStatus: string,
     tenantId: string,
     confirmationIdempotencyKey?: string,
+    occurrenceDate?: string,
   ): Promise<ReassignClientResult | undefined>;
   repairStrandedClientAllocations(ipAddress?: string | null): Promise<StrandedAllocationRepairResult>;
   repairSlotIntegrity(tenantId?: string, ipAddress?: string | null): Promise<SlotIntegrityReport>;
@@ -505,6 +519,110 @@ export class DatabaseStorage implements IStorage {
 
   async getAllTimeSlots(): Promise<TimeSlot[]> {
     return await db.select().from(timeSlots);
+  }
+
+  async getAvailabilityTimeOffBlocks(tenantId: string): Promise<AvailabilityTimeOffBlock[]> {
+    return db.select().from(availabilityTimeOffBlocks).where(eq(availabilityTimeOffBlocks.tenantId, tenantId));
+  }
+
+  async createAvailabilityTimeOffBlock(
+    input: Omit<AvailabilityTimeOffBlock, "id" | "createdAt">,
+  ): Promise<AvailabilityTimeOffBlock> {
+    if (!isValidTimeOffBlockWindow(input)) {
+      throw new ReservationError(400, "Choose a valid date and a whole-hour range between 07:00 and 21:00.");
+    }
+
+    return db.transaction(async tx => {
+      // Assignment and reservation paths lock the clinician too, so a block
+      // cannot be created in parallel with a new booking for the same clinician.
+      const [clinician] = await tx.select().from(clinicians).where(and(
+        eq(clinicians.id, input.clinicianId),
+        eq(clinicians.tenantId, input.tenantId),
+      )).for("update");
+      if (!clinician) throw new ReservationError(404, "Clinician not found");
+
+      const existingBlocks: AvailabilityTimeOffBlock[] = await tx.select().from(availabilityTimeOffBlocks).where(and(
+        eq(availabilityTimeOffBlocks.tenantId, input.tenantId),
+        eq(availabilityTimeOffBlocks.clinicianId, input.clinicianId),
+        eq(availabilityTimeOffBlocks.date, input.date),
+      ));
+      if (existingBlocks.some(block => timeRangesOverlap(block, input))) {
+        throw new ReservationError(409, "This time already overlaps another time-off block.");
+      }
+
+      const slots: TimeSlot[] = await tx.select().from(timeSlots).where(and(
+        or(eq(timeSlots.tenantId, input.tenantId), isNull(timeSlots.tenantId)),
+        eq(timeSlots.clinicianId, input.clinicianId),
+        isNull(timeSlots.retiredAt),
+      )).for("update");
+      const relevantSlots = slots.filter(slot =>
+        slotOccursOnDate(slot, input.date) && timeRangesOverlap(slot, input),
+      );
+      const relevantSlotIds = relevantSlots.map(slot => slot.id);
+      const activeOwners = relevantSlotIds.length
+        ? await tx.select({
+            assignedSlotId: clients.assignedSlotId,
+            assignedSlot: clients.assignedSlot,
+          }).from(clients).where(and(
+            eq(clients.tenantId, input.tenantId),
+            eq(clients.assignedClinicianId, input.clinicianId),
+            inArray(clients.status, [...ACTIVE_ALLOCATION_STATUSES]),
+          ))
+        : [];
+      const reservations = relevantSlotIds.length
+        ? await tx.select({ slotId: bookingReservations.slotId }).from(bookingReservations).where(and(
+            eq(bookingReservations.tenantId, input.tenantId),
+            eq(bookingReservations.clinicianId, input.clinicianId),
+            inArray(bookingReservations.slotId, relevantSlotIds),
+            inArray(bookingReservations.status, ["active", "payment_check", "payment_review"]),
+          ))
+        : [];
+      const snapshots = await tx.select({
+        startTime: bookingSnapshots.startTime,
+        endTime: bookingSnapshots.endTime,
+      }).from(bookingSnapshots).where(and(
+        eq(bookingSnapshots.tenantId, input.tenantId),
+        eq(bookingSnapshots.clinicianId, input.clinicianId),
+        eq(bookingSnapshots.date, input.date),
+      ));
+
+      const occupied = relevantSlots.some(slot =>
+        slot.isBooked
+        || reservations.some(reservation => reservation.slotId === slot.id)
+        || activeOwners.some(owner =>
+          owner.assignedSlotId === slot.id
+          || (!owner.assignedSlotId && owner.assignedSlot?.toLowerCase() === `${slot.day || slot.date} ${slot.startTime}`.toLowerCase()),
+        ),
+      ) || snapshots.some(snapshot => timeRangesOverlap(snapshot, input));
+      if (occupied) throw new AvailabilityTimeOffConflictError();
+
+      const [block] = await tx.insert(availabilityTimeOffBlocks).values(input).returning();
+      await tx.update(clinicians).set({ lastUpdatedAvailability: new Date() }).where(eq(clinicians.id, clinician.id));
+      return block;
+    });
+  }
+
+  async deleteAvailabilityTimeOffBlock(id: string, tenantId: string): Promise<boolean> {
+    return db.transaction(async tx => {
+      const [block] = await tx.select().from(availabilityTimeOffBlocks).where(and(
+        eq(availabilityTimeOffBlocks.id, id),
+        eq(availabilityTimeOffBlocks.tenantId, tenantId),
+      )).for("update");
+      if (!block) return false;
+      const [clinician] = await tx.select({ id: clinicians.id }).from(clinicians).where(and(
+        eq(clinicians.id, block.clinicianId),
+        eq(clinicians.tenantId, tenantId),
+      )).for("update");
+      if (!clinician) return false;
+      const deleted = await tx.delete(availabilityTimeOffBlocks).where(and(
+        eq(availabilityTimeOffBlocks.id, id),
+        eq(availabilityTimeOffBlocks.tenantId, tenantId),
+      )).returning({ id: availabilityTimeOffBlocks.id });
+      if (deleted.length === 1) {
+        await tx.update(clinicians).set({ lastUpdatedAvailability: new Date() }).where(eq(clinicians.id, clinician.id));
+      }
+      return deleted.length === 1;
+    });
   }
 
   async updateTimeSlotLocationType(id: string, tenantId: string, locationType: string, actor: Pick<User, "id" | "role">): Promise<{ slot: TimeSlot; previousLocationType: string } | undefined> {
@@ -1081,6 +1199,7 @@ export class DatabaseStorage implements IStorage {
     tenantId: string,
     allocationMethod: "form" | "manual" = "form",
     allocationReason?: string,
+    occurrenceDate?: string,
   ): Promise<Client> {
     try {
       return await db.transaction(async (tx) => {
@@ -1110,7 +1229,10 @@ export class DatabaseStorage implements IStorage {
           );
         }
 
-        const [clinician] = await tx.select().from(clinicians).where(eq(clinicians.id, clinicianId));
+        const [clinician] = await tx.select().from(clinicians).where(and(
+          eq(clinicians.id, clinicianId),
+          eq(clinicians.tenantId, tenantId),
+        )).for("update");
         if (!clinician) {
           throw new ManualAssignmentError("clinician_not_found", "Clinician not found");
         }
@@ -1131,11 +1253,21 @@ export class DatabaseStorage implements IStorage {
             "The selected appointment slot does not belong to this clinician",
           );
         }
+        if (slot.type === "Recurring" && occurrenceDate && !slotOccursOnDate(slot, occurrenceDate)) {
+          throw new ManualAssignmentError("invalid_occurrence_date", "Choose a date that matches this recurring slot.");
+        }
         const unavailable = slotUnavailableReason(slot);
         if (unavailable) {
           throw new ManualAssignmentError(
             "slot_unavailable",
             `The selected appointment slot ${unavailable}`,
+          );
+        }
+        const timeOffBlock = await findTimeOffBlockForSlot(tx, tenantId, slot, occurrenceDate);
+        if (timeOffBlock) {
+          throw new ManualAssignmentError(
+            "slot_unavailable",
+            `The selected appointment slot is blocked as time off on ${timeOffBlock.date}`,
           );
         }
 
@@ -1207,6 +1339,7 @@ export class DatabaseStorage implements IStorage {
     newStatus: string,
     tenantId: string,
     confirmationIdempotencyKey?: string,
+    occurrenceDate?: string,
   ): Promise<ReassignClientResult | undefined> {
     return db.transaction(async (tx) => {
       const [existingClient] = await tx.select().from(clients).where(and(
@@ -1350,15 +1483,22 @@ export class DatabaseStorage implements IStorage {
         const [newClinician] = await tx.select().from(clinicians).where(and(
           eq(clinicians.id, newClinicianId),
           eq(clinicians.tenantId, tenantId),
-        ));
+        )).for("update");
         if (!newClinician) throw new ManualAssignmentError("access_denied", "Access denied");
 
         const [newSlot] = await tx.select().from(timeSlots).where(and(
           eq(timeSlots.id, newSlotId),
           eq(timeSlots.tenantId, tenantId),
-        ));
+        )).for("update");
         if (!newSlot) throw new Error("New slot not found");
         if (newSlot.clinicianId !== newClinicianId) throw new Error("Slot does not belong to selected clinician");
+        if (newSlot.type === "Recurring" && occurrenceDate && !slotOccursOnDate(newSlot, occurrenceDate)) {
+          throw new ManualAssignmentError("invalid_occurrence_date", "Choose a date that matches this recurring slot.");
+        }
+        const timeOffBlock = await findTimeOffBlockForSlot(tx, tenantId, newSlot, occurrenceDate);
+        if (timeOffBlock) {
+          throw new ManualAssignmentError("slot_unavailable", `The selected appointment slot is blocked as time off on ${timeOffBlock.date}`);
+        }
         const claimedSlots = await tx.update(timeSlots).set({ isBooked: true }).where(and(
           eq(timeSlots.id, newSlotId),
           eq(timeSlots.tenantId, tenantId),

@@ -44,5 +44,6 @@
 - [Reservation duration policy](reservation-duration-policy.md) — Tenant 2 requires admin-configurable holds; setting edits must preserve existing clients' deadlines.
 - [Server entrypoint imports](server-entrypoint-imports.md) — reusable helpers must not import app startup; cold imports can boot Express and cause initialisation races.
 - [Clinician availability permissions](clinician-availability-permissions.md) — clinicians may edit/delete their own free slots; booked slots stay protected and occupied WriteUpp retirement is admin-only.
+- [Date-specific clinician time off](clinician-time-off-blocks.md) — blocks affect only their selected date; reject conflicting bookings without changing them, and never guess which tenant to enable.
 - [Safe booking feature fallback](safe-feature-fallback.md) — retain both clinician fixes and live data; consult saved recovery instructions before any cutover.
 - [Reservation payment identity](reservation-payment-identity.md) — missing or changed payment identity must retain the hold; feature flags never disable existing financial safeguards.

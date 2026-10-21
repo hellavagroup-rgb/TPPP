@@ -120,10 +120,10 @@ export async function updateClient(id: string, updates: any) {
   });
 }
 
-export async function assignClinician(clientId: string, clinicianId: string, slotId: string) {
+export async function assignClinician(clientId: string, clinicianId: string, slotId: string, occurrenceDate?: string) {
   return fetchAPI(`/api/clients/${clientId}/assign`, {
     method: "POST",
-    body: JSON.stringify({ clinicianId, slotId }),
+    body: JSON.stringify({ clinicianId, slotId, occurrenceDate }),
   });
 }
 

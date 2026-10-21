@@ -59,6 +59,7 @@ export const tenants = pgTable("tenants", {
   writeuppChecklistEnabled: boolean("writeup_checklist_enabled").default(false),
   completedBookingsEnabled: boolean("completed_bookings_enabled").default(false),
   oneOffSlotsEnabled: boolean("one_off_slots_enabled").default(false),
+  timeOffBlocksEnabled: boolean("time_off_blocks_enabled").notNull().default(false),
   flexibleBookingEnabled: boolean("flexible_booking_enabled").notNull().default(false),
   reservationDurationHours: integer("reservation_duration_hours").notNull().default(12),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -188,6 +189,23 @@ export const selectTimeSlotSchema = createSelectSchema(timeSlots);
 export type InsertTimeSlot = z.infer<typeof insertTimeSlotSchema>;
 export type TimeSlot = typeof timeSlots.$inferSelect;
 
+// Date-specific unavailability is separate from appointment slots: blocks never
+// reserve a slot row or become eligible for allocation.
+export const availabilityTimeOffBlocks = pgTable("availability_time_off_blocks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  clinicianId: varchar("clinician_id").notNull().references(() => clinicians.id, { onDelete: "cascade" }),
+  date: text("date").notNull(),
+  startTime: text("start_time").notNull(),
+  endTime: text("end_time").notNull(),
+  createdByUserId: varchar("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("availability_time_off_blocks_tenant_clinician_date_idx").on(table.tenantId, table.clinicianId, table.date),
+]);
+
+export type AvailabilityTimeOffBlock = typeof availabilityTimeOffBlocks.$inferSelect;
+
 // ============ CLIENTS (GDPR-Compliant) ============
 export const clients = pgTable("clients", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -205,6 +223,7 @@ export const clients = pgTable("clients", {
   assignedClinicianId: varchar("assigned_clinician_id").references(() => clinicians.id),
   assignedSlotId: varchar("assigned_slot_id").references(() => timeSlots.id),
   assignedSlot: text("assigned_slot"), // Display string for UI
+  assignedOccurrenceDate: text("assigned_occurrence_date"),
   allocationMethod: text("allocation_method", { enum: ["form", "manual"] }), // How client was allocated
   allocationReason: text("allocation_reason"), // Admin's reason for this allocation
   isArchived: boolean("is_archived").default(false).notNull(),

@@ -151,6 +151,7 @@ interface TenantSummary {
   writeuppChecklistEnabled: boolean;
   completedBookingsEnabled: boolean;
   oneOffSlotsEnabled: boolean;
+  timeOffBlocksEnabled: boolean;
   clinicianProfileConfig: { showTier?: boolean; showTherapyMode?: boolean } | null;
   createdAt: string;
 }
@@ -479,6 +480,7 @@ const FEATURE_FLAGS: { key: keyof TenantDetail; label: string; description: stri
   { key: "completedBookingsEnabled", label: "Completed Bookings", description: "Move verified bookings to a separate Completed view without archiving", group: "cya" },
   // Availability flags
   { key: "oneOffSlotsEnabled", label: "One-off Slots", description: "Allows clinicians to have availability slots on a specific calendar date rather than a recurring day of the week", group: "general" },
+  { key: "timeOffBlocksEnabled", label: "Hourly Time-Off Blocks", description: "Allows clinicians to block whole-hour periods on a specific date without changing recurring availability", group: "general" },
 ];
 
 const CLINICIAN_PROFILE_FIELDS: { key: keyof NonNullable<TenantSummary["clinicianProfileConfig"]>; label: string; description: string; defaultOn: boolean }[] = [

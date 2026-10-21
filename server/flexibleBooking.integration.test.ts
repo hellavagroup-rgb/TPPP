@@ -21,6 +21,7 @@ vi.mock("./db", async () => {
     await isolated.pool.query(`CREATE TABLE "${name}" (LIKE public."${name}" INCLUDING ALL)`);
   }
   await isolated.pool.query(await readFile("migrations/0020_flexible_booking.sql", "utf8"));
+  await isolated.pool.query(await readFile("migrations/0021_availability_time_off_blocks.sql", "utf8"));
   return { db: drizzle(isolated.pool, { schema: tables }), pool: isolated.pool };
 });
 vi.mock("./auth", () => ({
@@ -42,7 +43,7 @@ import { registerFlexibleBookingRoutes, reserveFlexibleSlot } from "./flexibleBo
 import { latestReservation, settleReservation, assertReservationOpen, flagLateReservationPayment, bindReservationPayment, reservationPaymentLock } from "./reservationLifecycle";
 import { reconcileRegistrationPayment } from "./paymentReconciliation";
 import { confirmBooking } from "./bookingConfirmation";
-import { storage } from "./storage";
+import { AvailabilityTimeOffConflictError, storage } from "./storage";
 
 let server: Server;
 let base: string;
@@ -56,7 +57,7 @@ async function request(path: string, body?: unknown, tenant = CYA, admin = true)
 }
 async function fixture() {
   await db.insert(schema.tenants).values([
-    { id: CYA, name: "Test Practice", flexibleBookingEnabled: true, paymentReconciliationEnabled: true, multiClinicianAllocationEnabled: true, registrationFormEnabled: true, registrationFormTemplateId: "registration", oneOffSlotsEnabled: true },
+    { id: CYA, name: "Test Practice", flexibleBookingEnabled: true, paymentReconciliationEnabled: true, multiClinicianAllocationEnabled: true, registrationFormEnabled: true, registrationFormTemplateId: "registration", oneOffSlotsEnabled: true, timeOffBlocksEnabled: true },
     { id: OTHER, name: "Other Practice" },
   ]);
   await db.insert(schema.users).values({ id: "admin", email: "admin@example.invalid", password: "not-a-real-password", role: "admin", name: "Test Admin", tenantId: CYA });
@@ -244,6 +245,22 @@ describe("flexible booking with actual PostgreSQL ownership", () => {
     await db.update(schema.clients).set({ insurer: "Private" }).where(eq(schema.clients.id, "client"));
     await db.update(schema.clinicians).set({ currentLoad: 10 }).where(eq(schema.clinicians.id, "clinician"));
     await expect(reserve()).rejects.toMatchObject({ status: 409 });
+  });
+  it("rejects a date-specific time-off block over an active reservation without releasing it", async () => {
+    await db.insert(schema.timeSlots).values({
+      id: "dated-slot", clinicianId: "clinician", type: "SpecificDate", day: "Wednesday",
+      date: "2026-10-21", startTime: "10:00", endTime: "11:00", tenantId: CYA,
+    });
+    const held = await reserveFlexibleSlot({
+      clientId: "client", slotId: "dated-slot", clinicianId: "clinician", tenantId: CYA, route: "phone",
+    });
+    await expect(storage.createAvailabilityTimeOffBlock({
+      tenantId: CYA, clinicianId: "clinician", date: "2026-10-21",
+      startTime: "10:00", endTime: "11:00", createdByUserId: "admin",
+    })).rejects.toBeInstanceOf(AvailabilityTimeOffConflictError);
+    expect((await latestReservation("client"))?.id).toBe(held.reservation.id);
+    expect((await db.select().from(schema.timeSlots).where(eq(schema.timeSlots.id, "dated-slot")))[0].isBooked).toBe(true);
+    expect(await storage.getAvailabilityTimeOffBlocks(CYA)).toHaveLength(0);
   });
   it("releases an unpaid hold once and permits fresh booking without replaying the old token", async () => {
     const held = await reserve();

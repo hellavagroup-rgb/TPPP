@@ -16,6 +16,7 @@ import { classifyBookingProgress, getWriteUppArrangedIds, isStaffConfirmed } fro
 import { mergePaymentInspection, paymentInspectionOutcome, type PaymentInspectionResult } from "@/lib/paymentInspectionState";
 import { bookingCompletionBlockerCode, bookingCompletionBlockerCopy } from "@shared/bookingCompletion";
 import { practiceToday, slotUnavailableReason } from "@shared/slotEligibility";
+import { isSlotCoveredByTimeOffBlocks } from "@shared/timeOffBlocks";
 import {
   isAwaitingConfirmationStatus,
   isMatchedAllocationStatus,
@@ -247,6 +248,7 @@ export default function Clients() {
   const zoomLinkEmailEnabled = tenant?.zoomLinkEmailEnabled === true;
   const writeuppChecklistEnabled = tenant?.writeuppChecklistEnabled === true;
   const completedBookingsEnabled = tenant?.completedBookingsEnabled === true;
+  const timeOffBlocksEnabled = tenant?.timeOffBlocksEnabled === true;
   const paymentReconciliationEnabled = tenant?.paymentReconciliationEnabled === true;
   const confirmationRecoveryEnabled = tenant?.confirmationRecoveryEnabled === true || tenant?.registrationFormEnabled === true;
   const historicReconciliationEnabled = isAdmin && tenant?.registrationFormEnabled === true;
@@ -331,9 +333,10 @@ export default function Clients() {
     });
   }, [clients]);
 
-  const { data: clinicians = [] } = useQuery<(Clinician & { name: string; availability: any[] })[]>({
+  const { data: clinicians = [] } = useQuery<(Clinician & { name: string; availability: any[]; availabilityTimeOffBlocks?: any[] })[]>({
     queryKey: ["/api/clinicians"],
   });
+  const hasTimeOffBlockData = timeOffBlocksEnabled || clinicians.some(clinician => clinician.availabilityTimeOffBlocks?.length);
 
   const { data: forms = [] } = useQuery<FormTemplateType[]>({
     queryKey: ["/api/forms"],
@@ -457,8 +460,8 @@ export default function Clients() {
   });
 
   const assignClientMutation = useMutation({
-    mutationFn: async ({ clientId, clinicianId, slotId, allocationMethod = "form", allocationReason, formatOverride }: { clientId: string; clinicianId: string; slotId: string; allocationMethod?: "form" | "manual"; allocationReason?: string; formatOverride?: { preference: SessionFormat; slotFormat: SessionFormat } }) => {
-      const response = await apiRequest("POST", `/api/clients/${clientId}/assign`, { clinicianId, slotId, allocationMethod, allocationReason, formatOverride });
+    mutationFn: async ({ clientId, clinicianId, slotId, allocationMethod = "form", allocationReason, formatOverride, occurrenceDate }: { clientId: string; clinicianId: string; slotId: string; allocationMethod?: "form" | "manual"; allocationReason?: string; formatOverride?: { preference: SessionFormat; slotFormat: SessionFormat }; occurrenceDate?: string }) => {
+      const response = await apiRequest("POST", `/api/clients/${clientId}/assign`, { clinicianId, slotId, allocationMethod, allocationReason, formatOverride, occurrenceDate });
       return response.json();
     },
     onSuccess: () => {
@@ -469,8 +472,12 @@ export default function Clients() {
       setIsAllocateDialogOpen(false);
       setAllocationReason("");
     },
-    onError: () => {
-      toast({ title: "Error", description: "Failed to assign client.", variant: "destructive" });
+    onError: (error: Error) => {
+      toast({
+        title: "Assignment not completed",
+        description: mutationErrorMessage(error, "Failed to assign client."),
+        variant: "destructive",
+      });
     },
   });
 
@@ -763,6 +770,7 @@ export default function Clients() {
   const [isAllocateDialogOpen, setIsAllocateDialogOpen] = useState(false);
   const [isManualAllocation, setIsManualAllocation] = useState(false); // Track if current allocation is manual
   const [allocationReason, setAllocationReason] = useState(""); // Reason for allocation decision
+  const [allocationOccurrenceDate, setAllocationOccurrenceDate] = useState("");
   const [sessionFormatPreference, setSessionFormatPreference] = useState<SessionFormatPreference>(null);
   const [allocationPreferenceLoading, setAllocationPreferenceLoading] = useState(false);
   const allocationPreferenceRequestGuard = useRef(createLatestRequestGuard());
@@ -955,11 +963,21 @@ export default function Clients() {
   const [editStatusData, setEditStatusData] = useState({
     status: "Assigned" as ClientType["status"],
     clinicianId: null as string | null,
-    slotId: null as string | null
+    slotId: null as string | null,
+    occurrenceDate: "",
   });
   const changingToConfirmed = !!editStatusClient
     && !["Scheduled", "BookingConfirmed"].includes(editStatusClient.status)
     && ["Scheduled", "BookingConfirmed"].includes(editStatusData.status);
+  const editStatusSelectedSlot = editStatusData.slotId
+    ? clinicians.flatMap(clinician => clinician.availability || []).find(slot => slot.id === editStatusData.slotId)
+    : undefined;
+  const editStatusSelectedClinician = clinicians.find(clinician => clinician.id === editStatusData.clinicianId);
+  const editStatusTimeOffConflict = !!editStatusSelectedSlot && isSlotCoveredByTimeOffBlocks(
+    editStatusSelectedSlot,
+    editStatusSelectedClinician?.availabilityTimeOffBlocks || [],
+    editStatusSelectedSlot.type === "SpecificDate" ? undefined : editStatusData.occurrenceDate || undefined,
+  );
   const managerStatusConfirmation = changingToConfirmed && managerAccess.data?.canOverride === true;
   const editStatusOptions = editStatusClient
     ? getAdminStatusOptions(editStatusClient.status, workflowFeatures)
@@ -973,8 +991,8 @@ export default function Clients() {
   }
 
   const reassignClientMutation = useMutation({
-    mutationFn: async ({ clientId, clinicianId, slotId, status }: { clientId: string; clinicianId: string | null; slotId: string | null; status: string }) => {
-      const response = await apiRequest("POST", `/api/clients/${clientId}/reassign`, { clinicianId, slotId, status });
+    mutationFn: async ({ clientId, clinicianId, slotId, status, occurrenceDate }: { clientId: string; clinicianId: string | null; slotId: string | null; status: string; occurrenceDate?: string }) => {
+      const response = await apiRequest("POST", `/api/clients/${clientId}/reassign`, { clinicianId, slotId, status, occurrenceDate });
       return response.json();
     },
     onSuccess: () => {
@@ -997,7 +1015,8 @@ export default function Clients() {
     setEditStatusData({
       status: client.status,
       clinicianId: client.assignedClinicianId || null,
-      slotId: null
+      slotId: null,
+      occurrenceDate: "",
     });
     setIsEditStatusOpen(true);
   };
@@ -1017,7 +1036,8 @@ export default function Clients() {
       clientId: editStatusClient.id,
       clinicianId: editStatusData.clinicianId,
       slotId: editStatusData.slotId,
-      status: editStatusData.status
+      status: editStatusData.status,
+      occurrenceDate: editStatusData.occurrenceDate || undefined,
     });
   };
 
@@ -1670,6 +1690,19 @@ export default function Clients() {
         });
         return;
       }
+      const targetClinician = clinicians.find(clinician => clinician.id === clinicianId);
+      const selectedSlot = targetClinician?.availability.find(slot => slot.id === slotId);
+      const occurrenceDate = selectedSlot?.type === "SpecificDate"
+        ? selectedSlot.date || undefined
+        : allocationOccurrenceDate || undefined;
+      if (selectedSlot?.type === "Recurring" && hasTimeOffBlockData && !occurrenceDate) {
+        toast({ title: "Choose the appointment date", description: "Select the date for this recurring slot before assigning it.", variant: "destructive" });
+        return;
+      }
+      if (selectedSlot && isSlotCoveredByTimeOffBlocks(selectedSlot, targetClinician?.availabilityTimeOffBlocks || [], occurrenceDate)) {
+        toast({ title: "Time off blocks this appointment", description: "Choose another date or slot.", variant: "destructive" });
+        return;
+      }
       assignClientMutation.mutate({ 
         clientId: clientToAssign.id, 
         clinicianId, 
@@ -1677,6 +1710,7 @@ export default function Clients() {
         allocationMethod,
         allocationReason: allocationReason.trim() || undefined,
         formatOverride,
+        occurrenceDate,
       });
     }
   };
@@ -1685,6 +1719,7 @@ export default function Clients() {
     // Open the same allocation dialog as the "Allocate" button, but mark as manual
     setSelectedClient(client);
     setIsManualAllocation(true);
+    setAllocationOccurrenceDate("");
     fetchClientAvailability(client.id);
     setIsAllocateDialogOpen(true);
   };
@@ -1693,6 +1728,7 @@ export default function Clients() {
     setSelectedClient(client);
     setIsManualAllocation(false);
     setAllocationReason("");
+    setAllocationOccurrenceDate("");
     setSelectedOptions([]);
     fetchClientAvailability(client.id);
     setIsAllocateDialogOpen(true);
@@ -3712,7 +3748,7 @@ export default function Clients() {
       )}
 
       {/* Allocate Dialog (from Kanban board) */}
-      <Dialog open={isAllocateDialogOpen} onOpenChange={(open) => { setIsAllocateDialogOpen(open); if (!open) { setIsManualAllocation(false); setAllocationReason(""); setSelectedOptions([]); setShowUnavailableSlots(false); } }}>
+      <Dialog open={isAllocateDialogOpen} onOpenChange={(open) => { setIsAllocateDialogOpen(open); if (!open) { setIsManualAllocation(false); setAllocationReason(""); setAllocationOccurrenceDate(""); setSelectedOptions([]); setShowUnavailableSlots(false); } }}>
         <DialogContent className="sm:max-w-[600px] max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{isManualAllocation && flexibleBookingEnabled ? "Reserve Agreed Appointment" : multiClinicianAllocationEnabled ? (flexibleBookingEnabled ? "Invite Clinician Preferences" : "Send Clinician Options") : "Allocate Clinician Slot"}</DialogTitle>
@@ -3803,6 +3839,20 @@ export default function Clients() {
                   {clientAvailabilityForAllocation.status === "malformed"
                     ? "The saved answer is historic or malformed. Slots remain selectable but cannot be ranked as matches."
                     : "No saved availability answer was found. Slots remain selectable but cannot be ranked as matches."}
+                </div>
+              )}
+
+              {hasTimeOffBlockData && !flexibleBookingEnabled && !multiClinicianAllocationEnabled && (
+                <div className="grid gap-2 rounded border border-amber-200 bg-amber-50 p-3">
+                  <Label htmlFor="allocation-occurrence-date">Appointment date for recurring slots</Label>
+                  <Input
+                    id="allocation-occurrence-date"
+                    type="date"
+                    value={allocationOccurrenceDate}
+                    onChange={event => setAllocationOccurrenceDate(event.target.value)}
+                    data-testid="input-allocation-occurrence-date"
+                  />
+                  <p className="text-xs text-amber-800">This applies a time-off block to this date only; the recurring slot remains available on other dates.</p>
                 </div>
               )}
 
@@ -3909,13 +3959,20 @@ export default function Clients() {
                           adminOverride: showAllClinicians,
                           zoomLinkRequired: zoomLinkEmailEnabled && slot.locationType === "online" && !isValidZoomLink(clinician.zoomLink),
                         }),
-                      ).filter(slot => showUnavailableSlots || !getSlotUnavailableReason({
-                        isBooked: slot.isBooked,
-                        isPending: isSlotPending(slot),
-                        hasClinicianCapacity: (clinician.maxNewClients ?? 0) > 0,
-                        adminOverride: showAllClinicians,
-                        zoomLinkRequired: zoomLinkEmailEnabled && slot.locationType === "online" && !isValidZoomLink(clinician.zoomLink),
-                      })).map(slot => {
+                      ).filter(slot => {
+                        const unavailable = getSlotUnavailableReason({
+                          isBooked: slot.isBooked,
+                          isPending: isSlotPending(slot),
+                          hasClinicianCapacity: (clinician.maxNewClients ?? 0) > 0,
+                          adminOverride: showAllClinicians,
+                          zoomLinkRequired: zoomLinkEmailEnabled && slot.locationType === "online" && !isValidZoomLink(clinician.zoomLink),
+                        });
+                        const occurrenceDate = slot.type === "SpecificDate" ? undefined : allocationOccurrenceDate || undefined;
+                        const timeOffBlocked = isSlotCoveredByTimeOffBlocks(slot, clinician.availabilityTimeOffBlocks || [], occurrenceDate);
+                        const needsDate = !flexibleBookingEnabled && !multiClinicianAllocationEnabled
+                          && hasTimeOffBlockData && slot.type === "Recurring" && !occurrenceDate;
+                        return showUnavailableSlots || (!unavailable && !timeOffBlocked && !needsDate);
+                      }).map(slot => {
                         const isPending = isSlotPending(slot);
                         const pendingDate = getSlotPendingDate(slot);
                         const availMatch = slotMatchesAvailability(slot, clientAvailabilityForAllocation);
@@ -3924,13 +3981,22 @@ export default function Clients() {
                         
                         const isSelectedForOptions = multiClinicianAllocationEnabled && !(isManualAllocation && flexibleBookingEnabled) && !flexibleBookingEnabled && selectedOptions.some(o => o.clinicianId === clinician.id && o.slotId === slot.id);
                         const missingZoomLink = zoomLinkEmailEnabled && (slot as any).locationType === "online" && !isValidZoomLink(clinician.zoomLink);
-                        const unavailableReason = getSlotUnavailableReason({
+                        const baseUnavailableReason = getSlotUnavailableReason({
                           isBooked: slot.isBooked,
                           isPending,
                           hasClinicianCapacity: (clinician.maxNewClients ?? 0) > 0,
                           adminOverride: showAllClinicians,
                           zoomLinkRequired: missingZoomLink,
                         });
+                        const occurrenceDate = slot.type === "SpecificDate" ? undefined : allocationOccurrenceDate || undefined;
+                        const timeOffBlocked = isSlotCoveredByTimeOffBlocks(slot, clinician.availabilityTimeOffBlocks || [], occurrenceDate);
+                        const needsDate = !flexibleBookingEnabled && !multiClinicianAllocationEnabled
+                          && hasTimeOffBlockData && slot.type === "Recurring" && !occurrenceDate;
+                        const unavailableReason = timeOffBlocked
+                          ? "This date is blocked as clinician time off."
+                          : needsDate
+                            ? "Choose the appointment date before selecting this recurring slot."
+                            : baseUnavailableReason;
                         const isSlotUnavailable = unavailableReason !== null;
                         return (
                           <Button 
@@ -4412,19 +4478,27 @@ export default function Clients() {
                             const isPending = isSlotPending(slot);
                             const pendingDate = getSlotPendingDate(slot);
                             const isSelected = editStatusData.slotId === slot.id && editStatusData.clinicianId === clinician.id;
+                            const blockedByTimeOff = isSlotCoveredByTimeOffBlocks(
+                              slot,
+                              clinician.availabilityTimeOffBlocks || [],
+                              slot.type === "SpecificDate" ? undefined : editStatusData.occurrenceDate || undefined,
+                            );
                             
                             return (
                               <Button
                                 key={slot.id}
                                 variant={isSelected ? "default" : "outline"}
                                 size="sm"
+                                disabled={blockedByTimeOff && !isSelected}
+                                title={blockedByTimeOff ? "This date is blocked as clinician time off." : undefined}
                                 className={`justify-start h-auto py-2 px-3 text-xs relative ${
-                                  isPending && !isSelected ? "bg-amber-50 border-amber-300 hover:border-amber-400 hover:bg-amber-100" : ""
+                                  blockedByTimeOff ? "opacity-50 cursor-not-allowed" : isPending && !isSelected ? "bg-amber-50 border-amber-300 hover:border-amber-400 hover:bg-amber-100" : ""
                                 }`}
                                 onClick={() => setEditStatusData({
                                   ...editStatusData,
                                   clinicianId: clinician.id,
-                                  slotId: slot.id
+                                  slotId: slot.id,
+                                  occurrenceDate: slot.type === "SpecificDate" ? slot.date || "" : "",
                                 })}
                               >
                                 {isPending && <span className="absolute -top-1 -right-1 bg-amber-500 text-white text-[8px] px-1 rounded">Pending</span>}
@@ -4455,11 +4529,26 @@ export default function Clients() {
                     );
                   })}
 
+                  {hasTimeOffBlockData && editStatusSelectedSlot?.type === "Recurring" && (
+                    <div className="grid gap-2 rounded border border-amber-200 bg-amber-50 p-3">
+                      <Label htmlFor="reassign-occurrence-date">Appointment date for recurring slot</Label>
+                      <Input
+                        id="reassign-occurrence-date"
+                        type="date"
+                        value={editStatusData.occurrenceDate}
+                        onChange={event => setEditStatusData({ ...editStatusData, occurrenceDate: event.target.value })}
+                        data-testid="input-reassign-occurrence-date"
+                      />
+                      <p className="text-xs text-amber-800">A time-off block applies to this date only, not every week.</p>
+                      {editStatusTimeOffConflict && <p className="text-xs text-destructive" role="alert">Choose a different date or slot because this appointment overlaps time off.</p>}
+                    </div>
+                  )}
+
                   {editStatusData.slotId && (
                     <Button 
                       variant="ghost" 
                       size="sm"
-                      onClick={() => setEditStatusData({...editStatusData, clinicianId: editStatusClient.assignedClinicianId, slotId: null})}
+                      onClick={() => setEditStatusData({...editStatusData, clinicianId: editStatusClient.assignedClinicianId, slotId: null, occurrenceDate: ""})}
                     >
                       Clear selection (keep current slot)
                     </Button>
@@ -4474,6 +4563,8 @@ export default function Clients() {
             <Button 
               onClick={handleSaveEditStatus}
               disabled={reassignClientMutation.isPending
+                || (hasTimeOffBlockData && editStatusSelectedSlot?.type === "Recurring" && !editStatusData.occurrenceDate)
+                || editStatusTimeOffConflict
                 || (changingToConfirmed && (managerAccess.isLoading || managerAccess.isError))
                 || (managerStatusConfirmation && !!editStatusData.slotId)
                 || (!managerStatusConfirmation && confirmationRecoveryEnabled && editStatusClient?.status === "RegistrationPending"
@@ -4486,7 +4577,7 @@ export default function Clients() {
       </Dialog>
 
       {/* Manual Allocation Dialog (Phone Intake Flow) */}
-      <Dialog open={isManualAllocateOpen} onOpenChange={(open) => { setIsManualAllocateOpen(open); if (!open) setShowUnavailableSlots(false); }}>
+      <Dialog open={isManualAllocateOpen} onOpenChange={(open) => { setIsManualAllocateOpen(open); if (!open) { setAllocationOccurrenceDate(""); setShowUnavailableSlots(false); } }}>
         <DialogContent className="sm:max-w-[600px] max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -4530,6 +4621,19 @@ export default function Clients() {
               </div>
 
               <div className="space-y-4">
+                {hasTimeOffBlockData && !flexibleBookingEnabled && (
+                  <div className="grid gap-2 rounded border border-amber-200 bg-amber-50 p-3">
+                    <Label htmlFor="phone-allocation-occurrence-date">Appointment date for recurring slots</Label>
+                    <Input
+                      id="phone-allocation-occurrence-date"
+                      type="date"
+                      value={allocationOccurrenceDate}
+                      onChange={event => setAllocationOccurrenceDate(event.target.value)}
+                      data-testid="input-phone-allocation-occurrence-date"
+                    />
+                    <p className="text-xs text-amber-800">Time off affects this date only, not every week of the recurring slot.</p>
+                  </div>
+                )}
                 <div className="flex items-center justify-between">
                   <p className="text-sm font-medium text-muted-foreground">AVAILABLE SLOTS</p>
                   <div className="flex items-center gap-3">
@@ -4569,20 +4673,29 @@ export default function Clients() {
                         </div>
                       </div>
                       <div className="grid grid-cols-3 gap-2">
-                        {getActiveSlots(clinician.availability).filter(slot => showUnavailableSlots || !getSlotUnavailableReason({
-                          isBooked: slot.isBooked,
-                          isPending: isSlotPending(slot),
-                          hasClinicianCapacity: (clinician.maxNewClients ?? 0) > 0,
-                          adminOverride: showAllClinicians,
-                          zoomLinkRequired: zoomLinkEmailEnabled && slot.locationType === "online" && !isValidZoomLink(clinician.zoomLink),
-                        })).map(slot => {
-                          const unavailableReason = getSlotUnavailableReason({
+                        {getActiveSlots(clinician.availability).filter(slot => {
+                          const unavailable = getSlotUnavailableReason({
                             isBooked: slot.isBooked,
                             isPending: isSlotPending(slot),
                             hasClinicianCapacity: (clinician.maxNewClients ?? 0) > 0,
                             adminOverride: showAllClinicians,
                             zoomLinkRequired: zoomLinkEmailEnabled && slot.locationType === "online" && !isValidZoomLink(clinician.zoomLink),
                           });
+                          const occurrenceDate = slot.type === "SpecificDate" ? undefined : allocationOccurrenceDate || undefined;
+                          const blocked = isSlotCoveredByTimeOffBlocks(slot, clinician.availabilityTimeOffBlocks || [], occurrenceDate);
+                          const needsDate = hasTimeOffBlockData && !flexibleBookingEnabled && slot.type === "Recurring" && !occurrenceDate;
+                          return showUnavailableSlots || (!unavailable && !blocked && !needsDate);
+                        }).map(slot => {
+                          const occurrenceDate = slot.type === "SpecificDate" ? undefined : allocationOccurrenceDate || undefined;
+                          const timeOffBlocked = isSlotCoveredByTimeOffBlocks(slot, clinician.availabilityTimeOffBlocks || [], occurrenceDate);
+                          const needsDate = hasTimeOffBlockData && !flexibleBookingEnabled && slot.type === "Recurring" && !occurrenceDate;
+                          const unavailableReason = getSlotUnavailableReason({
+                            isBooked: slot.isBooked,
+                            isPending: isSlotPending(slot),
+                            hasClinicianCapacity: (clinician.maxNewClients ?? 0) > 0,
+                            adminOverride: showAllClinicians,
+                            zoomLinkRequired: zoomLinkEmailEnabled && slot.locationType === "online" && !isValidZoomLink(clinician.zoomLink),
+                          }) || (timeOffBlocked ? "This date is blocked as clinician time off." : needsDate ? "Choose the appointment date before selecting this recurring slot." : null);
                           return (
                             <Button
                               key={slot.id}

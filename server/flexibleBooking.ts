@@ -5,10 +5,12 @@ import { z } from "zod";
 import { db } from "./db";
 import { requireAdmin } from "./auth";
 import { storage } from "./storage";
-import { tenants, clients, clinicians, timeSlots, users, formTemplates, formSubmissions, clientClinicianOptions, clinicianInvitations, bookingReservations, auditLogs, type Client, type Tenant, type Clinician, type TimeSlot } from "@shared/schema";
+import { tenants, clients, clinicians, timeSlots, availabilityTimeOffBlocks, users, formTemplates, formSubmissions, clientClinicianOptions, clinicianInvitations, bookingReservations, auditLogs, type Client, type Tenant, type Clinician, type TimeSlot } from "@shared/schema";
 import { flexibleBookingAvailable, reservationDeadline, validReservationHours, formatReservationDeadline } from "@shared/reservationPolicy";
 import { isCyaPsychologyTenant } from "@shared/practicePolicies";
 import { slotUnavailableReason } from "@shared/slotEligibility";
+import { isSlotCoveredByTimeOffBlocks } from "@shared/timeOffBlocks";
+import { findTimeOffBlockForSlot } from "./availabilityTimeOff";
 import { regularSessionConstraints, FIRST_SESSION_TO_AGREE } from "@shared/regularSessionCopy";
 import { isValidZoomLink } from "@shared/bookingZoom";
 import { findSessionFormatPreference, getSessionFormatMismatch } from "../client/src/lib/availability-utils";
@@ -85,12 +87,20 @@ async function liveClinicians(tx: any, client: Client, tenant: Tenant, ids: stri
     if (!clinician || !clinicianEligible(clinician, client)) continue;
     const [user] = clinician.userId ? await tx.select({ name: users.name }).from(users).where(eq(users.id, clinician.userId)) : [];
     const slots: TimeSlot[] = await tx.select().from(timeSlots).where(and(eq(timeSlots.clinicianId, id), eq(timeSlots.tenantId, tenant.id), isNull(timeSlots.retiredAt)));
+    const timeOffBlocks = await tx.select().from(availabilityTimeOffBlocks).where(and(
+      eq(availabilityTimeOffBlocks.tenantId, tenant.id),
+      eq(availabilityTimeOffBlocks.clinicianId, id),
+    ));
     const owners: Client[] = await tx.select().from(clients).where(and(
       eq(clients.tenantId, tenant.id), eq(clients.assignedClinicianId, id),
       inArray(clients.status, ["Assigned", "AwaitingConfirmation", "OptionSelected", "RegistrationPending", "Scheduled", "BookingConfirmed"]),
     ));
-    const available = slots.filter(slot => slotEligible(slot, clinician, tenant, preference) && !owners.some(owner =>
-      owner.assignedSlotId === slot.id || (!owner.assignedSlotId && owner.assignedSlot?.toLowerCase() === `${slot.day || slot.date} ${slot.startTime}`.toLowerCase())));
+    const available = slots.filter(slot =>
+      slotEligible(slot, clinician, tenant, preference)
+      && !isSlotCoveredByTimeOffBlocks(slot, timeOffBlocks)
+      && !owners.some(owner =>
+        owner.assignedSlotId === slot.id || (!owner.assignedSlotId && owner.assignedSlot?.toLowerCase() === `${slot.day || slot.date} ${slot.startTime}`.toLowerCase())),
+    );
     results.push({
       id: clinician.id, name: user?.name || "Your clinician", bio: clinician.bio,
       sessionRatePence: client.agreedRatePence || clinician.sessionRatePence,
@@ -136,6 +146,9 @@ export async function reserveFlexibleSlot(input: { clientId: string; tenantId: s
     const [slot] = await tx.select().from(timeSlots).where(and(eq(timeSlots.id, input.slotId), eq(timeSlots.tenantId, tenant.id))).for("update");
     const preference = await formatPreference(tx, client);
     if (!slot || !slotEligible(slot, clinician, tenant, preference)) fail(409, "This slot is no longer eligible or available. Please choose another.");
+    if (await findTimeOffBlockForSlot(tx, tenant.id, slot)) {
+      fail(409, "This date-specific appointment is blocked as clinician time off. Please choose another.");
+    }
     const owners = await tx.select({ id: clients.id }).from(clients).where(and(
       eq(clients.tenantId, tenant.id), ne(clients.id, client.id),
       inArray(clients.status, ["Assigned", "AwaitingConfirmation", "OptionSelected", "RegistrationPending", "Scheduled", "BookingConfirmed"]),

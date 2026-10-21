@@ -5,7 +5,7 @@ import path from "path";
 import fs from "fs";
 import multer from "multer";
 import ExcelJS from "exceljs";
-import { ClientAllocationUpdateError, ManualAssignmentError, SlotRetirementConflictError, storage } from "./storage";
+import { AvailabilityTimeOffConflictError, ClientAllocationUpdateError, ManualAssignmentError, SlotRetirementConflictError, storage } from "./storage";
 import { getAllocationVisibility } from "./allocationVisibility";
 import { clientCreationConflict } from "./clientCreationError";
 import { writeuppSlotRetirement, WriteuppSlotRetirementError } from "./writeuppSlotRetirement";
@@ -24,6 +24,8 @@ import { canInspectRegistrationPayment } from "@shared/paymentReconciliationElig
 import { classifyPaymentReturn, type PaymentReturnResult } from "./paymentReturn";
 import { bookingCompletionDecision } from "@shared/bookingCompletion";
 import { slotUnavailableReason } from "@shared/slotEligibility";
+import { isValidDate, slotOccursOnDate } from "@shared/timeOffBlocks";
+import { findTimeOffBlockForSlot } from "./availabilityTimeOff";
 import { z } from "zod";
 import { sendEmail, getEmailDeliveryEvent, buildFromAddress, generateFormInviteEmail, generatePasswordResetEmail, generateTaskReminderEmail, generateAvailabilityReminderEmail, generateFormCompletionEmail, generateFormCompletedNotificationEmail, generateNewReferralEmail, generateWaitlistUpdateEmail, generatePaymentLinkEmail, generatePaymentFailureEmail, generateClinicianWelcomeEmail, generateAdminInviteEmail, generateAllocationOptionsEmail, generateBookingConfirmedEmail, generateZoomLinkEmail, getFormCompletionPageContent, GENERIC_PRACTICE_NAME } from "./email";
 import { alertIntakeBounce, isIntakeBounce } from "./intakeBounceAlerts";
@@ -36,7 +38,7 @@ import { syncAllActiveConnections } from "./gmailSync";
 import { requireTenant } from './middleware/tenant';
 import { requireSuperAdmin } from './middleware/superAdmin';
 import { db } from "./db";
-import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, formDeliveries, timeSlots, emailTemplates, nonEngagementCategories, customInsurers, auditLogs, intakeMessages, gmailConnections, paymentCharges, clientClinicianOptions, allocationOfferDeliveries, bookingSnapshots } from "@shared/schema";
+import { tenants, users, clients, clinicians, tasks, formTemplates, formSubmissions, formDeliveries, timeSlots, availabilityTimeOffBlocks, emailTemplates, nonEngagementCategories, customInsurers, auditLogs, intakeMessages, gmailConnections, paymentCharges, clientClinicianOptions, allocationOfferDeliveries, bookingSnapshots } from "@shared/schema";
 import { designatedIntakeCompletionBlocker, shouldValidateIntakeCompletion } from "./workflowFormDesignation";
 import { isStripeConfigured, getStripeInstance, createPaymentLink, chargeOffSession, constructWebhookEvent, childNameFromClientNotes } from "./stripe";
 import { encryptSecret, decryptSecret, isEncryptionConfigured } from "./encryption";
@@ -421,6 +423,9 @@ export async function registerRoutes(
         }
       });
 
+      const allTimeOffBlocks = req.tenant?.id
+        ? await storage.getAvailabilityTimeOffBlocks(req.tenant.id)
+        : [];
       const cliniciansWithAvailability = await Promise.all(
         clinicians.map(async (clinician) => {
           const availability = await storage.getTimeSlotsByClinicianId(clinician.id);
@@ -438,7 +443,11 @@ export async function registerRoutes(
             }
             return slot;
           });
-          return { ...clinician, availability: enrichedAvailability };
+          return {
+            ...clinician,
+            availability: enrichedAvailability,
+            availabilityTimeOffBlocks: allTimeOffBlocks.filter(block => block.clinicianId === clinician.id),
+          };
         })
       );
       
@@ -456,7 +465,10 @@ export async function registerRoutes(
       }
       
       const availability = await storage.getTimeSlotsByClinicianId(clinician.id);
-      res.json({ ...clinician, availability });
+      const availabilityTimeOffBlocks = req.tenant?.id
+        ? await storage.getAvailabilityTimeOffBlocks(req.tenant.id).then(blocks => blocks.filter(block => block.clinicianId === clinician.id))
+        : [];
+      res.json({ ...clinician, availability, availabilityTimeOffBlocks });
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch clinician profile" });
     }
@@ -963,6 +975,85 @@ export async function registerRoutes(
       res.json(slots);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch time slots" });
+    }
+  });
+
+  app.post("/api/clinicians/:clinicianId/time-off-blocks", requireAuth, async (req, res) => {
+    if (!req.tenant?.id || !req.tenant.timeOffBlocksEnabled) {
+      return res.status(404).json({ error: "Time-off blocks are not enabled for this practice" });
+    }
+    const parsed = z.object({
+      date: z.string(),
+      startTime: z.string(),
+      endTime: z.string(),
+    }).safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Choose a valid date and whole-hour time range." });
+    try {
+      const [clinician] = await db.select().from(clinicians).where(and(
+        eq(clinicians.id, req.params.clinicianId),
+        eq(clinicians.tenantId, req.tenant.id),
+      )).limit(1);
+      if (!clinician) return res.status(404).json({ error: "Clinician not found" });
+      if (req.user!.role === "clinician") {
+        const ownClinician = await storage.getClinicianByUserId(req.user!.id);
+        if (!ownClinician || ownClinician.id !== clinician.id) {
+          return res.status(403).json({ error: "Clinicians may only manage their own time off" });
+        }
+      }
+      const block = await storage.createAvailabilityTimeOffBlock({
+        ...parsed.data,
+        tenantId: req.tenant.id,
+        clinicianId: clinician.id,
+        createdByUserId: req.user!.id,
+      });
+      try {
+        await recordActivity(req, "activity_availability_time_off_created", "availability_time_off_block", block.id, {
+          clinicianName: await getClinicianActivityName(clinician.id, req.tenant.id),
+          date: block.date,
+          startTime: block.startTime,
+          endTime: block.endTime,
+        });
+      } catch (activityError) {
+        console.error("Could not record time-off block activity:", activityError);
+      }
+      res.status(201).json(block);
+    } catch (error) {
+      if (error instanceof AvailabilityTimeOffConflictError) return res.status(409).json({ error: error.message });
+      if (error instanceof ReservationError) return res.status(error.status).json({ error: error.message });
+      console.error("Failed to create time-off block:", error);
+      res.status(500).json({ error: "Failed to save time-off block" });
+    }
+  });
+
+  app.delete("/api/time-off-blocks/:id", requireAuth, async (req, res) => {
+    if (!req.tenant?.id) return res.status(403).json({ error: "Access denied" });
+    try {
+      const [block] = await db.select().from(availabilityTimeOffBlocks).where(and(
+        eq(availabilityTimeOffBlocks.id, req.params.id),
+        eq(availabilityTimeOffBlocks.tenantId, req.tenant.id),
+      )).limit(1);
+      if (!block) return res.status(404).json({ error: "Time-off block not found" });
+      if (req.user!.role === "clinician") {
+        const ownClinician = await storage.getClinicianByUserId(req.user!.id);
+        if (!ownClinician || ownClinician.id !== block.clinicianId) {
+          return res.status(403).json({ error: "Clinicians may only manage their own time off" });
+        }
+      }
+      const deleted = await storage.deleteAvailabilityTimeOffBlock(block.id, req.tenant.id);
+      if (!deleted) return res.status(404).json({ error: "Time-off block not found" });
+      try {
+        await recordActivity(req, "activity_availability_time_off_deleted", "availability_time_off_block", block.id, {
+          date: block.date,
+          startTime: block.startTime,
+          endTime: block.endTime,
+        });
+      } catch (activityError) {
+        console.error("Could not record removed time-off block activity:", activityError);
+      }
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Failed to delete time-off block:", error);
+      res.status(500).json({ error: "Failed to remove time-off block" });
     }
   });
 
@@ -1816,7 +1907,10 @@ export async function registerRoutes(
       if (flexibleBookingAvailable(req.tenant || {})) {
         return res.status(409).json({ error: "Use Reserve agreed slot for this practice's new bookings." });
       }
-      const { clinicianId, slotId, allocationMethod = "form", allocationReason, formatOverride } = req.body;
+      const {
+        clinicianId, slotId, allocationMethod = "form", allocationReason,
+        formatOverride, occurrenceDate,
+      } = req.body;
       
       if (!clinicianId || !slotId) {
         return res.status(400).json({ error: "Missing clinicianId or slotId" });
@@ -1832,6 +1926,19 @@ export async function registerRoutes(
         eq(clinicians.id, clinicianId),
         eq(clinicians.tenantId, req.tenant.id),
       )).limit(1);
+      if (occurrenceDate !== undefined && (typeof occurrenceDate !== "string" || !isValidDate(occurrenceDate))) {
+        return res.status(400).json({ error: "Choose a valid calendar date for this appointment slot." });
+      }
+      if (requestedSlot?.type === "Recurring" && occurrenceDate && !slotOccursOnDate(requestedSlot, occurrenceDate)) {
+        return res.status(400).json({ error: "Choose a date that matches this recurring slot." });
+      }
+      if (requestedSlot?.type === "Recurring" && !occurrenceDate) {
+        const hasTimeOffBlocks = req.tenant.timeOffBlocksEnabled
+          || (await storage.getAvailabilityTimeOffBlocks(req.tenant.id)).some(block => block.clinicianId === clinicianId);
+        if (hasTimeOffBlocks) {
+          return res.status(400).json({ error: "Choose the calendar date for this recurring slot." });
+        }
+      }
       if (
         requestedSlot
         && requestedClinician
@@ -1849,6 +1956,7 @@ export async function registerRoutes(
         req.tenant.id,
         allocationMethod,
         allocationReason,
+        occurrenceDate,
       );
       try {
         const slot = await storage.getTimeSlotById(slotId);
@@ -1905,6 +2013,8 @@ export async function registerRoutes(
         }
         if (
           error.reason === "client_already_assigned"
+          ||
+          error.reason === "invalid_occurrence_date"
           ||
           error.reason === "slot_clinician_mismatch"
           || error.reason === "slot_unavailable"
@@ -1997,6 +2107,9 @@ export async function registerRoutes(
             if (!slot) return res.status(400).json({ error: `Slot ${sel.slotId} not found` });
             const unavailable = slotUnavailableReason(slot);
             if (unavailable) return res.status(409).json({ error: `Slot ${sel.slotId} ${unavailable}` });
+            if (await findTimeOffBlockForSlot(db, req.tenant!.id, slot)) {
+              return res.status(409).json({ error: "An appointment option is blocked as clinician time off. Refresh and choose another slot." });
+            }
             if (slot.clinicianId !== sel.clinicianId) {
               return res.status(400).json({ error: `Slot ${sel.slotId} does not belong to clinician ${sel.clinicianId}` });
             }
@@ -2029,7 +2142,8 @@ export async function registerRoutes(
                   if (!option.slotId) return false;
                   const [slot] = await tx.select().from(timeSlots).where(eq(timeSlots.id, option.slotId));
                   return slot && slot.tenantId === req.tenant!.id
-                    && slot.clinicianId === option.clinicianId && !slotUnavailableReason(slot);
+                    && slot.clinicianId === option.clinicianId && !slotUnavailableReason(slot)
+                    && !(await findTimeOffBlockForSlot(tx, req.tenant!.id, slot));
                 }));
                 if (valid.every(Boolean)) throw new Error("REOFFER_ALREADY_PREPARED");
               }
@@ -2039,7 +2153,8 @@ export async function registerRoutes(
               const [slot] = await tx.select().from(timeSlots).where(eq(timeSlots.id, sel.slotId)).for("update");
               const [clinician] = await tx.select().from(clinicians).where(eq(clinicians.id, sel.clinicianId)).limit(1);
               if (!slot || !clinician || slot.tenantId !== req.tenant!.id || clinician.tenantId !== req.tenant!.id
-                || slot.clinicianId !== sel.clinicianId || slotUnavailableReason(slot)) {
+                || slot.clinicianId !== sel.clinicianId || slotUnavailableReason(slot)
+                || await findTimeOffBlockForSlot(tx, req.tenant!.id, slot)) {
                 throw new Error("OFFER_SLOT_UNAVAILABLE");
               }
               if (
@@ -2108,6 +2223,9 @@ export async function registerRoutes(
           if (!slot) return res.status(400).json({ error: `Slot ${sel.slotId} not found` });
           const unavailable = slotUnavailableReason(slot);
           if (unavailable) return res.status(409).json({ error: `Slot ${sel.slotId} ${unavailable}` });
+          if (await findTimeOffBlockForSlot(db, req.tenant!.id, slot)) {
+            return res.status(409).json({ error: "An appointment option is blocked as clinician time off. Refresh and choose another slot." });
+          }
           if (slot.clinicianId !== sel.clinicianId) {
             return res.status(400).json({ error: `Slot ${sel.slotId} does not belong to clinician ${sel.clinicianId}` });
           }
@@ -2182,7 +2300,8 @@ export async function registerRoutes(
                 if (!option.slotId) return false;
                 const [slot] = await tx.select().from(timeSlots).where(eq(timeSlots.id, option.slotId));
                 return slot && slot.tenantId === req.tenant!.id
-                  && slot.clinicianId === option.clinicianId && !slotUnavailableReason(slot);
+                  && slot.clinicianId === option.clinicianId && !slotUnavailableReason(slot)
+                  && !(await findTimeOffBlockForSlot(tx, req.tenant!.id, slot));
               }));
               if (valid.every(Boolean)) throw new Error("REOFFER_ALREADY_PREPARED");
             }
@@ -2201,7 +2320,8 @@ export async function registerRoutes(
           for (const sel of [...selections].sort((a: any, b: any) => a.slotId.localeCompare(b.slotId))) {
             const [slot] = await tx.select().from(timeSlots).where(eq(timeSlots.id, sel.slotId)).for("update");
             if (!slot || slot.clinicianId !== sel.clinicianId
-              || slot.tenantId !== req.tenant!.id || slotUnavailableReason(slot)) {
+              || slot.tenantId !== req.tenant!.id || slotUnavailableReason(slot)
+              || await findTimeOffBlockForSlot(tx, req.tenant!.id, slot)) {
               throw new Error("OFFER_SLOT_UNAVAILABLE");
             }
           }
@@ -2482,7 +2602,8 @@ export async function registerRoutes(
           tx.select().from(clinicians).where(eq(clinicians.id, option.clinicianId)).limit(1).then(rows => rows[0]),
         ]);
         if (!slot || slot.tenantId !== tenant.id || clinician?.tenantId !== tenant.id
-          || slot.clinicianId !== option.clinicianId || slotUnavailableReason(slot)) {
+          || slot.clinicianId !== option.clinicianId || slotUnavailableReason(slot)
+          || await findTimeOffBlockForSlot(tx, tenant.id, slot)) {
           return res.status(409).json({ code: "OFFER_CLOSED", error: "An appointment option is no longer available. Please offer new choices instead." });
         }
         if (tenant.zoomLinkEmailEnabled === true && onlineBookingNeedsZoomLink(slot?.locationType) && !isValidZoomLink(clinician?.zoomLink)) {
@@ -2643,7 +2764,7 @@ export async function registerRoutes(
 
   app.post("/api/clients/:clientId/reassign", requireAdmin, auditLog("reassign", "client"), async (req, res) => {
     try {
-      const { clinicianId, slotId, status } = req.body;
+      const { clinicianId, slotId, status, occurrenceDate } = req.body;
       
       if (!status) {
         return res.status(400).json({ error: "Missing status" });
@@ -2653,6 +2774,25 @@ export async function registerRoutes(
       if (!clientToReassign) return res.status(404).json({ error: "Client not found" });
       if (clientToReassign.tenantId !== req.tenant?.id) return res.status(403).json({ error: "Access denied" });
       if (clientToReassign.completedAt) return res.status(409).json({ error: "Reopen this completed booking before editing its status or allocation." });
+      if (occurrenceDate !== undefined && (typeof occurrenceDate !== "string" || !isValidDate(occurrenceDate))) {
+        return res.status(400).json({ error: "Choose a valid calendar date for this appointment slot." });
+      }
+      if (slotId && req.tenant?.id) {
+        const [newSlot] = await db.select().from(timeSlots).where(and(
+          eq(timeSlots.id, slotId),
+          eq(timeSlots.tenantId, req.tenant.id),
+        )).limit(1);
+        if (newSlot?.type === "Recurring" && occurrenceDate && !slotOccursOnDate(newSlot, occurrenceDate)) {
+          return res.status(400).json({ error: "Choose a date that matches this recurring slot." });
+        }
+        if (newSlot?.type === "Recurring" && !occurrenceDate) {
+          const hasTimeOffBlocks = req.tenant.timeOffBlocksEnabled
+            || (await storage.getAvailabilityTimeOffBlocks(req.tenant.id)).some(block => block.clinicianId === newSlot.clinicianId);
+          if (hasTimeOffBlocks) {
+            return res.status(400).json({ error: "Choose the calendar date for this recurring slot." });
+          }
+        }
+      }
       const transition = validateAdminStatusTransition(clientToReassign.status, status, {
         multiClinicianAllocationEnabled: req.tenant?.multiClinicianAllocationEnabled === true,
         registrationFormEnabled: req.tenant?.registrationFormEnabled === true,
@@ -2687,6 +2827,7 @@ export async function registerRoutes(
         finalReassignment
           ? String(req.get("Idempotency-Key") || `reassignment-confirmation-${req.params.clientId}`)
           : undefined,
+        occurrenceDate,
       );
       if (!reassignmentResult) {
         return res.status(404).json({ error: "Client not found" });
@@ -2780,6 +2921,12 @@ export async function registerRoutes(
       console.error("Failed to reassign client:", error);
       if (error?.message === "Reopen this completed booking before editing its status or allocation.") {
         return res.status(409).json({ error: error.message });
+      }
+      if (error instanceof ManualAssignmentError && error.reason === "slot_unavailable") {
+        return res.status(409).json({ error: error.message });
+      }
+      if (error instanceof ManualAssignmentError && error.reason === "invalid_occurrence_date") {
+        return res.status(400).json({ error: error.message });
       }
       // Return validation errors as 400
       if (error instanceof ManualAssignmentError && error.reason === "access_denied") {
@@ -3117,7 +3264,8 @@ export async function registerRoutes(
             status: opt.status,
             available: Boolean(slotRow && clinicianRow?.tenantId === optionRow.tenantId
               && slotRow.clinicianId === opt.clinicianId
-              && slotRow.tenantId === optionRow.tenantId && !slotUnavailableReason(slotRow)),
+              && slotRow.tenantId === optionRow.tenantId && !slotUnavailableReason(slotRow)
+              && !(await findTimeOffBlockForSlot(db, optionRow.tenantId, slotRow))),
             clinicianName: clinicianUser?.name || "Clinician",
             slot: slotRow
               ? { type: slotRow.type, day: slotRow.day, date: slotRow.date, startDate: slotRow.startDate, endDate: slotRow.endDate, frequency: slotRow.frequency, startTime: slotRow.startTime, endTime: slotRow.endTime, locationType: slotRow.locationType }
@@ -3286,7 +3434,10 @@ export async function registerRoutes(
             eq(timeSlots.tenantId, optionRow.tenantId),
             eq(timeSlots.clinicianId, selectedOption.clinicianId),
           )).for("update");
-          if (!currentSlot || slotUnavailableReason(currentSlot)) throw new Error("SELECTED_SLOT_UNAVAILABLE");
+          if (!currentSlot || slotUnavailableReason(currentSlot)
+            || await findTimeOffBlockForSlot(tx, optionRow.tenantId, currentSlot)) {
+            throw new Error("SELECTED_SLOT_UNAVAILABLE");
+          }
           const claimed = await tx.update(timeSlots).set({ isBooked: true })
             .where(and(
               eq(timeSlots.id, selectedOption.slotId),
@@ -5096,6 +5247,7 @@ export async function registerRoutes(
       res.json({
         defaultLocationType: req.tenant.defaultLocationType ?? null,
         oneOffSlotsEnabled: req.tenant.oneOffSlotsEnabled ?? false,
+        timeOffBlocksEnabled: req.tenant.timeOffBlocksEnabled ?? false,
       });
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch tenant features" });
@@ -7406,6 +7558,7 @@ export async function registerRoutes(
         writeuppChecklistEnabled: z.boolean().optional(),
         completedBookingsEnabled: z.boolean().optional(),
         oneOffSlotsEnabled: z.boolean().optional(),
+        timeOffBlocksEnabled: z.boolean().optional(),
         clinicianProfileConfig: z.object({
           showTier: z.boolean().optional(),
           showTherapyMode: z.boolean().optional(),

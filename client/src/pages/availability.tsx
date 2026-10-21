@@ -27,18 +27,20 @@ import { Label } from "@/components/ui/label";
 import { DatePicker } from "@/components/ui/date-picker";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import type { Clinician, TimeSlot, Client } from "@shared/schema";
+import type { AvailabilityTimeOffBlock, Clinician, TimeSlot, Client } from "@shared/schema";
 import { addOneHour, splitIntoHourlySlots, TIME_OPTIONS } from "@/lib/availability-utils";
 import { useOperationalRefresh, invalidateOperationalData } from "@/lib/operationalRefresh";
 import { canEditSlotLocation } from "@/lib/slotLocationPermissions";
+import { isSlotCoveredByTimeOffBlocks } from "@shared/timeOffBlocks";
 
-type SlotType = "Recurring" | "Vacation" | "SpecificDate";
+type SlotType = "Recurring" | "Vacation" | "SpecificDate" | "TimeOffBlock";
 
 interface ClinicianWithSlots extends Clinician {
   name: string;
   email?: string;
   avatar: string;
   slots: TimeSlot[];
+  availabilityTimeOffBlocks?: AvailabilityTimeOffBlock[];
 }
 
 interface SlotForDate {
@@ -65,6 +67,7 @@ export default function Availability() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [deletingSlot, setDeletingSlot] = useState<{ slot: TimeSlot; clinicianId: string } | null>(null);
+  const [deletingTimeOffBlock, setDeletingTimeOffBlock] = useState<AvailabilityTimeOffBlock | null>(null);
 
   const [newSlotType, setNewSlotType] = useState<SlotType>("Recurring");
   const [newDate, setNewDate] = useState(format(new Date(), "yyyy-MM-dd"));
@@ -77,7 +80,7 @@ export default function Availability() {
   const [newEndTime, setNewEndTime] = useState("10:00");
   const [dialogClinicianId, setDialogClinicianId] = useState<string>("");
 
-  const { data: tenant } = useQuery<{ defaultLocationType?: string; oneOffSlotsEnabled?: boolean }>({
+  const { data: tenant } = useQuery<{ defaultLocationType?: string; oneOffSlotsEnabled?: boolean; timeOffBlocksEnabled?: boolean }>({
     queryKey: ["/api/tenant/features"],
     enabled: user?.role === "admin" || user?.role === "clinician",
   });
@@ -104,7 +107,7 @@ export default function Availability() {
   const [isAllocating, setIsAllocating] = useState(false);
   const [allocatingClientId, setAllocatingClientId] = useState<string | null>(null);
   const [allocatingClient, setAllocatingClient] = useState<Client | null>(null);
-  const [inPersonWarning, setInPersonWarning] = useState<{ slot: TimeSlot; clinicianId: string } | null>(null);
+  const [inPersonWarning, setInPersonWarning] = useState<{ slot: TimeSlot; clinicianId: string; occurrenceDate: string } | null>(null);
 
   const { data: clinicians = [] } = useQuery<(Clinician & { name: string; availability?: TimeSlot[] })[]>({
     queryKey: ["/api/clinicians"],
@@ -136,6 +139,7 @@ export default function Availability() {
       ...clinician,
       avatar: clinician.name?.substring(0, 2).toUpperCase() || "??",
       slots: clinician.availability || [],
+      availabilityTimeOffBlocks: (clinician as any).availabilityTimeOffBlocks || [],
     })),
   }), [clinicians]);
 
@@ -149,12 +153,60 @@ export default function Availability() {
     },
   });
 
+  const addTimeOffBlockMutation = useMutation({
+    mutationFn: async ({ clinicianId, date, startTime, endTime }: {
+      clinicianId: string; date: string; startTime: string; endTime: string;
+    }) => {
+      const response = await apiRequest("POST", `/api/clinicians/${clinicianId}/time-off-blocks`, { date, startTime, endTime });
+      return response.json();
+    },
+    onSuccess: () => {
+      invalidateOperationalData(queryClient);
+      toast({ title: "Time off blocked", description: "The selected hours are unavailable on that date." });
+      setIsDialogOpen(false);
+      resetForm();
+    },
+    onError: (error: Error) => {
+      invalidateOperationalData(queryClient);
+      let description = "Failed to save time-off block.";
+      try {
+        const parsed = JSON.parse(error.message.slice(error.message.indexOf("{")));
+        description = parsed?.error || description;
+      } catch {}
+      toast({ title: "Time off not saved", description, variant: "destructive" });
+    },
+  });
+
+  const deleteTimeOffBlockMutation = useMutation({
+    mutationFn: async (blockId: string) => {
+      const response = await apiRequest("DELETE", `/api/time-off-blocks/${blockId}`);
+      return response.json();
+    },
+    onSuccess: () => {
+      invalidateOperationalData(queryClient);
+      toast({ title: "Time-off block removed" });
+      setDeletingTimeOffBlock(null);
+    },
+    onError: (error: Error) => {
+      invalidateOperationalData(queryClient);
+      let description = "Failed to remove time-off block.";
+      try {
+        const parsed = JSON.parse(error.message.slice(error.message.indexOf("{")));
+        description = parsed?.error || description;
+      } catch {}
+      toast({ title: "Time off not removed", description, variant: "destructive" });
+    },
+  });
+
   const assignClientMutation = useMutation({
-    mutationFn: async ({ clientId, clinicianId, slotId }: { clientId: string; clinicianId: string; slotId: string }) => {
+    mutationFn: async ({ clientId, clinicianId, slotId, occurrenceDate }: {
+      clientId: string; clinicianId: string; slotId: string; occurrenceDate: string;
+    }) => {
       const response = await apiRequest("POST", `/api/clients/${clientId}/assign`, {
         clinicianId,
         slotId,
-        allocationMethod: "manual"
+        allocationMethod: "manual",
+        occurrenceDate,
       });
       return response.json();
     },
@@ -169,8 +221,13 @@ export default function Availability() {
       setAllocatingClientId(null);
       setAllocatingClient(null);
     },
-    onError: () => {
-      toast({ title: "Error", description: "Failed to allocate client.", variant: "destructive" });
+    onError: (error: Error) => {
+      let description = "Failed to allocate client.";
+      try {
+        const parsed = JSON.parse(error.message.slice(error.message.indexOf("{")));
+        description = parsed?.error || description;
+      } catch {}
+      toast({ title: "Error", description, variant: "destructive" });
     },
   });
 
@@ -330,7 +387,9 @@ export default function Availability() {
       }
     });
 
-    return results.sort((a, b) => (a.slot.startTime ?? "").localeCompare(b.slot.startTime ?? ""));
+    return results
+      .filter(({ slot }) => !isSlotCoveredByTimeOffBlocks(slot, clinician.availabilityTimeOffBlocks || [], dateStr))
+      .sort((a, b) => (a.slot.startTime ?? "").localeCompare(b.slot.startTime ?? ""));
   };
 
   const resetForm = () => {
@@ -349,6 +408,16 @@ export default function Availability() {
   const handleAddAvailability = () => {
     const clinician = allCliniciansData.find(c => c.id === dialogClinicianId);
     if (!clinician) return;
+
+    if (newSlotType === "TimeOffBlock") {
+      addTimeOffBlockMutation.mutate({
+        clinicianId: dialogClinicianId,
+        date: newDate,
+        startTime: newStartTime,
+        endTime: newEndTime,
+      });
+      return;
+    }
 
     if (newSlotType === "Recurring" && selectedDays.length === 0) {
       toast({ title: "Validation Error", description: "Select at least one day of the week.", variant: "destructive" });
@@ -533,12 +602,12 @@ export default function Availability() {
     );
   };
 
-  const handleSlotClick = (slot: TimeSlot, clinicianId: string) => {
+  const handleSlotClick = (slot: TimeSlot, clinicianId: string, occurrenceDate: string) => {
     if (!isAllocating || !allocatingClientId) return;
     if (slot.isBooked || slot.type === "Vacation") return;
 
     if ((slot as any).locationType === "in_person") {
-      setInPersonWarning({ slot, clinicianId });
+      setInPersonWarning({ slot, clinicianId, occurrenceDate });
       return;
     }
 
@@ -546,6 +615,7 @@ export default function Availability() {
       clientId: allocatingClientId,
       clinicianId,
       slotId: slot.id,
+      occurrenceDate,
     });
   };
 
@@ -555,6 +625,7 @@ export default function Availability() {
       clientId: allocatingClientId,
       clinicianId: inPersonWarning.clinicianId,
       slotId: inPersonWarning.slot.id,
+      occurrenceDate: inPersonWarning.occurrenceDate,
     });
     setInPersonWarning(null);
   };
@@ -657,6 +728,9 @@ export default function Availability() {
                     <SelectContent>
                       <SelectItem value="Recurring">Availability</SelectItem>
                       <SelectItem value="Vacation">Time Off / Vacation</SelectItem>
+                      {tenant?.timeOffBlocksEnabled && (
+                        <SelectItem value="TimeOffBlock">Block Hours on a Date</SelectItem>
+                      )}
                       {tenant?.oneOffSlotsEnabled && (
                         <SelectItem value="SpecificDate">One-off Slot</SelectItem>
                       )}
@@ -664,7 +738,7 @@ export default function Availability() {
                   </Select>
                 </div>
 
-                {newSlotType !== "Vacation" && (
+                {newSlotType !== "Vacation" && newSlotType !== "TimeOffBlock" && (
                   <div className="grid gap-2">
                     <Label>Location Type</Label>
                     <div className="flex gap-4">
@@ -761,9 +835,9 @@ export default function Availability() {
                   </>
                 )}
 
-                {newSlotType === "SpecificDate" && (
+                {(newSlotType === "SpecificDate" || newSlotType === "TimeOffBlock") && (
                   <div className="grid gap-2">
-                    <Label>Date</Label>
+                    <Label>{newSlotType === "TimeOffBlock" ? "Time-Off Date" : "Date"}</Label>
                     <DatePicker value={newDate} onChange={setNewDate} placeholder="Select date" />
                   </div>
                 )}
@@ -793,7 +867,7 @@ export default function Availability() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent className="max-h-[200px]">
-                          {TIME_OPTIONS.filter(t => t <= "20:00").map(time => (
+                          {TIME_OPTIONS.filter(t => t <= "20:00" && (newSlotType !== "TimeOffBlock" || t.endsWith(":00"))).map(time => (
                             <SelectItem key={`start-${time}`} value={time}>{time}</SelectItem>
                           ))}
                         </SelectContent>
@@ -806,7 +880,7 @@ export default function Availability() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent className="max-h-[200px]">
-                          {TIME_OPTIONS.map(time => (
+                          {TIME_OPTIONS.filter(t => newSlotType !== "TimeOffBlock" || t.endsWith(":00")).map(time => (
                             <SelectItem key={`end-${time}`} value={time}>{time}</SelectItem>
                           ))}
                         </SelectContent>
@@ -815,7 +889,11 @@ export default function Availability() {
                   </div>
                 )}
 
-                {newSlotType !== "Vacation" && (
+                {newSlotType === "TimeOffBlock" ? (
+                  <div className="text-xs text-muted-foreground bg-amber-50 p-2 rounded">
+                    This blocks {newStartTime}–{newEndTime} on {newDate}; your recurring availability stays unchanged on other dates.
+                  </div>
+                ) : newSlotType !== "Vacation" && (
                   <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded">
                     {(() => {
                       const preview = splitIntoHourlySlots(newStartTime, newEndTime);
@@ -829,10 +907,10 @@ export default function Availability() {
               <DialogFooter className="shrink-0">
                 <Button 
                   onClick={handleAddAvailability} 
-                  disabled={!dialogClinicianId || addSlotsMutation.isPending}
+                  disabled={!dialogClinicianId || addSlotsMutation.isPending || addTimeOffBlockMutation.isPending}
                   data-testid="button-save-availability"
                 >
-                  {addSlotsMutation.isPending ? "Saving..." : "Save to Schedule"}
+                  {addSlotsMutation.isPending || addTimeOffBlockMutation.isPending ? "Saving..." : newSlotType === "TimeOffBlock" ? "Block These Hours" : "Save to Schedule"}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -896,10 +974,12 @@ export default function Availability() {
 
                   {visibleDates.map(date => {
                     const slotsForDate = getSlotsForDate(clinician, date);
+                    const dateString = format(date, "yyyy-MM-dd");
+                    const timeOffBlocks = (clinician.availabilityTimeOffBlocks || []).filter((block: AvailabilityTimeOffBlock) => block.date === dateString);
                     
                     return (
                       <td key={`${clinician.id}-${date.toString()}`} className="p-1 border-r min-h-[80px] bg-card align-top">
-                      {slotsForDate.length === 0 ? (
+                      {slotsForDate.length === 0 && timeOffBlocks.length === 0 ? (
                         <div className="h-full flex items-center justify-center text-xs text-muted-foreground/50">
                           -
                         </div>
@@ -908,7 +988,7 @@ export default function Availability() {
                           {slotsForDate.map(({ slot, isActive, isFuture, validFrom, validUntil }) => (
                             <div
                               key={slot.id}
-                              onClick={() => isActive && !slot.isBooked && slot.type !== "Vacation" && handleSlotClick(slot, clinician.id)}
+                              onClick={() => isActive && !slot.isBooked && slot.type !== "Vacation" && handleSlotClick(slot, clinician.id, dateString)}
                               className={cn(
                                 "p-1.5 pr-7 rounded text-[10px] border transition-all group relative",
                                 slot.type === "Vacation"
@@ -988,6 +1068,29 @@ export default function Availability() {
                               )}
                             </div>
                           ))}
+                          {timeOffBlocks.map((block: AvailabilityTimeOffBlock) => (
+                            <div
+                              key={block.id}
+                              className="p-1.5 pr-7 rounded text-[10px] border border-amber-300 bg-amber-50 text-amber-900 relative"
+                              data-testid={`time-off-block-${block.id}`}
+                            >
+                              <div className="font-semibold">TIME OFF</div>
+                              <div>{block.startTime}–{block.endTime}</div>
+                              {!isAllocating && (user?.role === "admin" || (user?.role === "clinician" && clinician.userId === user.id)) && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="absolute right-0.5 top-0.5 h-6 w-6 bg-white/80 hover:bg-white text-destructive p-0"
+                                  aria-label="Remove time-off block"
+                                  title="Remove time-off block"
+                                  onClick={() => setDeletingTimeOffBlock(block)}
+                                  data-testid={`button-delete-time-off-${block.id}`}
+                                >
+                                  <Trash2 className="h-2.5 w-2.5" />
+                                </Button>
+                              )}
+                            </div>
+                          ))}
                         </div>
                       )}
                       </td>
@@ -1018,6 +1121,29 @@ export default function Availability() {
               data-testid="button-inperson-confirm"
             >
               Confirm
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!deletingTimeOffBlock} onOpenChange={(open) => { if (!open) setDeletingTimeOffBlock(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove time-off block?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deletingTimeOffBlock
+                ? `${deletingTimeOffBlock.date}, ${deletingTimeOffBlock.startTime}–${deletingTimeOffBlock.endTime}. This time may become available for allocation again.`
+                : "This time may become available for allocation again."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep block</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deletingTimeOffBlock && deleteTimeOffBlockMutation.mutate(deletingTimeOffBlock.id)}
+              disabled={deleteTimeOffBlockMutation.isPending}
+              data-testid="button-confirm-delete-time-off"
+            >
+              {deleteTimeOffBlockMutation.isPending ? "Removing..." : "Remove block"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

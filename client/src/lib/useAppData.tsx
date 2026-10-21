@@ -45,8 +45,8 @@ export function useAppData() {
   });
 
   const assignClinicianMutation = useMutation({
-    mutationFn: ({ clientId, clinicianId, slotId }: { clientId: string; clinicianId: string; slotId: string }) =>
-      api.assignClinician(clientId, clinicianId, slotId),
+    mutationFn: ({ clientId, clinicianId, slotId, occurrenceDate }: { clientId: string; clinicianId: string; slotId: string; occurrenceDate?: string }) =>
+      api.assignClinician(clientId, clinicianId, slotId, occurrenceDate),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["clients"] });
       queryClient.invalidateQueries({ queryKey: ["clinicians"] });
@@ -117,8 +117,8 @@ export function useAppData() {
     addClient: createClientMutation.mutate,
     updateClientStatus: (id: string, status: any) => 
       updateClientMutation.mutate({ id, updates: { status } }),
-    assignClinician: (clientId: string, clinicianId: string, slotId: string) =>
-      assignClinicianMutation.mutate({ clientId, clinicianId, slotId }),
+    assignClinician: (clientId: string, clinicianId: string, slotId: string, occurrenceDate?: string) =>
+      assignClinicianMutation.mutate({ clientId, clinicianId, slotId, occurrenceDate }),
     updateClinicianAvailability: (clinicianId: string, slots: any[]) =>
       updateClinicianAvailabilityMutation.mutate({ clinicianId, slots }),
     addForm: createFormMutation.mutate,

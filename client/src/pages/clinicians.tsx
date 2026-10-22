@@ -113,6 +113,7 @@ export default function Clinicians() {
     maxNewClients: 3,
     worksWithCouples: false,
     allocateForBupa: false,
+    emdrTrained: false,
     insurers: [] as string[],
     contactMethods: [] as string[],
     sessionRatePence: null as number | null,
@@ -169,7 +170,7 @@ export default function Clinicians() {
       setNewRateStr("");
       setNewClinician({
         name: "", email: "", tier: "Mid", therapyMode: "", bio: "", location: "", nhsTrust: "",
-        capacity: 15, maxNewClients: 3, worksWithCouples: false, allocateForBupa: false, insurers: [], contactMethods: [],
+        capacity: 15, maxNewClients: 3, worksWithCouples: false, allocateForBupa: false, emdrTrained: false, insurers: [], contactMethods: [],
         sessionRatePence: null,
       });
     },
@@ -207,6 +208,7 @@ export default function Clinicians() {
       maxNewClients: clinician.maxNewClients ?? 0,
       worksWithCouples: clinician.worksWithCouples || false,
       allocateForBupa: clinician.allocateForBupa || false,
+      emdrTrained: clinician.emdrTrained || false,
       insurers: clinician.insurers || [],
       contactMethods: clinician.contactMethods || [],
       isActive: clinician.isActive !== false,
@@ -243,6 +245,7 @@ export default function Clinicians() {
     if (editedClinician.maxNewClients !== undefined) updates.maxNewClients = editedClinician.maxNewClients;
     if (editedClinician.worksWithCouples !== undefined) updates.worksWithCouples = editedClinician.worksWithCouples;
     if (editedClinician.allocateForBupa !== undefined) updates.allocateForBupa = editedClinician.allocateForBupa;
+    if (editedClinician.emdrTrained !== undefined) updates.emdrTrained = editedClinician.emdrTrained;
     if (editedClinician.insurers !== undefined) updates.insurers = editedClinician.insurers;
     if (editedClinician.contactMethods !== undefined) updates.contactMethods = editedClinician.contactMethods;
     if (editedClinician.isActive !== undefined) updates.isActive = editedClinician.isActive;
@@ -310,6 +313,11 @@ export default function Clinicians() {
                       {clinician.worksWithCouples && (
                         <Badge variant="secondary" className="text-[10px] font-normal bg-indigo-50 text-indigo-700 hover:bg-indigo-100">
                           Couples
+                        </Badge>
+                      )}
+                      {clinician.emdrTrained && (
+                        <Badge variant="secondary" className="text-[10px] font-normal bg-emerald-50 text-emerald-700 hover:bg-emerald-100" data-testid={`badge-emdr-${clinician.id}`}>
+                          EMDR Trained
                         </Badge>
                       )}
                       {tenant?.zoomLinkEmailEnabled === true && hasActiveOnlineAvailability(clinician.availability) && !isValidZoomLink(clinician.zoomLink) && (
@@ -659,6 +667,14 @@ export default function Clinicians() {
                   />
                   <Label htmlFor="bupa" className="font-medium cursor-pointer">Allocate for Bupa</Label>
                 </div>
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="emdr-trained"
+                    checked={editedClinician.emdrTrained || false}
+                    onCheckedChange={(checked) => setEditedClinician({...editedClinician, emdrTrained: !!checked})}
+                  />
+                  <Label htmlFor="emdr-trained" className="font-medium cursor-pointer">EMDR Trained</Label>
+                </div>
               </div>
 
               {tenant?.zoomLinkEmailEnabled === true && (
@@ -873,6 +889,14 @@ export default function Clinicians() {
                 onCheckedChange={(checked) => setNewClinician({...newClinician, allocateForBupa: !!checked})}
               />
               <Label htmlFor="new-bupa" className="font-medium cursor-pointer">Allocate for Bupa</Label>
+            </div>
+            <div className="flex items-center space-x-2">
+              <Checkbox
+                id="new-emdr-trained"
+                checked={newClinician.emdrTrained}
+                onCheckedChange={(checked) => setNewClinician({...newClinician, emdrTrained: !!checked})}
+              />
+              <Label htmlFor="new-emdr-trained" className="font-medium cursor-pointer">EMDR Trained</Label>
             </div>
 
             {stripeEnabled && (

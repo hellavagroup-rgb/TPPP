@@ -82,6 +82,7 @@ export default function ClinicianProfile() {
       maxNewClients: formData.maxNewClients,
       worksWithCouples: formData.worksWithCouples,
       allocateForBupa: formData.allocateForBupa,
+      emdrTrained: formData.emdrTrained,
       email: formData.email,
     });
   };
@@ -252,6 +253,14 @@ export default function ClinicianProfile() {
                       onCheckedChange={(checked) => setFormData({...formData, worksWithCouples: !!checked})}
                     />
                     <Label htmlFor="couples" className="font-medium cursor-pointer">Works with Couples</Label>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <Checkbox
+                      id="emdr-trained"
+                      checked={formData.emdrTrained || false}
+                      onCheckedChange={(checked) => setFormData({...formData, emdrTrained: !!checked})}
+                    />
+                    <Label htmlFor="emdr-trained" className="font-medium cursor-pointer">EMDR Trained</Label>
                   </div>
                 </div>
               </div>

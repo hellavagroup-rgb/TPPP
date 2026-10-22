@@ -129,6 +129,7 @@ export const clinicians = pgTable("clinicians", {
   nhsTrust: text("nhs_trust"),
   worksWithCouples: boolean("works_with_couples").default(false),
   allocateForBupa: boolean("allocate_for_bupa").default(false),
+  emdrTrained: boolean("emdr_trained").notNull().default(false),
   tier: text("tier", { enum: ["High", "Mid", "Low"] }),
   therapyMode: text("therapy_mode"),
   zoomLink: text("zoom_link"),

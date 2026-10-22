@@ -36,7 +36,7 @@ function setup({ role = "clinician", failed = false, deleteFailed = false, booke
       return new Response(JSON.stringify(failed ? { error: "This slot is linked to a booking or reservation and cannot change format. Refresh availability." } : { locationType }), { status: failed ? 409 : 200 });
     }
     const data = path === "/api/clinicians" ? [
-      { id: "own", userId: "user-a", name: "Own Clinician", avatar: "O", isActive: true, availability: [
+      { id: "own", userId: "user-a", name: "Own Clinician", avatar: "O", isActive: true, emdrTrained: true, availability: [
         { id: "own-slot", type: "Recurring", day: "Monday", startTime: "09:00", endTime: "10:00", isBooked: booked, retiredAt: retired ? new Date().toISOString() : null, startDate: future ? "2099-01-01" : null, locationType },
       ] },
       { id: "colleague", userId: "user-b", name: "Other Clinician", avatar: "C", isActive: true, availability: [
@@ -59,6 +59,7 @@ function setup({ role = "clinician", failed = false, deleteFailed = false, booke
 
 it("shows a clinician's own retire icon without hovering and completes deletion through the real dialog", async () => {
   const { deletions, fetchMock } = setup();
+  expect(await screen.findByText("EMDR Trained")).toBeTruthy();
   const button = await screen.findByTestId("button-delete-slot-own-slot");
   expect(button.getAttribute("aria-label")).toBe("Retire availability slot");
   expect(button.parentElement?.className).not.toContain("opacity-0");

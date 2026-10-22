@@ -364,6 +364,7 @@ export class DatabaseStorage implements IStorage {
         nhsTrust: clinicians.nhsTrust,
         worksWithCouples: clinicians.worksWithCouples,
         allocateForBupa: clinicians.allocateForBupa,
+        emdrTrained: clinicians.emdrTrained,
         tier: clinicians.tier,
         therapyMode: clinicians.therapyMode,
         zoomLink: clinicians.zoomLink,

@@ -66,6 +66,7 @@ export default function Availability() {
   const DAYS_TO_SHOW = 6;
 
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [emdrOnly, setEmdrOnly] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [deletingSlot, setDeletingSlot] = useState<{ slot: TimeSlot; clinicianId: string } | null>(null);
   const [deletingTimeOffBlock, setDeletingTimeOffBlock] = useState<AvailabilityTimeOffBlock | null>(null);
@@ -320,6 +321,9 @@ export default function Availability() {
     const tierB = tierOrder[b.tier || "Mid"] ?? 1;
     return tierA - tierB;
   });
+  const displayedClinicians = emdrOnly
+    ? allCliniciansData.filter(clinician => clinician.emdrTrained === true)
+    : allCliniciansData;
 
   const visibleDates = Array.from({ length: DAYS_TO_SHOW }, (_, i) => addDays(weekStart, i));
 
@@ -700,6 +704,19 @@ export default function Availability() {
         </div>
 
         <div className="flex items-center gap-2">
+          {user?.role !== "clinician" && (
+            <div className="flex items-center gap-2">
+              <Switch
+                id="availability-emdr-filter"
+                checked={emdrOnly}
+                onCheckedChange={setEmdrOnly}
+                data-testid="switch-emdr-filter"
+              />
+              <Label htmlFor="availability-emdr-filter" className="text-sm cursor-pointer whitespace-nowrap">
+                EMDR-trained only
+              </Label>
+            </div>
+          )}
           {user?.role === "admin" && lastUpdated && (
             <span className="text-xs text-muted-foreground">
               Updated {new Date(lastUpdated).toLocaleTimeString()}
@@ -1006,7 +1023,7 @@ export default function Availability() {
               </tr>
             </thead>
             <tbody>
-              {allCliniciansData.map((clinician, clinicianIndex) => (
+              {displayedClinicians.map((clinician, clinicianIndex) => (
                 <tr key={clinician.id} className="border-b last:border-b-0">
                   <td className="p-3 border-r sticky left-0 bg-card z-10 min-w-[200px] w-[200px] align-top">
                     <div className="flex items-start gap-2">
@@ -1178,6 +1195,13 @@ export default function Availability() {
                   })}
                 </tr>
               ))}
+              {displayedClinicians.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="p-6 text-center text-sm text-muted-foreground">
+                    {emdrOnly ? "No EMDR-trained clinicians found." : "No clinicians found."}
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

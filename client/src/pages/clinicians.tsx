@@ -99,6 +99,7 @@ export default function Clinicians() {
   const [editRateStr, setEditRateStr] = useState("");
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [isAddOpen, setIsAddOpen] = useState(false);
+  const [emdrOnly, setEmdrOnly] = useState(false);
   const [newRateStr, setNewRateStr] = useState("");
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [clinicianToDelete, setClinicianToDelete] = useState<ClinicianWithName | null>(null);
@@ -269,8 +270,8 @@ export default function Clinicians() {
     generateLoginMutation.mutate(clinicianId);
   };
 
-  const activeClinicians = clinicians.filter(c => c.isActive !== false);
-  const inactiveClinicians = clinicians.filter(c => c.isActive === false);
+  const activeClinicians = clinicians.filter(c => c.isActive !== false && (!emdrOnly || c.emdrTrained === true));
+  const inactiveClinicians = clinicians.filter(c => c.isActive === false && (!emdrOnly || c.emdrTrained === true));
 
   const handleAddClinician = () => {
     if (!newClinician.name || !newClinician.email) {
@@ -287,10 +288,21 @@ export default function Clinicians() {
           <h1 className="text-3xl font-serif font-bold text-slate-900">Clinician Directory</h1>
           <p className="text-muted-foreground mt-1">Manage clinician profiles, insurance panels, and practice tiers.</p>
         </div>
-        <Button onClick={() => setIsAddOpen(true)} data-testid="button-add-clinician">
-          <Plus className="h-4 w-4 mr-2" />
-          Add Clinician
-        </Button>
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <Switch
+              id="clinician-emdr-filter"
+              checked={emdrOnly}
+              onCheckedChange={setEmdrOnly}
+              data-testid="switch-emdr-filter"
+            />
+            <Label htmlFor="clinician-emdr-filter" className="text-sm cursor-pointer">EMDR-trained only</Label>
+          </div>
+          <Button onClick={() => setIsAddOpen(true)} data-testid="button-add-clinician">
+            <Plus className="h-4 w-4 mr-2" />
+            Add Clinician
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
@@ -436,6 +448,11 @@ export default function Clinicians() {
           </Card>
         ))}
       </div>
+      {activeClinicians.length === 0 && (
+        <p className="text-sm text-muted-foreground">
+          {emdrOnly ? "No active EMDR-trained clinicians found." : "No active clinicians found."}
+        </p>
+      )}
 
       {inactiveClinicians.length > 0 && (
         <>

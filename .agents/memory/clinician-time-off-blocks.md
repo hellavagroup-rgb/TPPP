@@ -9,11 +9,11 @@ Clinician time-off blocks are limited to specific calendar dates and must not re
 
 **How to apply:** Match calendar cells against their occurrence date, but protect the whole upcoming schedule when checking booking eligibility. Enable the feature only after the intended tenant has been authenticated and confirmed.
 
-Recurring allocations remain ongoing weekly or fortnightly appointments, not single-date bookings. A date supplied during assignment validates the requested occurrence against its schedule; it does not redefine the allocation. Confirmed recurring appointments must remain protected after their availability is retired, while respecting their original frequency and date bounds.
+Before confirmation, recurring availability and live allocations/reservations retain their weekly or fortnightly schedule checks. A date supplied during assignment validates the requested occurrence; it does not redefine the availability. After confirmation, however, the portal does not track continuing recurring bookings: the retired slot and confirmation snapshot are history, not current occupancy.
 
-**Why:** The existing booking workflow treats recurring allocations as regular appointments and retains confirmation evidence after retiring availability. Treating an allocation as only its selected date would let later time-off blocks overlap those regular appointments.
+**Why:** The user explicitly corrected the assumption that old confirmed appointments must remain protected indefinitely. That assumption repeatedly made new independent availability conflict with historical bookings.
 
-**How to apply:** Preserve recurring booking semantics when adding date-specific checks. Never introduce a single assigned-occurrence date as a replacement for the recurring booking model.
+**How to apply:** Protect current live allocations and pending reservations, but never reject time off over new availability solely because an old confirmed snapshot overlaps. Do not require an acknowledgement, override, end date, completion or archive action. See [Confirmation state and slot retirement](confirmation-state-slot-retirement.md) for the product-wide boundary.
 
 The reverse protection is required too: an existing future time-off exception prevents a new ongoing recurring booking whose schedule intersects it, even when staff choose a different occurrence date. Past exceptions alone do not prevent a new ongoing booking. A separate one-off appointment on a different date remains bookable.
 

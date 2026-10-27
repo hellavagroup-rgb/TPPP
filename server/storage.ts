@@ -98,7 +98,7 @@ export class SlotRetirementConflictError extends Error {
 }
 
 export class AvailabilityTimeOffConflictError extends Error {
-  constructor(message = "This time-off block overlaps an existing appointment or reservation. Resolve it before saving.") {
+  constructor(message = "This time-off block overlaps a current allocation or reservation. Ask an administrator to review that allocation before saving.") {
     super(message);
     this.name = "AvailabilityTimeOffConflictError";
   }
@@ -605,7 +605,7 @@ export class DatabaseStorage implements IStorage {
           }).from(clients).where(and(
             eq(clients.tenantId, input.tenantId),
             eq(clients.assignedClinicianId, input.clinicianId),
-            inArray(clients.status, [...ACTIVE_ALLOCATION_STATUSES]),
+            inArray(clients.status, ACTIVE_ALLOCATION_STATUSES.filter(status => !hasFinalizedBooking(status))),
           ))
         : [];
       const reservations = relevantSlotIds.length
@@ -616,33 +616,9 @@ export class DatabaseStorage implements IStorage {
             inArray(bookingReservations.status, ["active", "payment_check", "payment_review"]),
           ))
         : [];
-      const snapshots = await tx.select({
-        type: bookingSnapshots.slotType,
-        date: bookingSnapshots.date,
-        day: bookingSnapshots.day,
-        startTime: bookingSnapshots.startTime,
-        endTime: bookingSnapshots.endTime,
-        startDate: timeSlots.startDate,
-        endDate: timeSlots.endDate,
-        frequency: timeSlots.frequency,
-      }).from(bookingSnapshots).innerJoin(clients, and(
-        eq(clients.id, bookingSnapshots.clientId),
-        eq(clients.tenantId, input.tenantId),
-        eq(clients.isArchived, false),
-        isNull(clients.completedAt),
-        inArray(clients.status, [...ACTIVE_ALLOCATION_STATUSES]),
-      )).leftJoin(timeSlots, and(
-        eq(timeSlots.id, bookingSnapshots.slotId),
-        eq(timeSlots.clinicianId, input.clinicianId),
-      )).where(and(
-        eq(bookingSnapshots.tenantId, input.tenantId),
-        eq(bookingSnapshots.clinicianId, input.clinicianId),
-        or(
-          eq(bookingSnapshots.date, input.date),
-          and(isNull(bookingSnapshots.date), eq(bookingSnapshots.slotType, "Recurring")),
-        ),
-      ));
-
+      // Confirmed snapshots are immutable history, not an ongoing therapy
+      // diary. Confirmation retires the original slot; independent new
+      // availability must not inherit occupancy from that old confirmation.
       const occupied = relevantSlots.some(slot =>
         slot.isBooked
         || reservations.some(reservation => reservation.slotId === slot.id)
@@ -650,7 +626,7 @@ export class DatabaseStorage implements IStorage {
           owner.assignedSlotId === slot.id
           || (!owner.assignedSlotId && owner.assignedSlot?.toLowerCase() === `${slot.day || slot.date} ${slot.startTime}`.toLowerCase()),
         ),
-      ) || snapshots.some(snapshot => slotOccursOnDate(snapshot, input.date) && timeRangesOverlap(snapshot, input));
+      );
       if (occupied) throw new AvailabilityTimeOffConflictError();
 
       const [block] = edit
@@ -1429,12 +1405,22 @@ export class DatabaseStorage implements IStorage {
       const oldClinicianId = existingClient.assignedClinicianId;
       const oldSlotIdToRelease = existingClient.assignedSlotId;
       const isAllocatedStatus = hasActiveClientAllocation(newStatus);
+      // Omitted identifiers mean "keep current allocation". Resolve them only
+      // after locking the client, not from an earlier route-level read.
+      if (isAllocatedStatus) {
+        newClinicianId ??= oldClinicianId;
+        newSlotId ??= oldSlotIdToRelease;
+      }
       const isReassigning = newSlotId !== null && newSlotId !== existingClient.assignedSlotId;
       const zoomDeliveryIdentityChanged = shouldResetZoomDelivery(existingClient, {
         assignedClinicianId: newClinicianId,
         assignedSlotId: newSlotId,
       });
       const hasAllocation = !!(oldClinicianId && (oldSlotIdToRelease || existingClient.assignedSlot));
+
+      if (isAllocatedStatus && !isReassigning && hasAllocation && newClinicianId !== oldClinicianId) {
+        throw new Error("Current slot does not belong to selected clinician");
+      }
 
       if (confirmationIdempotencyKey && !isReassigning && hasAllocation) {
         const confirmation = await confirmBookingInTransaction(tx, {
@@ -1446,9 +1432,6 @@ export class DatabaseStorage implements IStorage {
         return { client: confirmation.client, confirmation };
       }
 
-      if (isAllocatedStatus && !isReassigning && hasAllocation && newClinicianId !== oldClinicianId) {
-        throw new Error("Current slot does not belong to selected clinician");
-      }
       if (isAllocatedStatus && !hasAllocation && (!newClinicianId || !newSlotId)) {
         throw new Error("A clinician and appointment slot are required for allocation");
       }
@@ -1543,7 +1526,7 @@ export class DatabaseStorage implements IStorage {
       }
 
       // Case 2: Reassign to a new slot
-      if (isAllocatedStatus && isReassigning && newClinicianId) {
+      if (isAllocatedStatus && isReassigning && newClinicianId && newSlotId) {
         // Validate new slot exists, belongs to clinician, and is available
         const [newClinician] = await tx.select().from(clinicians).where(and(
           eq(clinicians.id, newClinicianId),
@@ -1557,6 +1540,20 @@ export class DatabaseStorage implements IStorage {
         )).for("update");
         if (!newSlot) throw new Error("New slot not found");
         if (newSlot.clinicianId !== newClinicianId) throw new Error("Slot does not belong to selected clinician");
+        // Recheck the date requirement under the same lock that classifies
+        // status-only vs reassignment, including stale requests for old slots.
+        if (newSlot.type === "Recurring" && !occurrenceDate) {
+          const [tenant] = await tx.select({ enabled: tenants.timeOffBlocksEnabled })
+            .from(tenants).where(eq(tenants.id, tenantId));
+          const [block] = tenant?.enabled ? [] : await tx.select({ id: availabilityTimeOffBlocks.id })
+            .from(availabilityTimeOffBlocks).where(and(
+              eq(availabilityTimeOffBlocks.tenantId, tenantId),
+              eq(availabilityTimeOffBlocks.clinicianId, newClinicianId),
+            )).limit(1);
+          if (tenant?.enabled || block) {
+            throw new ManualAssignmentError("invalid_occurrence_date", "Choose the calendar date for this recurring slot.");
+          }
+        }
         if (newSlot.type === "Recurring" && occurrenceDate && !slotOccursOnDate(newSlot, occurrenceDate)) {
           throw new ManualAssignmentError("invalid_occurrence_date", "Choose a date that matches this recurring slot.");
         }

@@ -274,6 +274,46 @@ describe("Clients page compact board integration", () => {
     vi.restoreAllMocks();
   });
 
+  it("records Email Sent for an existing recurring allocation without asking for a date", async () => {
+    apiFixtures.tenant = makeTenant({ multiClinicianAllocationEnabled: false, timeOffBlocksEnabled: true });
+    apiFixtures.clients = [{
+      ...makeClient("allocated-client", "TEST-ALLOCATED", "Assigned"),
+      assignedClinicianId: "assigned-clinician", assignedSlotId: "assigned-slot",
+      assignedSlot: "Thursday 13:45",
+    }];
+    const slot = { id: "assigned-slot", type: "Recurring", day: "Thursday",
+      startTime: "13:45", endTime: "14:45", isBooked: true, locationType: "online" };
+    const writes: Array<{ path: string; body: any }> = [];
+    const originalFetch = fetch;
+    vi.stubGlobal("fetch", vi.fn(async (input, init) => {
+      const path = new URL(String(input), window.location.origin).pathname;
+      if (path === "/api/clinicians") return json([{
+        id: "assigned-clinician", name: "Fixture Clinician", specialties: [],
+        insurers: [], availability: [slot], availabilityTimeOffBlocks: [],
+      }]);
+      if (path === "/api/clients/allocated-client/reassign" && init?.method === "POST") {
+        writes.push({ path, body: JSON.parse(init.body) });
+        apiFixtures.clients[0].status = "AwaitingConfirmation";
+        return json(apiFixtures.clients[0]);
+      }
+      return originalFetch(input, init);
+    }));
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const card = await screen.findByTestId("kanban-card-allocated-client");
+    await userEvent.setup().click(within(card).getByRole("button", { name: "Email Sent" }));
+    await waitFor(() => expect(writes).toEqual([{
+      path: "/api/clients/allocated-client/reassign",
+      body: { clinicianId: "assigned-clinician", slotId: "assigned-slot", status: "AwaitingConfirmation" },
+    }]));
+    await waitFor(() => expect(uiSignals.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Allocation Updated" })));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(apiFixtures.clients[0]).toMatchObject({
+      status: "AwaitingConfirmation", assignedSlotId: "assigned-slot", assignedSlot: "Thursday 13:45",
+    });
+    expect(slot.isBooked).toBe(true);
+  });
+
   it("shows manager confirmation only after the server grants this admin permission", async () => {
     apiFixtures.managerEnabled = true;
     apiFixtures.clients = [makeClient("manager-client", "MGR-101", "RegistrationPending")];

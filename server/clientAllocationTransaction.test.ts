@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PgDialect } from "drizzle-orm/pg-core";
+import { availabilityTimeOffBlocks, tenants } from "@shared/schema";
 
 const dbMock = vi.hoisted(() => ({
   transaction: vi.fn(),
@@ -618,18 +619,27 @@ function reassignmentTransactions(
             draft.newClinician.tenantId === "tenant-1" ? draft.newClinician : undefined,
             draft.newSlot.tenantId === "tenant-1" ? draft.newSlot : undefined,
           ];
+          let selectedRows: unknown[] = [rows[selectNumber - 1]].filter(Boolean);
           const query = {
-            from() { return query; },
+            from(table: unknown) {
+              // These fixtures exercise allocation atomicity without time off.
+              // Configuration/block reads are separate from the four ownership
+              // reads above and must return real empty results, not [undefined].
+              if (table === tenants) selectedRows = [{ enabled: false }];
+              if (table === availabilityTimeOffBlocks) selectedRows = [];
+              return query;
+            },
             where() { return query; },
+            limit: async (count: number) => selectedRows.slice(0, count),
             for: vi.fn(async (mode: string) => {
               lockRequests.push(mode);
-              return [rows[selectNumber - 1]];
+              return selectedRows;
             }),
             then<TResult1 = unknown, TResult2 = never>(
               onfulfilled?: ((value: unknown) => TResult1 | PromiseLike<TResult1>) | null,
               onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
             ) {
-              return Promise.resolve([rows[selectNumber - 1]]).then(onfulfilled, onrejected);
+              return Promise.resolve(selectedRows).then(onfulfilled, onrejected);
             },
           };
           return query;
@@ -768,7 +778,7 @@ describe("DatabaseStorage.reassignClient", () => {
       "client-1", "clinician-new", "slot-new", "Assigned", "tenant-1",
     );
 
-    expect(lockRequests).toEqual(["update"]);
+    expect(lockRequests).toEqual(["update", "update", "update"]);
     expect(claimQueries).toHaveLength(1);
     expect(claimQueries[0].sql).toContain('"time_slots"."tenant_id" = ');
     expect(claimQueries[0].sql).toContain('"time_slots"."clinician_id" = ');

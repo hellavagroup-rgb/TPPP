@@ -2810,7 +2810,11 @@ export async function registerRoutes(
       if (occurrenceDate !== undefined && (typeof occurrenceDate !== "string" || !isValidDate(occurrenceDate))) {
         return res.status(400).json({ error: "Choose a valid calendar date for this appointment slot." });
       }
-      if (slotId && req.tenant?.id) {
+      // Sending the existing allocation back (e.g. Email Sent) is not a new
+      // appointment selection. Storage rechecks changes under the client lock.
+      const changesAllocation = slotId && (slotId !== clientToReassign.assignedSlotId
+        || (clinicianId && clinicianId !== clientToReassign.assignedClinicianId));
+      if (changesAllocation && req.tenant?.id) {
         const [newSlot] = await db.select().from(timeSlots).where(and(
           eq(timeSlots.id, slotId),
           eq(timeSlots.tenantId, req.tenant.id),
@@ -2853,8 +2857,8 @@ export async function registerRoutes(
       }
       const reassignmentResult = await storage.reassignClient(
         req.params.clientId,
-        clinicianId || clientToReassign.assignedClinicianId || null,
-        slotId || clientToReassign.assignedSlotId || null,
+        clinicianId || null,
+        slotId || null,
         finalReassignment ? "Assigned" : transition.status,
         req.tenant!.id,
         finalReassignment

@@ -844,6 +844,7 @@ describe("hourly time-off permission HTTP routes", () => {
     h.state.slot.type = "Recurring";
     h.state.slot.date = null;
     h.state.slot.day = "Monday";
+    if (action === "reassign") h.state.client.assignedSlotId = "previous-slot";
     const response = await request(`/api/clients/client-a/${action}`, {
       method: "POST",
       body: JSON.stringify({ clinicianId: "clinician-a", slotId: "slot-a", status: "Assigned" }),
@@ -852,6 +853,29 @@ describe("hourly time-off permission HTTP routes", () => {
     expect(response.body.error).toContain("date");
     expect(h.storage.assignClinicianToClient).not.toHaveBeenCalled();
     expect(h.storage.reassignClient).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])("allows status-only recurring updates with explicit identifiers=%s", async explicit => {
+    Object.assign(h.state.tenant, { multiClinicianAllocationEnabled: false, registrationFormEnabled: false });
+    Object.assign(h.state.client, { status: "Assigned" });
+    Object.assign(h.state.slot, { type: "Recurring", date: null, day: "Monday", isBooked: true });
+    h.storage.reassignClient.mockResolvedValueOnce({
+      client: { ...h.state.client, status: "AwaitingConfirmation" },
+    });
+    const response = await request("/api/clients/client-a/reassign", {
+      method: "POST",
+      body: JSON.stringify({
+        status: "AwaitingConfirmation",
+        ...(explicit ? { clinicianId: "clinician-a", slotId: "slot-a" } : {}),
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(h.storage.reassignClient).toHaveBeenLastCalledWith(
+      "client-a", explicit ? "clinician-a" : null, explicit ? "slot-a" : null,
+      "AwaitingConfirmation", "tenant-a", undefined, undefined,
+    );
+    expect(h.state.slot.isBooked).toBe(true);
+    expect(h.state.bookingSnapshots).toEqual([]);
   });
 
   it("rejects public recurring option selection when a future block was saved first", async () => {

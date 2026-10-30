@@ -41,8 +41,6 @@ export async function getAllocationVisibility(clientList: Client[], tenantId: st
       clinicianTenantId: clinicians.tenantId,
       slot: timeSlots,
       clinicianName: users.name,
-      snapshot: bookingSnapshots,
-      snapshotClinicianTenantId: snapshotClinicians.tenantId,
     }).from(clients)
       .leftJoin(timeSlots, eq(timeSlots.id, clients.assignedSlotId))
       .leftJoin(clinicians, and(eq(clinicians.id, clients.assignedClinicianId), eq(clinicians.tenantId, tenantId)))

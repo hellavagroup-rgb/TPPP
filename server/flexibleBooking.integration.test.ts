@@ -23,6 +23,8 @@ vi.mock("./db", async () => {
   await isolated.pool.query(await readFile("migrations/0020_flexible_booking.sql", "utf8"));
   await isolated.pool.query(await readFile("migrations/0021_availability_time_off_blocks.sql", "utf8"));
   await isolated.pool.query(await readFile("migrations/0023_allow_repeat_booking_snapshots.sql", "utf8"));
+  // LIKE INCLUDING ALL renames the copied unique client index in this schema.
+  await isolated.pool.query("DROP INDEX IF EXISTS booking_snapshots_client_id_idx");
   return { db: drizzle(isolated.pool, { schema: tables }), pool: isolated.pool };
 });
 vi.mock("./auth", () => ({
@@ -44,6 +46,7 @@ import { registerFlexibleBookingRoutes, reserveFlexibleSlot } from "./flexibleBo
 import { latestReservation, settleReservation, assertReservationOpen, flagLateReservationPayment, bindReservationPayment, reservationPaymentLock } from "./reservationLifecycle";
 import { reconcileRegistrationPayment } from "./paymentReconciliation";
 import { confirmBooking } from "./bookingConfirmation";
+import { getAllocationVisibility } from "./allocationVisibility";
 import { AvailabilityTimeOffConflictError, storage } from "./storage";
 
 let server: Server;
@@ -1079,6 +1082,20 @@ describe("flexible booking with actual PostgreSQL ownership", () => {
     expect(isolated.stripe.checkout.sessions.expire).toHaveBeenCalledWith("cs_test");
     expect((await client()).assignedSlotId).toBeNull();
   });
+  it("does not treat a historical booking as confirmation of a new unpaid reservation", async () => {
+    const held = await paymentFixture("unpaid");
+    await db.insert(schema.bookingSnapshots).values({
+      tenantId: CYA, clientId: "client", clinicianId: "clinician", slotId: "slot-2",
+      clinicianName: "Test Clinician", slotType: "Recurring", day: "Tuesday",
+      startTime: "10:00", endTime: "11:00", locationType: "online",
+      confirmedAt: new Date("2026-10-01T10:00:00Z"), idempotencyKey: "historical-booking",
+    });
+    const history = await db.select().from(schema.bookingSnapshots);
+    expect((await settleReservation(held.reservation.id, CYA))?.status).toBe("expired");
+    expect((await client()).status).not.toBe("Scheduled");
+    expect(await db.select().from(schema.bookingSnapshots)).toEqual(history);
+    expect(await db.select().from(schema.paymentCharges)).toHaveLength(0);
+  });
   it.each(["paid", "race"] as const)("preserves and confirms a %s payment despite expiry", async outcome => {
     const held = await paymentFixture(outcome);
     expect((await settleReservation(held.reservation.id, CYA))?.status).toBe("confirmed");
@@ -1135,10 +1152,17 @@ describe("flexible booking with actual PostgreSQL ownership", () => {
       assignedClinicianId: "clinician",
       assignedSlotId: "slot-2",
       assignedSlot: "Tuesday 10:00",
+      bookingConfirmationSentAt: previousConfirmedAt,
+      zoomLinkSentAt: previousConfirmedAt,
+      completedAt: previousConfirmedAt,
+      writeuppAppointmentConfirmed: true,
+      writeuppDataTransferred: true,
     }).where(eq(schema.clients.id, "client"));
 
-    const first = await confirmBooking({ clientId: "client", tenantId: CYA, source: "manual" });
-    const retry = await confirmBooking({ clientId: "client", tenantId: CYA, source: "manual" });
+    const [first, retry] = await Promise.all([
+      confirmBooking({ clientId: "client", tenantId: CYA, source: "manual" }),
+      confirmBooking({ clientId: "client", tenantId: CYA, source: "manual" }),
+    ]);
     const snapshots = await db.select().from(schema.bookingSnapshots)
       .where(eq(schema.bookingSnapshots.clientId, "client"))
       .orderBy(schema.bookingSnapshots.confirmedAt);
@@ -1150,8 +1174,28 @@ describe("flexible booking with actual PostgreSQL ownership", () => {
     expect(retry.snapshot.id).toBe(first.snapshot.id);
     expect(snapshots).toHaveLength(2);
     expect(snapshots.map(snapshot => snapshot.slotId)).toEqual(["slot", "slot-2"]);
+    expect(snapshots[0].confirmedAt).toEqual(previousConfirmedAt);
+    expect(await client()).toMatchObject({
+      bookingConfirmationSentAt: null, zoomLinkSentAt: null, completedAt: null,
+      writeuppAppointmentConfirmed: false, writeuppDataTransferred: false,
+    });
+    const milestones = await db.select().from(schema.auditLogs)
+      .where(eq(schema.auditLogs.action, "booking_milestones_preserved"));
+    expect(milestones).toHaveLength(1);
+    expect(milestones[0].details).toMatchObject({
+      previousSnapshotId: snapshots[0].id, replacementSnapshotId: first.snapshot.id,
+      bookingConfirmationSentAt: previousConfirmedAt.toISOString(),
+      zoomLinkSentAt: previousConfirmedAt.toISOString(),
+      completedAt: previousConfirmedAt.toISOString(),
+      writeuppAppointmentConfirmed: true, writeuppDataTransferred: true,
+    });
     expect(newSlot).toMatchObject({ isBooked: false, retirementReason: "Appointment confirmed" });
     expect(newSlot.retiredAt).toBeTruthy();
+    const visibleClients = await storage.getAllClients(false, CYA);
+    expect(visibleClients.filter(row => row.id === "client")).toHaveLength(1);
+    expect((visibleClients.find(row => row.id === "client") as any).bookingSnapshot.id).toBe(first.snapshot.id);
+    const visibility = await getAllocationVisibility(visibleClients, CYA);
+    expect(visibility.get("client")?.appointment).toMatchObject({ day: "Tuesday", startTime: "10:00" });
   });
   it("sends live clinician scope without reserving all choices, then selects atomically", async () => {
     expect((await request("/api/clients/client/clinician-invitation", { clinicianIds: ["clinician"] })).status).toBe(200);

@@ -1739,7 +1739,9 @@ export async function registerRoutes(
             clientId: req.params.id,
             tenantId: req.tenant!.id,
             source: "manual",
-            idempotencyKey: `${String(req.get("Idempotency-Key") || "manual-confirmation")}-${currentClient.assignedSlotId || "no-slot"}`,
+            // Without an explicit request key, the transaction derives its key
+            // from the locked allocation rather than the client's lifetime.
+            idempotencyKey: req.get("Idempotency-Key") || undefined,
           })
         : null;
       const updated = confirmation?.client || ((isDeallocation || (req.body.status === "Scheduled" && req.body.status !== oldStatus))

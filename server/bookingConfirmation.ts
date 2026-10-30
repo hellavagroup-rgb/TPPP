@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db } from "./db";
 import { confirmationBlocker, confirmationBlockerCopy } from "@shared/confirmationRecovery";
 import { ACTIVE_ALLOCATION_STATUSES } from "@shared/clientWorkflow";
@@ -80,20 +80,26 @@ export async function confirmBookingInTransaction(tx: any, input: BookingConfirm
 
     const idempotencyKey = input.idempotencyKey ||
       `booking-confirmation-${input.clientId}-${client.assignedSlotId || "no-slot"}`;
+    // Removing the lifetime client uniqueness constraint must not silently
+    // bypass a corrupt cross-practice history link that previously blocked it.
+    const [foreignHistory] = await tx.select({ id: bookingSnapshots.id }).from(bookingSnapshots)
+      .where(and(
+        eq(bookingSnapshots.clientId, client.id),
+        ne(bookingSnapshots.tenantId, input.tenantId),
+      )).limit(1);
+    if (foreignHistory) throw new Error("Booking history requires a practice ownership review");
     const [existingSnapshot] = await tx.select().from(bookingSnapshots)
       .where(and(
         eq(bookingSnapshots.clientId, client.id),
         eq(bookingSnapshots.tenantId, input.tenantId),
       )).orderBy(desc(bookingSnapshots.confirmedAt), desc(bookingSnapshots.id)).limit(1);
-    if (existingSnapshot) {
-      if (client.status === "Scheduled" || client.status === "BookingConfirmed") {
-        return {
-          client,
-          snapshot: existingSnapshot,
-          status: client.status === "BookingConfirmed" ? "BookingConfirmed" : "Scheduled",
-          newlyConfirmed: false,
-        };
-      }
+    if (existingSnapshot && (client.status === "Scheduled" || client.status === "BookingConfirmed")) {
+      return {
+        client,
+        snapshot: existingSnapshot,
+        status: client.status === "BookingConfirmed" ? "BookingConfirmed" : "Scheduled",
+        newlyConfirmed: false,
+      };
     }
     const externalReviews = await tx.select({ id: auditLogs.id, action: auditLogs.action })
       .from(auditLogs).where(and(
@@ -216,6 +222,27 @@ export async function confirmBookingInTransaction(tx: any, input: BookingConfirm
     }).returning();
     if (!snapshot) throw new Error("Booking snapshot could not be created");
 
+    if (existingSnapshot) {
+      // Preserve the previous appointment's operational evidence before the
+      // client's current-booking markers are reset for this new appointment.
+      await tx.insert(auditLogs).values({
+        tenantId: input.tenantId,
+        resourceType: "client",
+        resourceId: client.id,
+        action: "booking_milestones_preserved",
+        details: {
+          previousSnapshotId: existingSnapshot.id,
+          replacementSnapshotId: snapshot.id,
+          source: input.source,
+          bookingConfirmationSentAt: client.bookingConfirmationSentAt,
+          zoomLinkSentAt: client.zoomLinkSentAt,
+          completedAt: client.completedAt,
+          writeuppAppointmentConfirmed: client.writeuppAppointmentConfirmed,
+          writeuppDataTransferred: client.writeuppDataTransferred,
+        },
+      });
+    }
+
     const retired = await tx.update(timeSlots).set({
       isBooked: false,
       retiredAt: confirmedAt,
@@ -238,6 +265,15 @@ export async function confirmBookingInTransaction(tx: any, input: BookingConfirm
       assignedSlotId: null,
       assignedSlot: null,
       confirmedAt,
+      // These markers describe the newly confirmed appointment, not an earlier
+      // booking retained in history. Retries above must not clear them again.
+      ...(existingSnapshot ? {
+        bookingConfirmationSentAt: null,
+        zoomLinkSentAt: null,
+        completedAt: null,
+        writeuppAppointmentConfirmed: false,
+        writeuppDataTransferred: false,
+      } : {}),
       ...(input.source === "registration" || input.source === "stripe"
         ? { registrationTokenRevokedAt: confirmedAt }
         : {}),

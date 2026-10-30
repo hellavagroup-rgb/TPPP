@@ -186,8 +186,19 @@ const h = vi.hoisted(() => {
               return true;
             }));
           }
-          if (sql.includes('"booking_snapshots"."tenant_id"')) {
-            return rows.filter(row => row.tenantId === state.tenant.id);
+          if (sql.includes('"booking_snapshots"')) {
+            const { params } = new PgDialect().sqlToQuery(condition);
+            return rows.filter(row => Object.entries({
+              id: "id", tenantId: "tenant_id", clientId: "client_id", slotId: "slot_id",
+            }).every(([property, column]) => {
+              for (const match of sql.matchAll(new RegExp(`"${column}"\\s*=\\s*\\$(\\d+)`, "g"))) {
+                if (row[property] !== params[Number(match[1]) - 1]) return false;
+              }
+              for (const match of sql.matchAll(new RegExp(`"${column}"\\s*<>\\s*\\$(\\d+)`, "g"))) {
+                if (row[property] === params[Number(match[1]) - 1]) return false;
+              }
+              return true;
+            }));
           }
           if (sql.includes('"time_slots"."tenant_id"')) {
             return rows.filter(row => row.tenantId === state.tenant.id);
@@ -198,7 +209,15 @@ const h = vi.hoisted(() => {
         return builder;
       },
       leftJoin: () => builder,
-      orderBy: () => builder,
+      orderBy: (...orders: any[]) => {
+        if (orders.some(order => new PgDialect().sqlToQuery(order).sql.includes('"booking_snapshots"."confirmed_at"'))) {
+          const originalRun = run;
+          run = () => [...originalRun()].sort((a, b) =>
+            new Date(b.confirmedAt || 0).getTime() - new Date(a.confirmedAt || 0).getTime());
+          result = undefined;
+        }
+        return builder;
+      },
       limit: (count: number) => Promise.resolve(execute().slice(0, count)),
       returning: () => Promise.resolve(execute()),
       for: () => builder,
@@ -376,7 +395,7 @@ const h = vi.hoisted(() => {
         }
         if (name !== "clients") return [];
         if (state.client.tenantId !== state.tenant.id) return [];
-        if ("completedAt" in patch && patch.completedAt === null
+        if ("completedAt" in patch && patch.completedAt === null && !patch.status
           && (!state.client.completedAt || state.client.isArchived)) return [];
 
         if (patch.registrationEmailClaimId && state.client.registrationEmailSendingAt
@@ -1204,6 +1223,42 @@ describe("registration journey HTTP routes", () => {
     expect(h.state.slot).toEqual(slotBefore);
     expect(h.storage.updateClient.mock.calls.at(-1)?.[1]).not.toHaveProperty("confirmedAt");
     expect(h.state.emails).toHaveLength(0);
+  });
+
+  it("allows the legacy confirmation button to confirm a later allocation without replacing its earlier snapshot", async () => {
+    resetState({
+      tenant: {
+        multiClinicianAllocationEnabled: false, registrationFormEnabled: false,
+        confirmationRecoveryEnabled: false, bookingConfirmedEmailEnabled: false,
+        paymentsEnabled: false,
+      },
+      client: { status: "AwaitingConfirmation" },
+    });
+    h.state.slot.isBooked = true;
+    const first = await request("/api/clients/client-a", {
+      method: "PATCH", body: JSON.stringify({ status: "Scheduled" }),
+    });
+    expect(first.status).toBe(200);
+    const previousSnapshot = structuredClone(h.state.bookingSnapshots[0]);
+    h.state.slot = {
+      ...h.state.slot, id: "new-allocation-slot", day: "Wednesday",
+      startTime: "13:00", endTime: "14:00", isBooked: true, retiredAt: null,
+    };
+    Object.assign(h.state.client, {
+      status: "AwaitingConfirmation", assignedClinicianId: h.state.slot.clinicianId,
+      assignedSlotId: h.state.slot.id, assignedSlot: "Wednesday 13:00",
+    });
+    const second = await request("/api/clients/client-a", {
+      method: "PATCH", body: JSON.stringify({ status: "Scheduled" }),
+    });
+    expect(second.status).toBe(200);
+    expect(second.body.status).toBe("Scheduled");
+    expect(h.state.bookingSnapshots).toHaveLength(2);
+    expect(h.state.bookingSnapshots[0]).toEqual(previousSnapshot);
+    expect(h.state.bookingSnapshots[1]).toMatchObject({
+      clientId: "client-a", slotId: "new-allocation-slot", day: "Wednesday", startTime: "13:00",
+    });
+    expect(h.state.bookingSnapshots[1].idempotencyKey).not.toBe(previousSnapshot.idempotencyKey);
   });
 
   it("requires an administrator for manual confirmation, without affecting the legacy practice path", async () => {

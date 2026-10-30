@@ -725,9 +725,9 @@ export class DatabaseStorage implements IStorage {
     for (const row of rows) {
       if (!latestRows.has(row.client.id)) latestRows.set(row.client.id, row);
     }
-    return [...latestRows.values()].map(r => ({
+    return Array.from(latestRows.values()).map(r => ({
       ...r.client,
-      slotLocationType: r.bookingSnapshot?.locationType ?? r.slotLocationType ?? null,
+      slotLocationType: r.slotLocationType ?? r.bookingSnapshot?.locationType ?? null,
       bookingSnapshot: r.bookingSnapshot ?? null,
     })) as any;
   }

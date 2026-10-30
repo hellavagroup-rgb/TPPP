@@ -137,7 +137,7 @@ describe("occupied WriteUpp slot retirement", () => {
     ["a review without an arrangement", () => { h.state.audit_logs[0].action = "activity_external_booking_reviewed"; }],
     ["a reopened matching workflow", () => { h.state.clients[0].status = "Assigned"; }],
     ["a portal confirmation", () => { h.state.clients[0].status = "BookingConfirmed"; }],
-    ["a portal snapshot", () => { h.state.booking_snapshots.push({ clientId: "client-a" }); }],
+    ["a portal snapshot", () => { h.state.booking_snapshots.push({ clientId: "client-a", slotId: "slot-a" }); }],
     ["an archived client", () => { h.state.clients[0].isArchived = true; }],
     ["a completed client", () => { h.state.clients[0].completedAt = new Date(); }],
     ["a conflicting owner", () => { h.state.clients.push({ ...h.state.clients[0], id: "client-b" }); }],

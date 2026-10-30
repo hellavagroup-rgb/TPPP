@@ -22,6 +22,7 @@ vi.mock("./db", async () => {
   }
   await isolated.pool.query(await readFile("migrations/0020_flexible_booking.sql", "utf8"));
   await isolated.pool.query(await readFile("migrations/0021_availability_time_off_blocks.sql", "utf8"));
+  await isolated.pool.query(await readFile("migrations/0023_allow_repeat_booking_snapshots.sql", "utf8"));
   return { db: drizzle(isolated.pool, { schema: tables }), pool: isolated.pool };
 });
 vi.mock("./auth", () => ({
@@ -1112,6 +1113,45 @@ describe("flexible booking with actual PostgreSQL ownership", () => {
     expect((await db.select().from(schema.bookingSnapshots))).toHaveLength(1);
     const [slot] = await db.select().from(schema.timeSlots).where(eq(schema.timeSlots.id, "slot"));
     expect(slot.retiredAt).toBeTruthy();
+  });
+  it("confirms a new appointment while preserving an earlier booking snapshot", async () => {
+    const previousConfirmedAt = new Date("2026-10-28T09:42:31.154Z");
+    await db.update(schema.tenants).set({
+      registrationFormEnabled: false,
+      confirmationRecoveryEnabled: false,
+      paymentsEnabled: false,
+    }).where(eq(schema.tenants.id, CYA));
+    await db.update(schema.timeSlots).set({ isBooked: false, retiredAt: previousConfirmedAt })
+      .where(eq(schema.timeSlots.id, "slot"));
+    await db.update(schema.timeSlots).set({ isBooked: true }).where(eq(schema.timeSlots.id, "slot-2"));
+    await db.insert(schema.bookingSnapshots).values({
+      tenantId: CYA, clientId: "client", clinicianId: "clinician", slotId: "slot",
+      clinicianName: "Test Clinician", slotType: "Recurring", day: "Monday",
+      startTime: "10:00", endTime: "11:00", locationType: "online",
+      confirmedAt: previousConfirmedAt, idempotencyKey: "previous-confirmation",
+    });
+    await db.update(schema.clients).set({
+      status: "AwaitingConfirmation",
+      assignedClinicianId: "clinician",
+      assignedSlotId: "slot-2",
+      assignedSlot: "Tuesday 10:00",
+    }).where(eq(schema.clients.id, "client"));
+
+    const first = await confirmBooking({ clientId: "client", tenantId: CYA, source: "manual" });
+    const retry = await confirmBooking({ clientId: "client", tenantId: CYA, source: "manual" });
+    const snapshots = await db.select().from(schema.bookingSnapshots)
+      .where(eq(schema.bookingSnapshots.clientId, "client"))
+      .orderBy(schema.bookingSnapshots.confirmedAt);
+    const [newSlot] = await db.select().from(schema.timeSlots).where(eq(schema.timeSlots.id, "slot-2"));
+
+    expect(first).toMatchObject({ status: "Scheduled", newlyConfirmed: true });
+    expect(first.snapshot.slotId).toBe("slot-2");
+    expect(retry).toMatchObject({ status: "Scheduled", newlyConfirmed: false });
+    expect(retry.snapshot.id).toBe(first.snapshot.id);
+    expect(snapshots).toHaveLength(2);
+    expect(snapshots.map(snapshot => snapshot.slotId)).toEqual(["slot", "slot-2"]);
+    expect(newSlot).toMatchObject({ isBooked: false, retirementReason: "Appointment confirmed" });
+    expect(newSlot.retiredAt).toBeTruthy();
   });
   it("sends live clinician scope without reserving all choices, then selects atomically", async () => {
     expect((await request("/api/clients/client/clinician-invitation", { clinicianIds: ["clinician"] })).status).toBe(200);

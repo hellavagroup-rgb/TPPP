@@ -13,7 +13,7 @@ export async function getAllocationVisibility(clientList: Client[], tenantId: st
   const ids = ownedClients.map(c => c.id);
   const clientsById = new Map(ownedClients.map(c => [c.id, c]));
   const snapshotClinicians = alias(clinicians, "allocation_snapshot_clinicians");
-  const [options, assignments] = await Promise.all([
+  const [options, assignments, snapshots] = await Promise.all([
     db.select({
       clientId: clientClinicianOptions.clientId,
       tenantId: clientClinicianOptions.tenantId,
@@ -47,13 +47,22 @@ export async function getAllocationVisibility(clientList: Client[], tenantId: st
       .leftJoin(timeSlots, eq(timeSlots.id, clients.assignedSlotId))
       .leftJoin(clinicians, and(eq(clinicians.id, clients.assignedClinicianId), eq(clinicians.tenantId, tenantId)))
       .leftJoin(users, and(eq(users.id, clinicians.userId), eq(users.tenantId, tenantId)))
-      .leftJoin(bookingSnapshots, and(eq(bookingSnapshots.clientId, clients.id), eq(bookingSnapshots.tenantId, tenantId)))
+      .where(and(eq(clients.tenantId, tenantId), inArray(clients.id, ids))),
+    db.select({
+      snapshot: bookingSnapshots,
+      snapshotClinicianTenantId: snapshotClinicians.tenantId,
+    }).from(bookingSnapshots)
       .leftJoin(snapshotClinicians, and(
         eq(snapshotClinicians.id, bookingSnapshots.clinicianId),
         eq(snapshotClinicians.tenantId, tenantId),
       ))
-      .where(and(eq(clients.tenantId, tenantId), inArray(clients.id, ids))),
+      .where(and(eq(bookingSnapshots.tenantId, tenantId), inArray(bookingSnapshots.clientId, ids)))
+      .orderBy(desc(bookingSnapshots.confirmedAt), desc(bookingSnapshots.id)),
   ]);
+  const latestSnapshots = new Map<string, typeof snapshots[number]>();
+  for (const snapshot of snapshots) {
+    if (!latestSnapshots.has(snapshot.snapshot.clientId)) latestSnapshots.set(snapshot.snapshot.clientId, snapshot);
+  }
   const byClient = new Map<string, typeof options>();
   for (const option of options) {
     byClient.set(option.clientId, [...(byClient.get(option.clientId) ?? []), option]);
@@ -62,6 +71,11 @@ export async function getAllocationVisibility(clientList: Client[], tenantId: st
     const client = clientsById.get(row.clientId);
     if (!client || row.tenantId !== tenantId) return [];
     const offered = byClient.get(row.clientId) ?? [];
-    return [[row.clientId, projectAllocationVisibility(client, row, offered)] as const];
+    const latest = latestSnapshots.get(row.clientId);
+    return [[row.clientId, projectAllocationVisibility(client, {
+      ...row,
+      snapshot: latest?.snapshot ?? null,
+      snapshotClinicianTenantId: latest?.snapshotClinicianTenantId ?? null,
+    }, offered)] as const];
   }));
 }

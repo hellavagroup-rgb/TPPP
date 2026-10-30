@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "./db";
 import { confirmationBlocker, confirmationBlockerCopy } from "@shared/confirmationRecovery";
 import { ACTIVE_ALLOCATION_STATUSES } from "@shared/clientWorkflow";
@@ -61,7 +61,6 @@ export type BookingConfirmationInput = {
 };
 
 export async function confirmBookingInTransaction(tx: any, input: BookingConfirmationInput): Promise<BookingConfirmationResult> {
-  const idempotencyKey = input.idempotencyKey || `booking-confirmation-${input.clientId}`;
   {
     const predicates = [
       eq(clients.id, input.clientId),
@@ -79,20 +78,22 @@ export async function confirmBookingInTransaction(tx: any, input: BookingConfirm
       : clientQuery);
     if (!client) throw new Error("Client not found");
 
+    const idempotencyKey = input.idempotencyKey ||
+      `booking-confirmation-${input.clientId}-${client.assignedSlotId || "no-slot"}`;
     const [existingSnapshot] = await tx.select().from(bookingSnapshots)
       .where(and(
         eq(bookingSnapshots.clientId, client.id),
         eq(bookingSnapshots.tenantId, input.tenantId),
-      )).limit(1);
+      )).orderBy(desc(bookingSnapshots.confirmedAt), desc(bookingSnapshots.id)).limit(1);
     if (existingSnapshot) {
-      if (client.status !== "Scheduled" && client.status !== "BookingConfirmed")
-        throw new Error("A booking snapshot already exists but the client status needs manual investigation");
-      return {
-        client,
-        snapshot: existingSnapshot,
-        status: client.status === "BookingConfirmed" ? "BookingConfirmed" : "Scheduled",
-        newlyConfirmed: false,
-      };
+      if (client.status === "Scheduled" || client.status === "BookingConfirmed") {
+        return {
+          client,
+          snapshot: existingSnapshot,
+          status: client.status === "BookingConfirmed" ? "BookingConfirmed" : "Scheduled",
+          newlyConfirmed: false,
+        };
+      }
     }
     const externalReviews = await tx.select({ id: auditLogs.id, action: auditLogs.action })
       .from(auditLogs).where(and(
@@ -182,9 +183,8 @@ export async function confirmBookingInTransaction(tx: any, input: BookingConfirm
       const [confirmedConflict] = await tx.select({ id: bookingSnapshots.id }).from(bookingSnapshots).where(and(
         eq(bookingSnapshots.tenantId, input.tenantId),
         eq(bookingSnapshots.slotId, slot.id),
-        ne(bookingSnapshots.clientId, client.id),
       )).limit(1);
-      if (confirmedConflict) throw new Error("This appointment slot already belongs to a confirmed booking");
+      if (confirmedConflict) throw new Error("This appointment slot already has a confirmed booking");
     }
     const [clinician] = await tx.select({
       id: clinicians.id,

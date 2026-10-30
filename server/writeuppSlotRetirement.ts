@@ -43,7 +43,7 @@ export async function writeuppSlotRetirement(input: {
         eq(auditLogs.resourceId, client.id), eq(auditLogs.action, "activity_writeupp_appointment_arranged"),
       )).limit(1);
       const [snapshot] = await tx.select({ id: bookingSnapshots.id }).from(bookingSnapshots)
-        .where(eq(bookingSnapshots.clientId, client.id)).limit(1);
+        .where(and(eq(bookingSnapshots.clientId, client.id), eq(bookingSnapshots.slotId, slot.id))).limit(1);
       eligible = Boolean(arrangement && !snapshot);
       reason = snapshot ? "This slot has a portal booking and cannot be retired using the WriteUpp action."
         : "Record that the appointment is arranged in WriteUpp before retiring its occupied slot.";

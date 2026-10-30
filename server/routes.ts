@@ -1739,7 +1739,7 @@ export async function registerRoutes(
             clientId: req.params.id,
             tenantId: req.tenant!.id,
             source: "manual",
-            idempotencyKey: String(req.get("Idempotency-Key") || `manual-confirmation-${req.params.id}`),
+            idempotencyKey: `${String(req.get("Idempotency-Key") || "manual-confirmation")}-${currentClient.assignedSlotId || "no-slot"}`,
           })
         : null;
       const updated = confirmation?.client || ((isDeallocation || (req.body.status === "Scheduled" && req.body.status !== oldStatus))
@@ -2716,7 +2716,7 @@ export async function registerRoutes(
       const snapshot = await db.select().from(bookingSnapshots).where(and(
         eq(bookingSnapshots.clientId, client.id),
         eq(bookingSnapshots.tenantId, req.tenant.id),
-      )).limit(1).then(rows => rows[0]);
+      )).orderBy(desc(bookingSnapshots.confirmedAt), desc(bookingSnapshots.id)).limit(1).then(rows => rows[0]);
       if (!snapshot?.clinicianId) {
         return res.status(409).json({ error: "The confirmed clinician is no longer available" });
       }
@@ -2990,7 +2990,7 @@ export async function registerRoutes(
         const [snapshot] = await tx.select({ id: bookingSnapshots.id }).from(bookingSnapshots).where(and(
           eq(bookingSnapshots.clientId, client.id),
           eq(bookingSnapshots.tenantId, req.tenant!.id),
-        )).limit(1);
+        )).orderBy(desc(bookingSnapshots.confirmedAt), desc(bookingSnapshots.id)).limit(1);
         const decision = bookingCompletionDecision(client, {
           tenantId: req.tenant!.id,
           enabled: req.tenant!.completedBookingsEnabled === true,

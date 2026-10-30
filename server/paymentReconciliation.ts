@@ -1,5 +1,5 @@
 import Stripe from "stripe";
-import { and, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "./db";
 import { bookingSnapshots, clients, formSubmissions, paymentCharges, type BookingSnapshot, type Client, type Tenant } from "@shared/schema";
 import { canInspectRegistrationPayment } from "@shared/paymentReconciliationEligibility";
@@ -95,8 +95,15 @@ async function inspect(tenant: Tenant, clientId: string, requestedSessionId?: st
         ? "Checkout is open; wait for Stripe payment or review it before sending another request."
         : "Stripe has no completed payment on the current link. Check this practice's Stripe account for any payment made outside this link before taking another payment." } as PaymentInspection;
     }
+    const snapshotPredicate = client.assignedSlotId
+      ? and(
+          eq(bookingSnapshots.clientId, client.id),
+          eq(bookingSnapshots.tenantId, tenant.id),
+          eq(bookingSnapshots.slotId, client.assignedSlotId),
+        )
+      : and(eq(bookingSnapshots.clientId, client.id), eq(bookingSnapshots.tenantId, tenant.id));
     const [snapshot] = await db.select({ id: bookingSnapshots.id }).from(bookingSnapshots)
-      .where(and(eq(bookingSnapshots.clientId, client.id), eq(bookingSnapshots.tenantId, tenant.id))).limit(1);
+      .where(snapshotPredicate).orderBy(desc(bookingSnapshots.confirmedAt), desc(bookingSnapshots.id)).limit(1);
     const [charge] = await db.select().from(paymentCharges)
       .where(and(eq(paymentCharges.stripePaymentIntentId, paid.intentId), eq(paymentCharges.tenantId, tenant.id))).limit(1);
     const recorded = client.paymentStatus === "active" && !!snapshot &&

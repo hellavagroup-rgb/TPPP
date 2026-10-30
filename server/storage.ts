@@ -719,9 +719,13 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(timeSlots, and(eq(clients.assignedSlotId, timeSlots.id), eq(clients.tenantId, timeSlots.tenantId)))
       .leftJoin(bookingSnapshots, and(eq(clients.id, bookingSnapshots.clientId), eq(clients.tenantId, bookingSnapshots.tenantId)))
       .where(baseWhere)
-      .orderBy(desc(clients.intakeDate));
+      .orderBy(desc(clients.intakeDate), desc(bookingSnapshots.confirmedAt), desc(bookingSnapshots.id));
 
-    return rows.map(r => ({
+    const latestRows = new Map<string, typeof rows[number]>();
+    for (const row of rows) {
+      if (!latestRows.has(row.client.id)) latestRows.set(row.client.id, row);
+    }
+    return [...latestRows.values()].map(r => ({
       ...r.client,
       slotLocationType: r.bookingSnapshot?.locationType ?? r.slotLocationType ?? null,
       bookingSnapshot: r.bookingSnapshot ?? null,

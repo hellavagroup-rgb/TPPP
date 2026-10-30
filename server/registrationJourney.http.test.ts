@@ -268,10 +268,12 @@ const h = vi.hoisted(() => {
           }));
           state.submissions.push(...inserted);
         } else if (table === bookingSnapshots || tableName(table) === "booking_snapshots") {
-          if (state.bookingSnapshots.some(row => row.clientId === (Array.isArray(values) ? values[0] : values).clientId)) {
-            throw new Error("booking_snapshots_client_unique");
+          const snapshotValues = Array.isArray(values) ? values : [values];
+          if (snapshotValues.some(value => state.bookingSnapshots.some(row =>
+            row.tenantId === value.tenantId && row.idempotencyKey === value.idempotencyKey))) {
+            throw new Error("booking_snapshots_idempotency_unique");
           }
-          inserted = (Array.isArray(values) ? values : [values]).map((value, index) => ({
+          inserted = snapshotValues.map((value, index) => ({
             id: `booking-snapshot-${state.bookingSnapshots.length + index + 1}`, ...value,
           }));
           state.bookingSnapshots.push(...inserted);

@@ -15,7 +15,11 @@ export function registerReservationRecoveryFollowUp(callback: NonNullable<typeof
 
 async function finishRecoveredReservation(hold: BookingReservation, tenant: Tenant) {
   const [client] = await db.select().from(clients).where(eq(clients.id, hold.clientId));
-  const [snapshot] = await db.select().from(bookingSnapshots).where(and(eq(bookingSnapshots.clientId, hold.clientId), eq(bookingSnapshots.tenantId, tenant.id)));
+  const [snapshot] = await db.select().from(bookingSnapshots).where(and(
+    eq(bookingSnapshots.clientId, hold.clientId),
+    eq(bookingSnapshots.tenantId, tenant.id),
+    eq(bookingSnapshots.slotId, hold.slotId),
+  )).orderBy(desc(bookingSnapshots.confirmedAt), desc(bookingSnapshots.id)).limit(1);
   if (!client || !snapshot) return;
   const [charge] = await db.select().from(paymentCharges).where(and(eq(paymentCharges.clientId, client.id), eq(paymentCharges.status, "succeeded"))).orderBy(desc(paymentCharges.chargedAt)).limit(1);
   if (tenant.bookingConfirmedEmailEnabled && !client.bookingConfirmationSentAt) {
@@ -494,7 +498,11 @@ export async function settleReservation(reservationId: string, tenantId: string,
     }
     if (!client || !hold || !liveReservationStatuses.includes(hold.status as any)) return { hold };
     if (hold.status === "payment_review") return { hold };
-    const [snapshot] = await tx.select({ id: bookingSnapshots.id }).from(bookingSnapshots).where(eq(bookingSnapshots.clientId, client.id)).limit(1);
+    const [snapshot] = await tx.select({ id: bookingSnapshots.id }).from(bookingSnapshots).where(and(
+      eq(bookingSnapshots.clientId, client.id),
+      eq(bookingSnapshots.tenantId, tenantId),
+      eq(bookingSnapshots.slotId, hold.slotId),
+    )).limit(1);
     const external = await tx.select({ id: auditLogs.id }).from(auditLogs).where(and(
       eq(auditLogs.tenantId, tenantId), eq(auditLogs.resourceId, client.id),
       inArray(auditLogs.action, ["activity_external_booking_reviewed", "activity_writeupp_appointment_arranged"]),

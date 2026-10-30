@@ -37,9 +37,12 @@ export async function acknowledgeWriteuppArrangement(
     if (!client || client.isArchived || client.completedAt) throw new Error("Client is not active in this practice");
     if (!["AwaitingConfirmation", "RegistrationPending"].includes(client.status))
       throw new Error("Only unconfirmed clients can be marked as arranged in WriteUpp");
-    const [snapshot] = await tx.select({ id: bookingSnapshots.id }).from(bookingSnapshots).where(and(
+    const snapshotPredicates = [
       eq(bookingSnapshots.tenantId, tenantId), eq(bookingSnapshots.clientId, clientId),
-    )).limit(1);
+      ...(client.assignedSlotId ? [eq(bookingSnapshots.slotId, client.assignedSlotId)] : []),
+    ];
+    const [snapshot] = await tx.select({ id: bookingSnapshots.id }).from(bookingSnapshots)
+      .where(and(...snapshotPredicates)).limit(1);
     if (snapshot) throw new Error("This client already has a portal booking snapshot");
     const arrangements = await tx.select().from(auditLogs).where(and(
       eq(auditLogs.tenantId, tenantId), eq(auditLogs.resourceId, clientId),
@@ -68,8 +71,12 @@ export async function recordExternalBookingReview(
     const [client] = await tx.select().from(clients).where(and(eq(clients.id, clientId), eq(clients.tenantId, tenantId))).for("update");
     if (!client || client.isArchived || client.completedAt) throw new Error("Client is not active in this practice");
     if (!["AwaitingConfirmation", "RegistrationPending"].includes(client.status)) throw new Error("Only unconfirmed clients can be marked as historically booked");
+    const snapshotPredicates = [
+      eq(bookingSnapshots.tenantId, tenantId), eq(bookingSnapshots.clientId, clientId),
+      ...(client.assignedSlotId ? [eq(bookingSnapshots.slotId, client.assignedSlotId)] : []),
+    ];
     const [snapshot] = await tx.select({ id: bookingSnapshots.id }).from(bookingSnapshots)
-      .where(and(eq(bookingSnapshots.tenantId, tenantId), eq(bookingSnapshots.clientId, clientId))).limit(1);
+      .where(and(...snapshotPredicates)).limit(1);
     if (snapshot) throw new Error("This client already has a portal booking snapshot");
     const key = appointmentKey(review);
     const prior = await tx.select().from(auditLogs).where(and(
@@ -147,7 +154,9 @@ export async function historicReconciliationInventory(tenantId: string) {
   ]);
   return rows.map(client => {
     const slot = slots.find(s => s.id === client.assignedSlotId);
-    const snapshot = snapshots.find(s => s.clientId === client.id);
+    const clientSnapshots = snapshots.filter(s => s.clientId === client.id)
+      .sort((a, b) => b.confirmedAt.getTime() - a.confirmedAt.getTime() || b.id.localeCompare(a.id));
+    const snapshot = clientSnapshots.find(s => !client.assignedSlotId || s.slotId === client.assignedSlotId);
     const registration = submissions.find(s => s.id === client.registrationFormSubmissionId && s.clientId === client.id && !s.isDraft);
     const conflictingClients = slot ? activeClients.filter(c => c.id !== client.id && c.assignedSlotId === slot.id && (ACTIVE_ALLOCATION_STATUSES as readonly string[]).includes(c.status)) : [];
     const conflictingSnapshots = slot ? snapshots.filter(s => s.clientId !== client.id && s.slotId === slot.id) : [];

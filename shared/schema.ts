@@ -385,7 +385,6 @@ export const bookingSnapshots = pgTable("booking_snapshots", {
   confirmedAt: timestamp("confirmed_at").defaultNow().notNull(),
   idempotencyKey: text("idempotency_key").notNull(),
 }, (table) => [
-  uniqueIndex("booking_snapshots_client_unique").on(table.clientId),
   uniqueIndex("booking_snapshots_idempotency_unique").on(table.tenantId, table.idempotencyKey),
 ]);
 

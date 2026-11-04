@@ -1,3 +1,4 @@
+- [Tenant identities and allocation scope](tenant-identities-and-allocation-scope.md) — Tenant 1 is Perinatal; Tenant 2 is CY&A. Clinician-led availability invitations are CY&A-only.
 - [Express middleware mount path stripping](express-middleware-mount-path.md) — app.use('/api', fn): req.path inside fn is the path AFTER the mount prefix, not the full URL.
 - [Multi-tenant email isolation pattern](multi-tenant-email.md) — all email sends must pass TenantContext; template lookup, FROM address, and body copy all derived from tenant.
 - [tsx dev mode does not type-check](tsx-dev-no-typecheck.md) — missing imports (unimported tables/types) only surface as runtime ReferenceErrors on rarely-exercised code paths.

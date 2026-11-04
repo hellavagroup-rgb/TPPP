@@ -42,7 +42,9 @@ describe("public flexible booking", () => {
 
     expect(await screen.findByText("Dr Amara Patel")).toBeTruthy();
     expect(screen.getByText(/First session date: to be agreed/)).toBeTruthy();
-    expect(screen.getByText(/Availability window:/)).toBeTruthy();
+    expect(screen.queryByText(/Availability window:/)).toBeNull();
+    expect(screen.queryByText(/2 Jun 2026/)).toBeNull();
+    expect(screen.getByText(/Regular slot availability ends/)).toBeTruthy();
     expect(screen.getByText(/Choose your preferred clinician and an available slot/)).toBeTruthy();
     expect(screen.getByText(/This is not yet a confirmed booking/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /Choose this slot/ }));
@@ -53,6 +55,27 @@ describe("public flexible booking", () => {
     expect(fetchMock.mock.calls[1][0]).toBe("/api/public/booking/invite-123");
     expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ clinicianId: "clinician-1", slotId: "slot-1", expectedSchedule: slotScheduleFingerprint(booking.clinicians[0].slots[0]) });
     expect(await screen.findByText("Your clinician and slot selection has been recorded")).toBeTruthy();
+  });
+
+  it("preserves genuine future start and end restrictions without promising a first session", async () => {
+    const future = structuredClone(booking);
+    future.clinicians[0].slots[0].startDate = "2099-06-02";
+    future.clinicians[0].slots[0].endDate = "2099-12-15";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(future), { status: 200 })));
+    mount();
+    expect(await screen.findByText(/Available from .*2099.*earliest possible start/)).toBeTruthy();
+    expect(screen.getByText(/Regular slot availability ends .*2099/)).toBeTruthy();
+    expect(screen.getByText("First session date: to be agreed.")).toBeTruthy();
+    expect(screen.queryByText(/Availability window:/)).toBeNull();
+  });
+
+  it("preserves exact dates for one-off appointments", async () => {
+    const oneOff = structuredClone(booking);
+    Object.assign(oneOff.clinicians[0].slots[0], { type: "SpecificDate", date: "2099-06-02" });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(oneOff), { status: 200 })));
+    mount();
+    expect(await screen.findByText(/One-off appointment · .*2099/)).toBeTruthy();
+    expect(screen.queryByText("First session date: to be agreed.")).toBeNull();
   });
 
   it("gives a composed empty state when no clinicians have live choices", async () => {

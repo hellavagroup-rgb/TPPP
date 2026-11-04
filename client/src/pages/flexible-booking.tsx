@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { CheckCircle2, Clock3, MapPin, RefreshCw, UserRound, XCircle } from "lucide-react";
-import { formatOfferDate, formatOfferFrequency, formatOfferTimeRange, formatOfferWindow } from "@shared/offerSchedule";
+import { formatOfferDate, formatOfferFrequency, formatOfferTimeRange } from "@shared/offerSchedule";
 import { FIRST_SESSION_TO_AGREE, REGULAR_SESSION_NEXT_STEPS, regularSessionConstraints } from "@shared/regularSessionCopy";
 import { slotScheduleFingerprint } from "@shared/availabilityEdit";
 
@@ -100,7 +100,7 @@ export default function FlexibleBooking() {
             const recurring = slot.type === "Recurring";
             return <button key={slot.id} type="button" onClick={() => setSelected(isSelected ? null : { clinicianId: clinician.id, slotId: slot.id })} aria-pressed={isSelected} className={`w-full rounded-xl border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 ${isSelected ? "border-[#527467] bg-[#edf4ef] ring-1 ring-[#527467]" : "border-[#e1e8e2] bg-[#fbfcfa] hover:border-[#9db5a7]"}`}>
               <div className="flex flex-col justify-between gap-3 sm:flex-row"><div className="space-y-1.5 text-sm">
-                {recurring ? <><p className="font-semibold">{formatOfferFrequency(slot.frequency)} · {slot.day || "Day to be confirmed"} · {formatOfferTimeRange(slot.startTime, slot.endTime)}</p><p className="text-muted-foreground">{formatOfferWindow(slot.startDate, slot.endDate)}</p><p className="text-muted-foreground">{FIRST_SESSION_TO_AGREE}</p><p className="text-muted-foreground">{REGULAR_SESSION_NEXT_STEPS}</p>{regularSessionConstraints(slot.startDate, slot.endDate).map(line => <p className="text-muted-foreground" key={line}>{line}</p>)}</> : <><p className="font-semibold">One-off appointment · {slot.date ? formatOfferDate(slot.date) : "Date to be confirmed"}</p><p className="text-muted-foreground">{formatOfferTimeRange(slot.startTime, slot.endTime)}</p></>}
+                {recurring ? <><p className="font-semibold">{formatOfferFrequency(slot.frequency)} · {slot.day || "Day to be confirmed"} · {formatOfferTimeRange(slot.startTime, slot.endTime)}</p><p className="text-muted-foreground">{FIRST_SESSION_TO_AGREE}</p><p className="text-muted-foreground">{REGULAR_SESSION_NEXT_STEPS}</p>{regularSessionConstraints(slot.startDate, slot.endDate).map(line => <p className="text-muted-foreground" key={line}>{line}</p>)}</> : <><p className="font-semibold">One-off appointment · {slot.date ? formatOfferDate(slot.date) : "Date to be confirmed"}</p><p className="text-muted-foreground">{formatOfferTimeRange(slot.startTime, slot.endTime)}</p></>}
                 <p className="flex items-center gap-1.5 pt-1 text-muted-foreground"><MapPin className="h-3.5 w-3.5" />{slot.locationType === "in_person" ? "In person" : "Online"}</p>
               </div><span className={`self-start rounded-full px-3 py-1 text-xs font-medium ${isSelected ? "bg-[#527467] text-white" : "bg-[#e8eee9] text-[#4c6259]"}`}>{isSelected ? "Slot selected" : "Choose this slot"}</span></div>
             </button>;

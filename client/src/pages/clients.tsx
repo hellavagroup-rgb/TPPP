@@ -159,6 +159,8 @@ type BoardClient = ClientType & {
     sentAt?: string | null;
   };
   allocationOfferEligibility?: AllocationOfferEligibility | null;
+  allocationOfferKind?: "clinician_invitation" | null;
+  allocationOfferDeliveryAcceptedAt?: string | null;
   bookingSnapshot?: BookingSnapshot | null;
   writeuppArranged?: boolean;
 };
@@ -171,6 +173,10 @@ function getAllocationOfferState(client: BoardClient): AllocationOfferState {
 function hasRecordedOfferDelivery(client: BoardClient, visibilityEnabled: boolean): boolean {
   const projection = client.allocationOfferState;
   if (client.status !== "OptionsSent" || getAllocationOfferState(client) !== "pending") return false;
+  if (client.allocationOfferKind === "clinician_invitation") {
+    // An old fixed-slot email cannot establish delivery of a newer invitation.
+    return !!client.allocationOfferDeliveryAcceptedAt;
+  }
   if (typeof projection === "object" && projection && "deliveryAcceptedAt" in projection) {
     return !!projection.deliveryAcceptedAt;
   }
@@ -1763,6 +1769,7 @@ export default function Clients() {
       }),
       offerState: getAllocationOfferState(client),
       offerDeliveryRecorded: hasRecordedOfferDelivery(client, allocationVisibilityEnabled),
+      offerKind: client.allocationOfferKind,
       offerEligibility: client.allocationOfferEligibility ?? undefined,
       needsAdminCall: !!(client as any).needsAdminCall,
       writeuppAppointmentConfirmed: (client as any).writeuppAppointmentConfirmed === true,
@@ -3768,6 +3775,13 @@ export default function Clients() {
                 : `Assign ${selectedClient?.displayId} to an available time slot.`}
             </DialogDescription>
           </DialogHeader>
+          {flexibleBookingEnabled && !isManualAllocation && (
+            <p className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900" role="note">
+              Availability preview only. Use “Recommend clinician” to choose clinicians above their slots.
+              The client will choose a clinician and an available slot from their invitation.
+              Slot buttons are disabled here because staff are not selecting the appointment in this workflow.
+            </p>
+          )}
           <div className="grid gap-6 py-4">
             <div className="p-3 bg-muted/30 rounded border border-border space-y-2">
               <div className="flex items-center justify-between">

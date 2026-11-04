@@ -1381,6 +1381,8 @@ export async function registerRoutes(
         ...withTenantAllocationVisibility(c, req.tenant?.id ?? "", !!visibility, visibility),
         allocationOfferState: offerStates?.get(c.id)?.state ?? null,
         allocationOfferEligibility: offerStates?.get(c.id)?.eligibility ?? null,
+        allocationOfferKind: offerStates?.get(c.id)?.kind ?? null,
+        allocationOfferDeliveryAcceptedAt: offerStates?.get(c.id)?.deliveryAcceptedAt ?? null,
         hasFailedPayment: failedMap.has(c.id),
         latestFailureReason: failedMap.get(c.id) ?? null,
         paymentSetupRecoveryHref: c.registrationPaymentFailedAt

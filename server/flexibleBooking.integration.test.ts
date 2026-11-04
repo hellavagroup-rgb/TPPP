@@ -48,6 +48,7 @@ import { latestReservation, settleReservation, assertReservationOpen, flagLateRe
 import { reconcileRegistrationPayment } from "./paymentReconciliation";
 import { confirmBooking } from "./bookingConfirmation";
 import { getAllocationVisibility } from "./allocationVisibility";
+import { getAllocationOfferStates } from "./allocationOfferState";
 import { AvailabilityTimeOffConflictError, storage } from "./storage";
 
 let server: Server;
@@ -119,6 +120,52 @@ afterAll(async () => {
   if (isolated.schema) await isolated.admin.query(`DROP SCHEMA "${isolated.schema}" CASCADE`);
   await isolated.admin?.end();
   vi.unstubAllEnvs();
+});
+
+describe("live invitation staff summaries", () => {
+  it("reports an accepted clinician invitation without inventing fixed appointment options", async () => {
+    expect((await request("/api/clients/client/clinician-invitation", { clinicianIds: ["clinician"] })).status).toBe(200);
+    const records = await db.select().from(schema.clients);
+    const summary = (await getAllocationOfferStates(records, CYA)).get("client");
+    expect(summary).toMatchObject({ state: "pending", kind: "clinician_invitation", eligibility: null });
+    expect(summary?.deliveryAcceptedAt).toBeInstanceOf(Date);
+    expect(JSON.stringify(summary)).not.toMatch(/token|clinicianIds|slotId/);
+    expect(await db.select().from(schema.clientClinicianOptions)).toHaveLength(0);
+    expect(await getAllocationOfferStates(records, OTHER)).toEqual(new Map());
+  });
+
+  it.each(["prepared", "uncertain", "declined", "closed", "selected"] as const)(
+    "does not describe %s invitations as accepted delivery", async status => {
+      await db.insert(schema.clinicianInvitations).values({
+        tenantId: CYA, clientId: "client", clinicianIds: ["clinician"], token: "test-only-token",
+        status, emailAttemptAcceptedAt: new Date(),
+      });
+      await db.update(schema.clients).set({ status: "OptionsSent" }).where(eq(schema.clients.id, "client"));
+      const summary = (await getAllocationOfferStates(await db.select().from(schema.clients), CYA)).get("client");
+      expect(summary).toMatchObject({
+        state: ["prepared", "uncertain"].includes(status) ? "pending" : status === "declined" ? "declined" : "closed",
+        kind: "clinician_invitation", deliveryAcceptedAt: null, eligibility: null,
+      });
+    },
+  );
+
+  it("uses the latest offer mechanism and ignores invitations owned by another practice", async () => {
+    await db.update(schema.clients).set({ status: "OptionsSent" }).where(eq(schema.clients.id, "client"));
+    await db.insert(schema.clinicianInvitations).values([
+      { tenantId: CYA, clientId: "client", clinicianIds: ["clinician"], token: "old-invite",
+        status: "closed", createdAt: new Date("2026-01-01") },
+      { tenantId: OTHER, clientId: "client", clinicianIds: ["other-clinician"], token: "foreign-invite",
+        status: "sent", createdAt: new Date("2099-01-01"), emailAttemptAcceptedAt: new Date() },
+    ]);
+    await db.insert(schema.clientClinicianOptions).values({
+      tenantId: CYA, clientId: "client", clinicianId: "clinician", slotId: "slot",
+      selectionToken: "new-fixed-option", status: "pending", createdAt: new Date("2026-02-01"), sentAt: new Date(),
+    });
+    const summary = (await getAllocationOfferStates(await db.select().from(schema.clients), CYA)).get("client");
+    expect(summary?.state).toBe("pending");
+    expect(summary?.kind).toBeUndefined();
+    expect(summary?.eligibility?.pendingCount).toBe(1);
+  });
 });
 
 describe("staff insurer mismatch guidance", () => {

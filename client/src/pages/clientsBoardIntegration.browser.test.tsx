@@ -417,6 +417,69 @@ describe("Clients page compact board integration", () => {
     expect(writes[0].path).not.toBe("/api/clients/new-flexible/clinician-invitation");
   });
 
+  it("explains that disabled slots are previews while staff recommend clinicians", async () => {
+    apiFixtures.tenant = makeTenant({
+      id: CYA_PSYCHOLOGY_TENANT_ID, flexibleBookingEnabled: true,
+      paymentReconciliationEnabled: true, registrationFormEnabled: true,
+    });
+    apiFixtures.clients = [makeClient("preview-client", "PREVIEW-101", "Forms Completed")];
+    const originalFetch = fetch;
+    vi.stubGlobal("fetch", vi.fn(async (input, init) => {
+      const path = new URL(String(input), window.location.origin).pathname;
+      if (path === "/api/clinicians") return json([{
+        id: "preview-clinician", name: "Dr Preview", specialties: [], insurers: [],
+        capacity: 10, currentLoad: 0, maxNewClients: 3, isActive: true,
+        availability: [{ id: "preview-slot", clinicianId: "preview-clinician", type: "Recurring",
+          day: "Tuesday", startTime: "14:30", endTime: "15:30", isBooked: false, locationType: "in_person" }],
+      }]);
+      return originalFetch(input, init);
+    }));
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const user = userEvent.setup();
+    const card = await screen.findByTestId("kanban-card-preview-client");
+    await user.click(within(card).getByRole("button", { name: "Allocate" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/Availability preview only/)).toBeTruthy();
+    expect(await within(dialog).findByRole("button", { name: /Tuesday/ })).toHaveProperty("disabled", true);
+    const recommend = within(dialog).getByRole("button", { name: "Recommend Dr Preview" });
+    await user.click(recommend);
+    expect(within(dialog).getByRole("button", { name: "Send Invitation (1)" })).toHaveProperty("disabled", false);
+  });
+
+  it.each([true, false])("shows an active live invitation without fixed offers when details visibility=%s", async details => {
+    apiFixtures.tenant = makeTenant({
+      id: CYA_PSYCHOLOGY_TENANT_ID, flexibleBookingEnabled: true,
+      paymentReconciliationEnabled: true, allocationVisibilityEnabled: details,
+    });
+    apiFixtures.clients = [cyaOfferedClient({
+      allocationOfferState: "pending", allocationOfferKind: "clinician_invitation",
+      allocationOfferDeliveryAcceptedAt: "2026-11-04T15:36:09Z", allocationOfferEligibility: null,
+      allocationVisibility: null,
+    })];
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const card = await screen.findByTestId("compact-client-card-matched-offer");
+    expect(within(card).getByText("Waiting for the client to choose a clinician and slot")).toBeTruthy();
+    expect(within(card).queryByText(/appointment offer is closed|Review offer delivery/i)).toBeNull();
+  });
+
+  it("does not use an older fixed-offer email as delivery evidence for a live invitation", async () => {
+    apiFixtures.tenant = makeTenant({
+      id: CYA_PSYCHOLOGY_TENANT_ID, flexibleBookingEnabled: true,
+      paymentReconciliationEnabled: true, allocationVisibilityEnabled: true,
+    });
+    apiFixtures.clients = [cyaOfferedClient({
+      allocationOfferKind: "clinician_invitation", allocationOfferDeliveryAcceptedAt: null,
+      allocationOfferEligibility: null,
+    })];
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const card = await screen.findByTestId("compact-client-card-matched-offer");
+    expect(within(card).getByText("Review invitation delivery")).toBeTruthy();
+    expect(within(card).queryByText("Waiting for the client to choose a clinician and slot")).toBeNull();
+  });
+
   it.each([
     ["active", "Cancel hold"],
     ["payment_check", "Check reservation"],

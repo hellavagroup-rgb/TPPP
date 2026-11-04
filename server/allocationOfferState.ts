@@ -1,12 +1,14 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "./db";
-import { clientClinicianOptions, timeSlots, clinicians, type Client } from "@shared/schema";
+import { clientClinicianOptions, clinicianInvitations, timeSlots, clinicians, type Client } from "@shared/schema";
+import { isCyaPsychologyTenant } from "@shared/practicePolicies";
 import { practiceToday, slotUnavailableReason } from "@shared/slotEligibility";
 import type { AllocationOfferEligibility } from "@shared/allocationOfferSummary";
 
 export type AllocationOfferState = "pending" | "declined" | "closed";
 export interface AllocationOfferSummary {
   state: AllocationOfferState;
+  kind?: "clinician_invitation";
   eligibility: AllocationOfferEligibility | null;
   deliveryAcceptedAt: Date | null;
 }
@@ -31,6 +33,17 @@ export async function getAllocationOfferStates(clientList: Client[], tenantId: s
     eq(clientClinicianOptions.tenantId, tenantId),
     inArray(clientClinicianOptions.clientId, ownedIds),
   )).orderBy(desc(clientClinicianOptions.createdAt));
+  // CY&A's live-choice invitations are a separate offer mechanism. Only read
+  // safe summary fields; never include the family's invitation token.
+  const invitations = isCyaPsychologyTenant(tenantId) ? await db.select({
+    clientId: clinicianInvitations.clientId,
+    status: clinicianInvitations.status,
+    createdAt: clinicianInvitations.createdAt,
+    emailAttemptAcceptedAt: clinicianInvitations.emailAttemptAcceptedAt,
+  }).from(clinicianInvitations).where(and(
+    eq(clinicianInvitations.tenantId, tenantId),
+    inArray(clinicianInvitations.clientId, ownedIds),
+  )).orderBy(desc(clinicianInvitations.createdAt)) : [];
   const pending = rows.filter(row => row.tenantId === tenantId && row.status === "pending");
   const slotIds = Array.from(new Set(pending.flatMap(row => row.slotId ? [row.slotId] : [])));
   const clinicianIds = Array.from(new Set(pending.map(row => row.clinicianId)));
@@ -48,6 +61,19 @@ export async function getAllocationOfferStates(clientList: Client[], tenantId: s
   for (const id of ownedIds) {
     const options = rows.filter(row => row.clientId === id && row.tenantId === tenantId);
     const newestTime = options[0]?.createdAt?.getTime();
+    const invitation = invitations.find(row => row.clientId === id);
+    if (invitation && (newestTime === undefined || invitation.createdAt.getTime() >= newestTime)) {
+      result.set(id, {
+        kind: "clinician_invitation",
+        state: ["sent", "prepared", "uncertain"].includes(invitation.status) ? "pending"
+          : invitation.status === "declined" ? "declined" : "closed",
+        deliveryAcceptedAt: invitation.status === "sent" ? invitation.emailAttemptAcceptedAt : null,
+        // These invite a clinician choice from live availability, not fixed
+        // appointment options. Do not fabricate fixed-slot eligibility counts.
+        eligibility: null,
+      });
+      continue;
+    }
     const latest = options.filter(row => row.createdAt?.getTime() === newestTime);
     const pendingOptions = options.filter(row => row.status === "pending");
     const state = pendingOptions.length ? "pending"

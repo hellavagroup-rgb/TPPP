@@ -40,6 +40,17 @@ describe("Tenant 2 offer call prompts", () => {
     });
   });
 
+  it("waits for clinician and slot selection on an accepted live invitation without fixed-slot counts", () => {
+    expect(getClientNextStep({ ...offer, offerKind: "clinician_invitation", offerEligibility: null })).toMatchObject({
+      kind: "waiting", title: "Waiting for the client to choose a clinician and slot",
+    });
+  });
+
+  it("requires acceptance evidence before waiting on a live invitation", () => {
+    expect(getClientNextStep({ ...offer, offerKind: "clinician_invitation", offerEligibility: null,
+      offerDeliveryRecorded: false })).toMatchObject({ kind: "action", title: "Review invitation delivery" });
+  });
+
   it("preserves unavailable-choice warnings instead of falsely waiting", () => {
     expect(getClientNextStep({ ...offer,
       offerEligibility: { pendingCount: 2, availableCount: 1, unavailableCount: 1 },

@@ -23,6 +23,7 @@ export interface ClientNextStepInput {
   hasSelectedAppointment?: boolean;
   offerState?: string | null;
   offerDeliveryRecorded?: boolean;
+  offerKind?: "clinician_invitation" | null;
   offerEligibility?: {
     pendingCount: number;
     availableCount: number;
@@ -191,6 +192,15 @@ function optionsSentNextStep(input: ClientNextStepInput): ClientNextStep {
         ? "The client declined the offered choices; review the offer before sending current choices."
         : "The appointment offer is closed; send current choices if the client still needs an appointment.",
     );
+  }
+
+  if (input.offerState === "pending" && input.offerKind === "clinician_invitation") {
+    return input.offerDeliveryRecorded === true
+      ? waiting("Waiting for the client to choose a clinician and slot",
+        "The booking invitation is active; no appointment selection is recorded yet.")
+      : action("Review invitation delivery",
+        "Accepted invitation delivery is not recorded; verify delivery before waiting for the client to choose.",
+        "review_offer");
   }
 
   if (eligibility && eligibility.unavailableCount > 0) {

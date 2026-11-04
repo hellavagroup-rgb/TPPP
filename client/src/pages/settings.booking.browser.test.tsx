@@ -76,7 +76,7 @@ describe("signed-in booking settings", () => {
     expect(within(bookingCard).getByText(/ask a super administrator to enable payment reconciliation/i)).toBeTruthy();
     expect(within(bookingCard).getByText(/New flexible bookings are unavailable without reconciliation/i)).toBeTruthy();
     expect(within(bookingCard).getByText(/existing reservations stay protected/i)).toBeTruthy();
-    expect(within(bookingCard).getByRole("switch", { name: "Allow flexible clinician booking" }))
+    expect(within(bookingCard).getByRole("switch", { name: "Allow families to choose a clinician and slot" }))
       .toHaveProperty("disabled", true);
     expect(within(bookingCard).getByRole("button", { name: "Save reservation duration" }))
       .toHaveProperty("disabled", false);
@@ -97,9 +97,14 @@ describe("signed-in booking settings", () => {
 
     const bookingCard = await screen.findByTestId("flexible-booking-settings");
     await screen.findByText(/existing reservations stay protected/i);
-    const workflowSwitch = within(bookingCard).getByRole("switch", { name: "Allow flexible clinician booking" });
+    const workflowSwitch = within(bookingCard).getByRole("switch", { name: "Allow families to choose a clinician and slot" });
     expect(workflowSwitch).toHaveProperty("disabled", false);
     expect(workflowSwitch.getAttribute("aria-checked")).toBe("true");
+    expect(within(bookingCard).getByText("Clinician and slot booking")).toBeTruthy();
+    expect(within(bookingCard).getByText(/Admins select one or more suitable clinicians/)).toBeTruthy();
+    expect(within(bookingCard).getByText(/Families then choose a clinician and an available slot/)).toBeTruthy();
+    expect(within(bookingCard).getByText(/chosen slot is temporarily reserved/)).toBeTruthy();
+    expect(within(bookingCard).queryByText(/not a specific appointment time/)).toBeNull();
     expect(within(bookingCard).getByText(/existing reservations stay protected/i)).toBeTruthy();
   });
 });

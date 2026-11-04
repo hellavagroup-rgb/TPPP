@@ -407,7 +407,7 @@ describe("Clients page compact board integration", () => {
     await user.click(await screen.findByRole("menuitem", { name: "Allocate to Clinician" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("Send Clinician Options")).toBeTruthy();
-    expect(within(dialog).queryByText("Invite Clinician Preferences")).toBeNull();
+    expect(within(dialog).queryByText("Offer Clinicians and Available Slots")).toBeNull();
     await user.click(await within(dialog).findByRole("button", { name: /Monday/ }));
     const sendOptions = await within(dialog).findByRole("button", { name: "Send Options (1)" });
     expect(within(dialog).queryByRole("button", { name: /Send Invitation/ })).toBeNull();

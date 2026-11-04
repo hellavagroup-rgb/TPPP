@@ -753,15 +753,15 @@ function FlexibleBookingSettings({ tenant }: { tenant: any }) {
     && !!tenant?.registrationFormId;
   if (!isCyaPsychologyTenant(tenant?.id)) return null;
   return <Card className="border-none shadow-sm" data-testid="flexible-booking-settings">
-    <CardHeader><CardTitle>Clinician preference booking</CardTitle><CardDescription>Invite families to choose a suitable clinician first. Staff can then reserve an agreed appointment while registration is completed.</CardDescription></CardHeader>
+    <CardHeader><CardTitle>Clinician and slot booking</CardTitle><CardDescription>Admins select one or more suitable clinicians. Families then choose a clinician and an available slot from those clinicians' current availability.</CardDescription></CardHeader>
     <CardContent className="space-y-5">
       {isLoading ? <div className="h-16 animate-pulse rounded bg-muted" aria-label="Loading booking settings" /> :
         isError ? <Alert variant="destructive"><AlertDescription>Booking settings could not be loaded. <Button variant="link" className="h-auto p-0" onClick={() => refetch()}>Try again</Button></AlertDescription></Alert> :
         <>
           {!canEnable && <Alert><AlertDescription>To enable this workflow, turn on multi-clinician allocation and registration, select a registration form in Settings, and ask a super administrator to enable payment reconciliation. New flexible bookings are unavailable without reconciliation; existing reservations stay protected.</AlertDescription></Alert>}
           <div className="flex items-center justify-between gap-4">
-            <div><Label htmlFor="flexible-booking-enabled">Allow families to choose a clinician</Label><p className="mt-1 text-sm text-muted-foreground">New invitations ask for a clinician preference, not a specific appointment time.</p></div>
-            <Switch id="flexible-booking-enabled" checked={settings?.enabled === true} disabled={save.isPending || (!canEnable && settings?.enabled !== true)} onCheckedChange={enabled => save.mutate(enabled)} aria-label="Allow flexible clinician booking" />
+            <div><Label htmlFor="flexible-booking-enabled">Allow families to choose a clinician and slot</Label><p className="mt-1 text-sm text-muted-foreground">The chosen slot is temporarily reserved while registration and any required payment are completed.</p></div>
+            <Switch id="flexible-booking-enabled" checked={settings?.enabled === true} disabled={save.isPending || (!canEnable && settings?.enabled !== true)} onCheckedChange={enabled => save.mutate(enabled)} aria-label="Allow families to choose a clinician and slot" />
           </div>
           <div className="max-w-xs space-y-2"><Label htmlFor="reservation-duration">New reservation duration (hours)</Label><Input id="reservation-duration" type="number" min={1} max={168} step={1} value={duration} onChange={event => setDuration(event.target.value)} /><p className="text-xs text-muted-foreground">Applies to new holds only. Existing reservations keep their original deadline.</p></div>
           <Button onClick={() => save.mutate(settings?.enabled === true)} disabled={save.isPending || !settings || !duration}>{save.isPending ? "Saving…" : "Save reservation duration"}</Button>

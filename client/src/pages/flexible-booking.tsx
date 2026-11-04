@@ -58,7 +58,7 @@ export default function FlexibleBooking() {
 
   if (booking.isLoading) return <main className="min-h-[100dvh] bg-emerald-50/40 p-6"><div className="mx-auto max-w-3xl animate-pulse space-y-5" aria-label="Loading appointment choices"><div className="h-32 rounded-xl bg-emerald-100" /><div className="h-40 rounded-xl bg-white" /><div className="h-40 rounded-xl bg-white" /></div></main>;
   if (booking.isError || !data) return <main className="min-h-[100dvh] bg-emerald-50/40 px-5 py-16"><Card className="mx-auto max-w-lg"><CardHeader><CardTitle>These choices are unavailable</CardTitle><CardDescription>{booking.error instanceof Error ? booking.error.message : "This link may have expired."} Please contact your practice for fresh choices.</CardDescription></CardHeader><CardContent><Button variant="outline" onClick={() => booking.refetch()}><RefreshCw className="mr-2 h-4 w-4" />Try again</Button></CardContent></Card></main>;
-  if (data.status === "confirmed") return <main className="min-h-[100dvh] bg-emerald-50/40 px-5 py-16"><Card className="mx-auto max-w-lg text-center"><CardContent className="pt-9"><CheckCircle2 className="mx-auto mb-4 h-10 w-10" style={{ color }} /><h1 className="text-xl font-semibold">Your clinician choice is confirmed</h1><p className="mt-2 text-muted-foreground">{data.tenantName} has recorded your choice. The practice will contact you with the next steps.</p></CardContent></Card></main>;
+  if (data.status === "confirmed") return <main className="min-h-[100dvh] bg-emerald-50/40 px-5 py-16"><Card className="mx-auto max-w-lg text-center"><CardContent className="pt-9"><CheckCircle2 className="mx-auto mb-4 h-10 w-10" style={{ color }} /><h1 className="text-xl font-semibold">Your clinician and slot are confirmed</h1><p className="mt-2 text-muted-foreground">{data.tenantName} has recorded your booking. The practice will contact you with the next steps.</p></CardContent></Card></main>;
   if (data.status === "expired" || data.status === "unavailable") return <main className="min-h-[100dvh] bg-emerald-50/40 px-5 py-16"><Card className="mx-auto max-w-lg"><CardHeader><CardTitle>These choices are no longer available</CardTitle><CardDescription>Please contact {data.tenantName} and ask the practice to send fresh choices.</CardDescription></CardHeader></Card></main>;
   if (resumeRegistrationUrl || data.status === "selected") {
     const registrationUrl = resumeRegistrationUrl || data.registrationUrl;
@@ -77,17 +77,17 @@ export default function FlexibleBooking() {
       </Card>
     </main>;
   }
-  if (finished) return <main className="min-h-[100dvh] bg-emerald-50/40 px-5 py-16"><Card className="mx-auto max-w-lg text-center"><CardContent className="pt-9"><CheckCircle2 className="mx-auto mb-4 h-10 w-10" style={{ color }} /><h1 className="text-xl font-semibold">{finished === "declined" ? "Thank you for letting us know" : "Your preference has been recorded"}</h1><p className="mt-2 text-muted-foreground">{finished === "declined" ? `${data.tenantName} will be in touch to discuss other options.` : "The practice will contact you with the next step."}</p></CardContent></Card></main>;
+  if (finished) return <main className="min-h-[100dvh] bg-emerald-50/40 px-5 py-16"><Card className="mx-auto max-w-lg text-center"><CardContent className="pt-9"><CheckCircle2 className="mx-auto mb-4 h-10 w-10" style={{ color }} /><h1 className="text-xl font-semibold">{finished === "declined" ? "Thank you for letting us know" : "Your clinician and slot selection has been recorded"}</h1><p className="mt-2 text-muted-foreground">{finished === "declined" ? `${data.tenantName} will be in touch to discuss other options.` : "Please contact the practice for help continuing registration and any required payment. Your booking is not confirmed until these steps are complete."}</p></CardContent></Card></main>;
   const choices = data.clinicians.flatMap(clinician => clinician.slots.map(slot => ({ clinician, slot })));
   return <main className="min-h-[100dvh] bg-[#f1f5f1] px-4 py-8 sm:py-14">
     <div className="mx-auto max-w-3xl">
       <header className="mb-7 rounded-2xl px-6 py-8 text-white shadow-sm sm:px-9" style={{ backgroundColor: color }}>
         <p className="text-xs font-semibold uppercase tracking-[.18em] text-white/75">A thoughtful next step</p>
         <h1 className="mt-2 text-3xl font-semibold tracking-tight">{data.tenantName}</h1>
-        <p className="mt-2 max-w-xl text-sm leading-relaxed text-white/90">Your practice has suggested clinicians and appointment availability that may suit your family. Review the details and tell us which clinician feels like the right fit.</p>
+        <p className="mt-2 max-w-xl text-sm leading-relaxed text-white/90">Your practice has suggested suitable clinicians for your family. Choose your preferred clinician and an available slot from the options below.</p>
       </header>
       <div className="mb-5 flex items-start gap-3 rounded-xl border border-[#d2ded7] bg-white/80 p-4 text-sm text-[#4c6259]">
-        <Clock3 className="mt-0.5 h-4 w-4 shrink-0" /><p>Choosing a clinician records your preference. The practice will confirm the next step; a recurring slot’s first session date is agreed with the team.</p>
+        <Clock3 className="mt-0.5 h-4 w-4 shrink-0" /><p>Your chosen clinician and slot will be temporarily reserved while you complete registration and any required payment. This is not yet a confirmed booking. For recurring sessions, the first session date is agreed with the practice.</p>
       </div>
       {booking.isFetching && <p className="mb-3 text-right text-xs text-muted-foreground" role="status">Checking availability…</p>}
       {actionError && <Alert variant="destructive" className="mb-4"><AlertDescription>{actionError}</AlertDescription></Alert>}
@@ -101,13 +101,13 @@ export default function FlexibleBooking() {
               <div className="flex flex-col justify-between gap-3 sm:flex-row"><div className="space-y-1.5 text-sm">
                 {recurring ? <><p className="font-semibold">{formatOfferFrequency(slot.frequency)} · {slot.day || "Day to be confirmed"} · {formatOfferTimeRange(slot.startTime, slot.endTime)}</p><p className="text-muted-foreground">{formatOfferWindow(slot.startDate, slot.endDate)}</p><p className="text-muted-foreground">{FIRST_SESSION_TO_AGREE}</p><p className="text-muted-foreground">{REGULAR_SESSION_NEXT_STEPS}</p>{regularSessionConstraints(slot.startDate, slot.endDate).map(line => <p className="text-muted-foreground" key={line}>{line}</p>)}</> : <><p className="font-semibold">One-off appointment · {slot.date ? formatOfferDate(slot.date) : "Date to be confirmed"}</p><p className="text-muted-foreground">{formatOfferTimeRange(slot.startTime, slot.endTime)}</p></>}
                 <p className="flex items-center gap-1.5 pt-1 text-muted-foreground"><MapPin className="h-3.5 w-3.5" />{slot.locationType === "in_person" ? "In person" : "Online"}</p>
-              </div><span className={`self-start rounded-full px-3 py-1 text-xs font-medium ${isSelected ? "bg-[#527467] text-white" : "bg-[#e8eee9] text-[#4c6259]"}`}>{isSelected ? "Preference selected" : "Choose this clinician"}</span></div>
+              </div><span className={`self-start rounded-full px-3 py-1 text-xs font-medium ${isSelected ? "bg-[#527467] text-white" : "bg-[#e8eee9] text-[#4c6259]"}`}>{isSelected ? "Slot selected" : "Choose this slot"}</span></div>
             </button>;
           })}</CardContent>
         </Card>)}</div>}
       <div className="mt-6 flex flex-col-reverse justify-between gap-3 sm:flex-row">
         <Button variant="outline" disabled={submit.isPending} onClick={() => { setActionError(""); submit.mutate({ decline: true }); }}><XCircle className="mr-2 h-4 w-4" />None of these feel right</Button>
-        <Button style={{ backgroundColor: color }} disabled={!selected || submit.isPending} onClick={() => { if (selected) { setActionError(""); submit.mutate(selected); } }}>{submit.isPending ? "Sending response…" : "Continue with this clinician"}</Button>
+        <Button style={{ backgroundColor: color }} disabled={!selected || submit.isPending} onClick={() => { if (selected) { setActionError(""); submit.mutate(selected); } }}>{submit.isPending ? "Saving…" : "Continue with this clinician and slot"}</Button>
       </div>
       <p className="mt-7 text-center text-xs text-muted-foreground">Your practice will help you through each step.</p>
     </div>

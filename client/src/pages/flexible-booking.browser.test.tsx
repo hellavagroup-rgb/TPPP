@@ -32,7 +32,7 @@ function mount() {
 }
 
 describe("public flexible booking", () => {
-  it("renders recurring appointment details and submits preference through the public endpoint", async () => {
+  it("explains clinician and slot selection and submits both identifiers through the public endpoint", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(booking), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200 }));
@@ -42,13 +42,16 @@ describe("public flexible booking", () => {
     expect(await screen.findByText("Dr Amara Patel")).toBeTruthy();
     expect(screen.getByText(/First session date: to be agreed/)).toBeTruthy();
     expect(screen.getByText(/Availability window:/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: /Choose this clinician/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Continue with this clinician" }));
+    expect(screen.getByText(/Choose your preferred clinician and an available slot/)).toBeTruthy();
+    expect(screen.getByText(/This is not yet a confirmed booking/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Choose this slot/ }));
+    expect(screen.getByText("Slot selected")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Continue with this clinician and slot" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(fetchMock.mock.calls[1][0]).toBe("/api/public/booking/invite-123");
     expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ clinicianId: "clinician-1", slotId: "slot-1" });
-    expect(await screen.findByText("Your preference has been recorded")).toBeTruthy();
+    expect(await screen.findByText("Your clinician and slot selection has been recorded")).toBeTruthy();
   });
 
   it("gives a composed empty state when no clinicians have live choices", async () => {
@@ -63,7 +66,7 @@ describe("public flexible booking", () => {
       ...booking, status: "confirmed", clinicians: [],
     }), { status: 200 })));
     mount();
-    expect(await screen.findByText("Your clinician choice is confirmed")).toBeTruthy();
+    expect(await screen.findByText("Your clinician and slot are confirmed")).toBeTruthy();
     expect(screen.getByText(/practice will contact you with the next steps/i)).toBeTruthy();
     expect(screen.queryByText("No current choices to show")).toBeNull();
   });

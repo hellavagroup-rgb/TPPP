@@ -549,7 +549,7 @@ export default function Clients() {
     onSuccess: (_result, variables) => {
       invalidateOperationalData(queryClient);
       setClosedOfferClientIds(current => { const next = new Set(current); next.delete(variables.clientId); return next; });
-      toast({ title: "Clinician invitation sent", description: "The family can choose an available session and continue to registration and any required payment." });
+      toast({ title: "Booking invitation sent", description: "The family can choose a clinician and an available slot, then continue to registration and any required payment." });
       setSelectedClient(null);
       setIsAllocateDialogOpen(false);
       setSelectedOptions([]);
@@ -2904,7 +2904,7 @@ export default function Clients() {
                               {resendAllocationOptionsMutation.isPending
                                 ? <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                                 : <Mail className="h-4 w-4 mr-2" />}
-                              {flexibleBookingEnabled ? "Review and resend clinician invitation" : "Resend Options Email"}
+                              {flexibleBookingEnabled ? "Review and resend booking invitation" : "Resend Options Email"}
                             </DropdownMenuItem>
                           )}
                           <DropdownMenuSeparator />
@@ -3019,7 +3019,7 @@ export default function Clients() {
                                 resendPending={resendAllocationOptionsMutation.isPending}
                                 onContactFamily={() => handleOpenEditClient(client)}
                                 onOfferNewChoices={() => handleOfferNewChoices(client)}
-                                resendLabel={flexibleBookingEnabled ? "Review and resend clinician invitation" : undefined}
+                                resendLabel={flexibleBookingEnabled ? "Review and resend booking invitation" : undefined}
                                 onResend={() => flexibleBookingEnabled ? handleOfferNewChoices(client) : resendAllocationOptionsMutation.mutate(client.id)}
                               />
                         )}
@@ -3751,13 +3751,13 @@ export default function Clients() {
       <Dialog open={isAllocateDialogOpen} onOpenChange={(open) => { setIsAllocateDialogOpen(open); if (!open) { setIsManualAllocation(false); setAllocationReason(""); setAllocationOccurrenceDate(""); setSelectedOptions([]); setShowUnavailableSlots(false); } }}>
         <DialogContent className="sm:max-w-[600px] max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{isManualAllocation && flexibleBookingEnabled ? "Reserve Agreed Appointment" : multiClinicianAllocationEnabled ? (flexibleBookingEnabled ? "Invite Clinician Preferences" : "Send Clinician Options") : "Allocate Clinician Slot"}</DialogTitle>
+            <DialogTitle>{isManualAllocation && flexibleBookingEnabled ? "Reserve Agreed Appointment" : multiClinicianAllocationEnabled ? (flexibleBookingEnabled ? "Offer Clinicians and Available Slots" : "Send Clinician Options") : "Allocate Clinician Slot"}</DialogTitle>
             <DialogDescription>
               {isManualAllocation && flexibleBookingEnabled
                 ? `Reserve an agreed appointment for ${selectedClient?.displayId}. The reservation deadline applies to new holds only.`
                 : multiClinicianAllocationEnabled
                 ? flexibleBookingEnabled
-                  ? `Select clinicians to recommend to ${selectedClient?.displayId}. The family will express a clinician preference before appointment details are agreed.`
+                  ? `Select one or more suitable clinicians for ${selectedClient?.displayId}. The client will choose a clinician and an available slot from those clinicians' current availability.`
                   : `Select up to 3 clinician/slot options to send to ${selectedClient?.displayId}. Click slots to toggle selection.`
                 : `Assign ${selectedClient?.displayId} to an available time slot.`}
             </DialogDescription>

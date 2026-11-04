@@ -9,7 +9,7 @@ Tenant 1 is The Perinatal Psychology Practice. Tenant 2 is CY&A Psychology.
 
 **How to apply:** Use practice names alongside tenant numbers in reports and scope decisions. Verify actual practice IDs against records before tenant-specific work; never infer tenant numbering from result order.
 
-For CY&A / Tenant 2 only, the admin picks the clinicians relevant for the client, then the client picks from those clinicians' available slots. Do not apply that workflow to Perinatal / Tenant 1.
+For CY&A / Tenant 2 only, the admin picks one or more clinicians relevant for the client, then the client picks both a clinician and an available slot from those clinicians' current availability. Wording must describe both choices, not just a clinician preference. Do not apply that workflow to Perinatal / Tenant 1.
 
 **Why:** The user reiterated that this workflow had already been discussed and implemented, and explicitly required it ONLY for Tenant 2 CY&A.
 

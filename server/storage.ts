@@ -29,6 +29,8 @@ import {
 import { shouldResetZoomDelivery } from "@shared/bookingZoom";
 import { visibleCalendarSlots } from "@shared/calendarBooking";
 import { slotUnavailableReason } from "@shared/slotEligibility";
+import type { AvailabilityEdit } from "@shared/availabilityEdit";
+import { editAvailabilitySlot } from "./availabilityEditing";
 import { isValidTimeOffBlockWindow, slotOccursOnDate, timeRangesOverlap } from "@shared/timeOffBlocks";
 import { findTimeOffBlockForSlot } from "./availabilityTimeOff";
 import { isCyaPsychologyTenant } from "@shared/practicePolicies";
@@ -170,6 +172,7 @@ export interface IStorage {
   updateAvailabilityTimeOffBlock(id: string, tenantId: string, input: Pick<AvailabilityTimeOffBlock, "date" | "startTime" | "endTime">, actor: Pick<User, "id" | "role">): Promise<AvailabilityTimeOffBlock>;
   deleteAvailabilityTimeOffBlock(id: string, tenantId: string): Promise<boolean>;
   updateTimeSlotLocationType(id: string, tenantId: string, locationType: string, actor: Pick<User, "id" | "role">): Promise<{ slot: TimeSlot; previousLocationType: string } | undefined>;
+  editTimeSlot(id: string, tenantId: string, input: AvailabilityEdit, actor: Pick<User, "id" | "role">): Promise<TimeSlot | undefined>;
   
   // ============ CLIENTS ============
   getAllClients(includeArchived?: boolean, tenantId?: string): Promise<Client[]>;
@@ -702,6 +705,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ============ CLIENTS ============
+  async editTimeSlot(id: string, tenantId: string, input: AvailabilityEdit, actor: Pick<User, "id" | "role">): Promise<TimeSlot | undefined> {
+    return editAvailabilitySlot(id, tenantId, input, actor);
+  }
+
   async getAllClients(includeArchived?: boolean, tenantId?: string): Promise<Client[]> {
     const baseWhere = includeArchived
       ? (tenantId ? eq(clients.tenantId, tenantId) : undefined)

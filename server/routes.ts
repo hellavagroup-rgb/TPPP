@@ -1300,6 +1300,18 @@ export async function registerRoutes(
     }
   });
 
+  app.patch("/api/timeslots/:slotId/schedule", requireAuth, async (req, res) => {
+    try {
+      if (!req.tenant?.id || !req.user) return res.status(403).json({ error: "Practice context is required" });
+      const updated = await storage.editTimeSlot(req.params.slotId, req.tenant.id, req.body, req.user);
+      if (!updated) return res.status(404).json({ error: "Slot not found or access denied" });
+      res.json(updated);
+    } catch (error) {
+      if (error instanceof ReservationError) return res.status(error.status).json({ error: error.message });
+      res.status(500).json({ error: "Could not edit availability. Refresh and try again." });
+    }
+  });
+
   // Update tenant-level availability settings (admin only)
   app.patch("/api/tenant/availability-settings", requireAdmin, async (req, res) => {
     try {

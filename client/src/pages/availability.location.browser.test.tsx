@@ -72,6 +72,14 @@ it("shows a clinician's own retire icon without hovering and completes deletion 
   expect(fetchMock.mock.calls.some(([path]) => String(path).endsWith("/writeupp-retirement"))).toBe(false);
 });
 
+it("opens editing only for the clinician's own free series", async () => {
+  setup();
+  fireEvent.click(await screen.findByTestId("button-edit-slot-own-slot"));
+  expect(await screen.findByRole("heading", { name: "Edit recurring series" })).toBeTruthy();
+  expect(screen.getByText(/whole recurring series, not just the date/)).toBeTruthy();
+  expect(screen.queryByTestId("button-edit-slot-other-slot")).toBeNull();
+});
+
 it("shows a stale-booking rejection after clicking the visible clinician retire icon", async () => {
   const { deletions } = setup({ deleteFailed: true });
   fireEvent.click(await screen.findByTestId("button-delete-slot-own-slot"));

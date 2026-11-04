@@ -19,6 +19,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { RetireAvailabilityDialog } from "@/components/RetireAvailabilityDialog";
+import { EditAvailabilityDialog } from "@/components/EditAvailabilityDialog";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -91,6 +92,7 @@ export default function Availability() {
   });
 
   const [newLocationType, setNewLocationType] = useState<"online" | "in_person">("online");
+  const [editingSlot, setEditingSlot] = useState<TimeSlot | null>(null);
   const isHourlyTimeOff = newSlotType === "Vacation" && !isAllDayTimeOff && !!tenant?.timeOffBlocksEnabled;
 
   const toggleLocationMutation = useMutation({
@@ -689,6 +691,9 @@ export default function Availability() {
 
   return (
     <div className="space-y-4 h-[calc(100vh-8rem)] flex flex-col animate-in fade-in slide-in-from-bottom-4 duration-500">
+      {editingSlot && <EditAvailabilityDialog key={editingSlot.id} slot={editingSlot}
+        onClose={() => setEditingSlot(null)}
+        onSaved={() => { setEditingSlot(null); invalidateOperationalData(queryClient); toast({ title: "Availability updated" }); }} />}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 flex-shrink-0">
         <div>
           <h2 className="text-3xl font-serif font-bold text-foreground">
@@ -1132,6 +1137,15 @@ export default function Availability() {
                               {!isAllocating && (isActive || isFuture) && !slot.retiredAt &&
                                 (user?.role === "admin" || canEditSlotLocation(user, clinician, slot)) && (
                                 <div className="absolute right-0.5 top-0.5 flex gap-0.5">
+                                  {slot.type !== "Vacation" && canEditSlotLocation(user, clinician, slot) && (
+                                    <Button variant="ghost" size="icon" className="h-6 w-6 bg-white/80 hover:bg-white p-0"
+                                      aria-label={slot.type === "Recurring" ? "Edit recurring series" : "Edit one-off availability"}
+                                      title={slot.type === "Recurring" ? "Edit recurring series" : "Edit one-off availability"}
+                                      data-testid={`button-edit-slot-${slot.id}`}
+                                      onClick={event => { event.stopPropagation(); setEditingSlot(slot); }}>
+                                      <Pencil className="h-2.5 w-2.5" />
+                                    </Button>
+                                  )}
                                   <Button
                                     variant="ghost"
                                     size="icon"

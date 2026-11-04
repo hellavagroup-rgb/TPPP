@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import FlexibleBooking from "./flexible-booking";
+import { slotScheduleFingerprint } from "@shared/availabilityEdit";
 
 afterEach(() => {
   cleanup();
@@ -50,7 +51,7 @@ describe("public flexible booking", () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(fetchMock.mock.calls[1][0]).toBe("/api/public/booking/invite-123");
-    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ clinicianId: "clinician-1", slotId: "slot-1" });
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ clinicianId: "clinician-1", slotId: "slot-1", expectedSchedule: slotScheduleFingerprint(booking.clinicians[0].slots[0]) });
     expect(await screen.findByText("Your clinician and slot selection has been recorded")).toBeTruthy();
   });
 

@@ -8,6 +8,7 @@ import { storage } from "./storage";
 import { tenants, clients, clinicians, timeSlots, availabilityTimeOffBlocks, users, formTemplates, formSubmissions, clientClinicianOptions, clinicianInvitations, bookingReservations, auditLogs, type Client, type Tenant, type Clinician, type TimeSlot } from "@shared/schema";
 import { flexibleBookingAvailable, reservationDeadline, validReservationHours, formatReservationDeadline } from "@shared/reservationPolicy";
 import { isCyaPsychologyTenant } from "@shared/practicePolicies";
+import { slotScheduleFingerprint } from "@shared/availabilityEdit";
 import { slotUnavailableReason } from "@shared/slotEligibility";
 import { isSlotBlockedForBooking } from "@shared/timeOffBlocks";
 import { findTimeOffBlockForSlot } from "./availabilityTimeOff";
@@ -111,7 +112,7 @@ async function liveClinicians(tx: any, client: Client, tenant: Tenant, ids: stri
   return results;
 }
 
-export async function reserveFlexibleSlot(input: { clientId: string; tenantId: string; clinicianId: string; slotId: string; route: "online" | "phone"; invitationToken?: string; allocationReason?: string; userId?: string }) {
+export async function reserveFlexibleSlot(input: { clientId: string; tenantId: string; clinicianId: string; slotId: string; route: "online" | "phone"; invitationToken?: string; allocationReason?: string; userId?: string; expectedSchedule?: string }) {
   await reconcileDueReservations(input.tenantId);
   return db.transaction(async tx => {
     const client = await clientLocked(tx, input.clientId, input.tenantId);
@@ -146,6 +147,9 @@ export async function reserveFlexibleSlot(input: { clientId: string; tenantId: s
     const [slot] = await tx.select().from(timeSlots).where(and(eq(timeSlots.id, input.slotId), eq(timeSlots.tenantId, tenant.id))).for("update");
     const preference = await formatPreference(tx, client);
     if (!slot || !slotEligible(slot, clinician, tenant, preference)) fail(409, "This slot is no longer eligible or available. Please choose another.");
+    if (input.expectedSchedule && input.expectedSchedule !== slotScheduleFingerprint(slot)) {
+      fail(409, "This appointment's date, time or format has changed. Refresh the choices and select again.");
+    }
     if (await findTimeOffBlockForSlot(tx, tenant.id, slot)) {
       fail(409, "This appointment overlaps clinician time off, including a future recurring session. Please choose another.");
     }
@@ -274,7 +278,7 @@ export function registerFlexibleBookingRoutes(app: Express) {
   }));
   app.post("/api/clients/:clientId/reserve-slot", requireAdmin, route(async (req, res) => {
     if (!flexibleBookingAvailable(req.tenant || {})) fail(404, "Booking route unavailable");
-    const data = z.object({ clinicianId: z.string().min(1), slotId: z.string().min(1), allocationReason: z.string().max(2000).optional() }).parse(req.body);
+    const data = z.object({ clinicianId: z.string().min(1), slotId: z.string().min(1), allocationReason: z.string().max(2000).optional(), expectedSchedule: z.string().max(1000).optional() }).parse(req.body);
     const result = await reserveFlexibleSlot({ ...data, clientId: req.params.clientId, tenantId: req.tenant!.id, route: "phone", userId: req.user!.id });
     const emailSent = await registrationInstructions(result);
     res.json({ success: true, emailSent, registrationUrl: result.registrationUrl });
@@ -381,8 +385,8 @@ export function registerFlexibleBookingRoutes(app: Express) {
       });
       return res.json({ declined: true });
     }
-    const { clinicianId, slotId } = z.object({ clinicianId: z.string().min(1), slotId: z.string().min(1) }).parse(req.body);
-    const result = await reserveFlexibleSlot({ clientId: invitation.clientId, tenantId: invitation.tenantId, clinicianId, slotId, route: "online", invitationToken: req.params.token });
+    const { clinicianId, slotId, expectedSchedule } = z.object({ clinicianId: z.string().min(1), slotId: z.string().min(1), expectedSchedule: z.string().max(1000).optional() }).parse(req.body);
+    const result = await reserveFlexibleSlot({ clientId: invitation.clientId, tenantId: invitation.tenantId, clinicianId, slotId, expectedSchedule, route: "online", invitationToken: req.params.token });
     await registrationInstructions(result);
     res.json({ registrationUrl: result.registrationUrl });
   }));

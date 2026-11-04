@@ -5,6 +5,8 @@ import { canInspectRegistrationPayment } from "@shared/paymentReconciliationElig
 import { flexibleBookingAvailable } from "@shared/reservationPolicy";
 import { HistoricReconciliation, useHistoricReconciliation } from "@/components/HistoricReconciliation";
 import { CompactClientCard, ClientDetailPanel, hasRecordedAppointmentSelection } from "@/components/CompactClientCard";
+import { InsurancePaymentDetails } from "@/components/InsurancePaymentDetails";
+import { slotScheduleFingerprint } from "@shared/availabilityEdit";
 import { WriteUppAdminQueue } from "@/components/WriteUppAdminQueue";
 import { needsWriteUppAdminWork } from "@shared/writeUppAdminWork";
 import { BookingPaymentReview } from "@/components/BookingPaymentReview";
@@ -483,7 +485,9 @@ export default function Clients() {
 
   const reserveSlotMutation = useMutation({
     mutationFn: async ({ clientId, clinicianId, slotId, allocationReason }: { clientId: string; clinicianId: string; slotId: string; allocationReason?: string }) => {
-      const response = await apiRequest("POST", `/api/clients/${clientId}/reserve-slot`, { clinicianId, slotId, allocationReason });
+      const slot = clinicians.find(item => item.id === clinicianId)?.availability?.find(item => item.id === slotId);
+      if (!slot) throw new Error("This slot is no longer available. Refresh availability and select again.");
+      const response = await apiRequest("POST", `/api/clients/${clientId}/reserve-slot`, { clinicianId, slotId, allocationReason, expectedSchedule: slotScheduleFingerprint(slot) });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || "Reservation could not be created.");
       return body;
@@ -2835,6 +2839,7 @@ export default function Clients() {
                       onGuidanceAction={multiClinicianAllocationEnabled && hasClientNextStepCallback(client, clientNextStep(client))
                         ? () => runClientNextStep(client, clientNextStep(client)) : undefined}
                     >
+                <InsurancePaymentDetails client={client} />
                 <Card className="bg-white shadow-sm hover:shadow-md transition-shadow cursor-pointer overflow-hidden"
                   data-testid={multiClinicianAllocationEnabled ? `client-details-${client.id}` : `kanban-card-${client.id}`}>
                   <CardContent className="p-3">
@@ -3154,6 +3159,7 @@ export default function Clients() {
                       ? () => runClientNextStep(client, bookingStep)
                       : undefined}
                   >
+                  <InsurancePaymentDetails client={client} />
                   {completionCode === "payment_setup_unverified" && (
                     <BookingPaymentReview
                       clientId={client.id}

@@ -5,6 +5,7 @@ import { and, eq } from "drizzle-orm";
 import * as schema from "@shared/schema";
 import { CYA_PSYCHOLOGY_TENANT_ID as CYA } from "@shared/practicePolicies";
 import { flexibleBookingAvailable, reservationDeadline, validReservationHours } from "@shared/reservationPolicy";
+import { slotScheduleFingerprint } from "@shared/availabilityEdit";
 
 const isolated = vi.hoisted(() => ({ pool: null as any, admin: null as any, schema: "", failMail: false, stripe: null as any }));
 // Actual PostgreSQL locks/transactions in an isolated schema, never practice records.
@@ -118,6 +119,93 @@ afterAll(async () => {
   if (isolated.schema) await isolated.admin.query(`DROP SCHEMA "${isolated.schema}" CASCADE`);
   await isolated.admin?.end();
   vi.unstubAllEnvs();
+});
+
+describe("availability schedule edits with actual PostgreSQL ownership", () => {
+  const edit = { type: "Recurring" as const, day: "Friday" as const, frequency: "weekly" as const,
+    startDate: null, endDate: null, startTime: "11:00", endTime: "12:00", locationType: "in_person" as const };
+  const admin = { id: "admin", role: "admin" as const };
+  it("edits a free series in place and audits its scope", async () => {
+    expect(await storage.editTimeSlot("slot", CYA, edit, admin)).toMatchObject({ id: "slot", day: "Friday", startTime: "11:00", locationType: "in_person" });
+    const [audit] = await db.select().from(schema.auditLogs).where(eq(schema.auditLogs.action, "activity_availability_edited"));
+    expect(audit.details).toMatchObject({ scope: "whole_series", before: { day: "Monday" }, after: { day: "Friday" } });
+  });
+  it("rejects other practices, colleagues and unsupported roles without changing data", async () => {
+    expect(await storage.editTimeSlot("other-slot", CYA, edit, admin)).toBeUndefined();
+    expect(await storage.editTimeSlot("slot", OTHER, edit, admin)).toBeUndefined();
+    expect(await storage.editTimeSlot("slot", CYA, edit, { id: "colleague", role: "clinician" })).toBeUndefined();
+    expect(await storage.editTimeSlot("slot", CYA, edit, { id: "admin", role: "super_admin" as any })).toBeUndefined();
+    expect((await db.select().from(schema.timeSlots).where(eq(schema.timeSlots.id, "slot")))[0].day).toBe("Monday");
+  });
+  it("allows a clinician to edit their own free availability", async () => {
+    await db.update(schema.clinicians).set({ userId: "admin" }).where(eq(schema.clinicians.id, "clinician"));
+    expect(await storage.editTimeSlot("slot", CYA, edit, { ...admin, role: "clinician" })).toMatchObject({ day: "Friday" });
+  });
+  it("rejects collisions, invalid changes and conversion to another slot type", async () => {
+    await expect(storage.editTimeSlot("slot", CYA, { ...edit, day: "Tuesday", startTime: "10:00", endTime: "11:00" }, admin)).rejects.toThrow(/overlaps/);
+    await expect(storage.editTimeSlot("slot", CYA, { ...edit, endTime: "09:00" }, admin)).rejects.toThrow(/End time/);
+    await expect(storage.editTimeSlot("slot", CYA, { type: "SpecificDate", date: "2099-01-05", startTime: "11:00", endTime: "12:00", locationType: "online" }, admin)).rejects.toThrow(/type cannot be changed/);
+  });
+  it("protects a held slot even when its isBooked flag is stale", async () => {
+    await reserve();
+    await db.update(schema.timeSlots).set({ isBooked: false }).where(eq(schema.timeSlots.id, "slot"));
+    await expect(storage.editTimeSlot("slot", CYA, edit, admin)).rejects.toThrow(/booking or reservation/);
+    expect((await db.select().from(schema.timeSlots).where(eq(schema.timeSlots.id, "slot")))[0].day).toBe("Monday");
+  });
+  it("protects legacy text-only assignments and retired slots", async () => {
+    await db.update(schema.clients).set({ status: "Assigned", assignedClinicianId: "clinician", assignedSlot: "Monday 10:00", assignedSlotId: null }).where(eq(schema.clients.id, "client"));
+    await expect(storage.editTimeSlot("slot", CYA, edit, admin)).rejects.toThrow(/booking or reservation/);
+    await db.update(schema.timeSlots).set({ retiredAt: new Date() }).where(eq(schema.timeSlots.id, "slot-2"));
+    await expect(storage.editTimeSlot("slot-2", CYA, edit, admin)).rejects.toThrow(/retired/);
+  });
+  it("edits a one-off date without altering the recurring slots", async () => {
+    await db.insert(schema.timeSlots).values({ id: "dated", clinicianId: "clinician", tenantId: CYA, type: "SpecificDate", date: "2099-01-05", startTime: "14:00", endTime: "15:00" });
+    expect(await storage.editTimeSlot("dated", CYA, { type: "SpecificDate", date: "2099-01-06", startTime: "14:00", endTime: "15:00", locationType: "online" }, admin)).toMatchObject({ date: "2099-01-06", day: null });
+    expect((await db.select().from(schema.timeSlots).where(eq(schema.timeSlots.id, "slot")))[0].day).toBe("Monday");
+  });
+  it("protects immutable booking history even without an active client assignment", async () => {
+    await db.insert(schema.bookingSnapshots).values({ tenantId: CYA, clientId: "client", slotId: "slot",
+      clinicianId: "clinician", clinicianName: "Test Clinician", slotType: "Recurring", day: "Monday",
+      startTime: "10:00", endTime: "11:00", locationType: "online", idempotencyKey: "historic-test" });
+    await expect(storage.editTimeSlot("slot", CYA, edit, admin)).rejects.toThrow(/booking or reservation/);
+  });
+  it("protects fixed-slot offers and does not change their advertised appointment", async () => {
+    await db.insert(schema.clientClinicianOptions).values({ tenantId: CYA, clientId: "client", clinicianId: "clinician",
+      slotId: "slot", status: "pending", selectionToken: "offer-test" });
+    await expect(storage.editTimeSlot("slot", CYA, edit, admin)).rejects.toThrow(/currently offered/);
+  });
+  it("rejects saved time off even if the practice later disables that feature", async () => {
+    await db.insert(schema.availabilityTimeOffBlocks).values({ tenantId: CYA, clinicianId: "clinician",
+      date: "2099-01-02", startTime: "11:00", endTime: "12:00" });
+    await db.update(schema.tenants).set({ timeOffBlocksEnabled: false }).where(eq(schema.tenants.id, CYA));
+    await expect(storage.editTimeSlot("slot", CYA, edit, admin)).rejects.toThrow(/saved time off/);
+  });
+  it("serializes competing schedule edits and bookings without changing a held appointment", async () => {
+    const [editing, booking] = await Promise.allSettled([storage.editTimeSlot("slot", CYA, edit, admin), reserve()]);
+    expect(booking.status).toBe("fulfilled");
+    const [saved] = await db.select().from(schema.timeSlots).where(eq(schema.timeSlots.id, "slot"));
+    const held = await latestReservation("client");
+    expect(saved.isBooked).toBe(true);
+    if (editing.status === "fulfilled") {
+      expect(saved.day).toBe("Friday");
+      expect(held?.appointmentLabel).toContain("11:00");
+    } else {
+      expect(saved.day).toBe("Monday");
+      expect(held?.appointmentLabel).toContain("10:00");
+    }
+  });
+  it("rejects a stale selection instead of silently reserving an edited time", async () => {
+    await request("/api/clients/client/clinician-invitation", { clinicianIds: ["clinician"] });
+    const [invitation] = await db.select().from(schema.clinicianInvitations);
+    const [before] = await db.select().from(schema.timeSlots).where(eq(schema.timeSlots.id, "slot"));
+    await storage.editTimeSlot("slot", CYA, edit, admin);
+    const response = await request(`/api/public/booking/${invitation.token}`, {
+      clinicianId: "clinician", slotId: "slot", expectedSchedule: slotScheduleFingerprint(before),
+    });
+    expect(response.status).toBe(409);
+    expect((await response.json()).error).toMatch(/has changed/);
+    expect(await latestReservation("client")).toBeUndefined();
+  });
 });
 
 describe("slot format editing with real database ownership and booking guards", () => {

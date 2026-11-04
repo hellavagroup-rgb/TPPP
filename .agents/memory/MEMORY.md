@@ -49,3 +49,4 @@
 - [Safe booking feature fallback](safe-feature-fallback.md) — retain both clinician fixes and live data; consult saved recovery instructions before any cutover.
 - [Reservation payment identity](reservation-payment-identity.md) — missing or changed payment identity must retain the hold; feature flags never disable existing financial safeguards.
 - [Allocation transaction verification](allocation-transaction-verification.md) — use isolated PostgreSQL tests as the authority when allocation queries or locking change.
+- [Availability edit promises](availability-edit-promises.md) — preserve fixed offers, reject stale live-slot choices, and make whole-series versus one-date edits explicit.

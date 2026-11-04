@@ -7,6 +7,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { CheckCircle2, Clock3, MapPin, RefreshCw, UserRound, XCircle } from "lucide-react";
 import { formatOfferDate, formatOfferFrequency, formatOfferTimeRange, formatOfferWindow } from "@shared/offerSchedule";
 import { FIRST_SESSION_TO_AGREE, REGULAR_SESSION_NEXT_STEPS, regularSessionConstraints } from "@shared/regularSessionCopy";
+import { slotScheduleFingerprint } from "@shared/availabilityEdit";
 
 type PublicSlot = {
   id: string; type: string; day: string | null; date: string | null;
@@ -36,7 +37,7 @@ export default function FlexibleBooking() {
     refetchInterval: 30_000,
   });
   const submit = useMutation({
-    mutationFn: async (payload: { clinicianId: string; slotId: string } | { decline: true }) => {
+    mutationFn: async (payload: { clinicianId: string; slotId: string; expectedSchedule?: string } | { decline: true }) => {
       const response = await fetch(`/api/public/booking/${encodeURIComponent(token)}`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
       });
@@ -107,7 +108,13 @@ export default function FlexibleBooking() {
         </Card>)}</div>}
       <div className="mt-6 flex flex-col-reverse justify-between gap-3 sm:flex-row">
         <Button variant="outline" disabled={submit.isPending} onClick={() => { setActionError(""); submit.mutate({ decline: true }); }}><XCircle className="mr-2 h-4 w-4" />None of these feel right</Button>
-        <Button style={{ backgroundColor: color }} disabled={!selected || submit.isPending} onClick={() => { if (selected) { setActionError(""); submit.mutate(selected); } }}>{submit.isPending ? "Saving…" : "Continue with this clinician and slot"}</Button>
+        <Button style={{ backgroundColor: color }} disabled={!selected || submit.isPending} onClick={() => {
+          if (!selected) return;
+          const slot = data.clinicians.find(item => item.id === selected.clinicianId)?.slots.find(item => item.id === selected.slotId);
+          if (!slot) { setActionError("This slot is no longer available. Refresh the choices and select again."); return; }
+          setActionError("");
+          submit.mutate({ ...selected, expectedSchedule: slotScheduleFingerprint(slot) });
+        }}>{submit.isPending ? "Saving…" : "Continue with this clinician and slot"}</Button>
       </div>
       <p className="mt-7 text-center text-xs text-muted-foreground">Your practice will help you through each step.</p>
     </div>

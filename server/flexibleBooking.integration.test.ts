@@ -121,6 +121,38 @@ afterAll(async () => {
   vi.unstubAllEnvs();
 });
 
+describe("staff insurer mismatch guidance", () => {
+  it("explains the mismatch and edit path when sending an invitation", async () => {
+    await db.update(schema.clients).set({ insurer: "Different Insurance" }).where(eq(schema.clients.id, "client"));
+    const response = await request("/api/clients/client/clinician-invitation", { clinicianIds: ["clinician"] });
+    expect(response.status).toBe(409);
+    const { error } = await response.json();
+    for (const text of ["Insurer mismatch", "TEST-1", "Different Insurance", "Test Insurance", "three-dot", "Edit Details", "Insurer", "Save Changes", "Confirm the client's cover", "Admin Override does not bypass"]) {
+      expect(error).toContain(text);
+    }
+    expect(await db.select().from(schema.clinicianInvitations)).toHaveLength(0);
+    await db.update(schema.clients).set({ insurer: "Test Insurance" }).where(eq(schema.clients.id, "client"));
+    expect((await request("/api/clients/client/clinician-invitation", { clinicianIds: ["clinician"] })).status).toBe(200);
+  });
+
+  it("gives the same guidance for staff phone reservations without reserving the slot", async () => {
+    await db.update(schema.clients).set({ insurer: "Different Insurance" }).where(eq(schema.clients.id, "client"));
+    await expect(reserveFlexibleSlot({ clientId: "client", slotId: "slot", clinicianId: "clinician", tenantId: CYA, route: "phone" }))
+      .rejects.toMatchObject({ status: 409, message: expect.stringContaining("Edit Details → Insurer → Save Changes") });
+    expect(await db.select().from(schema.bookingReservations)).toHaveLength(0);
+    expect((await db.select().from(schema.timeSlots).where(eq(schema.timeSlots.id, "slot")))[0].isBooked).toBe(false);
+  });
+
+  it("does not expose staff edit instructions to public booking visitors", async () => {
+    expect((await request("/api/clients/client/clinician-invitation", { clinicianIds: ["clinician"] })).status).toBe(200);
+    const [invitation] = await db.select().from(schema.clinicianInvitations);
+    await db.update(schema.clients).set({ insurer: "Different Insurance" }).where(eq(schema.clients.id, "client"));
+    await expect(reserveFlexibleSlot({ clientId: "client", slotId: "slot", clinicianId: "clinician", tenantId: CYA,
+      route: "online", invitationToken: invitation.token }))
+      .rejects.toMatchObject({ status: 409, message: "This clinician no longer has eligible availability for this client." });
+  });
+});
+
 describe("availability schedule edits with actual PostgreSQL ownership", () => {
   const edit = { type: "Recurring" as const, day: "Friday" as const, frequency: "weekly" as const,
     startDate: null, endDate: null, startTime: "11:00", endTime: "12:00", locationType: "in_person" as const };

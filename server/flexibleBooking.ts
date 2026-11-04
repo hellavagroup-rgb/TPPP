@@ -67,6 +67,10 @@ export function clinicianEligible(clinician: Clinician, client: Pick<Client, "in
     && clinician.currentLoad < clinician.capacity
     && (!client.insurer || client.insurer === "Private" || Boolean(clinician.insurers?.includes(client.insurer)));
 }
+function assertStaffInsurerMatch(clinician: Clinician, client: Client, clinicianName: string) {
+  if (!client.insurer || client.insurer === "Private" || clinician.insurers?.includes(client.insurer)) return;
+  fail(409, `Insurer mismatch: ${client.displayId} is recorded as "${client.insurer}", but ${clinicianName} lists ${clinician.insurers?.length ? clinician.insurers.map(name => `"${name}"`).join(", ") : "no accepted insurers"}. Confirm the client's cover is accepted before changing anything. To correct the client's insurer, go to Clients → find ${client.displayId} → three-dot (…) menu → Edit Details → Insurer → Save Changes, then retry. Admin Override does not bypass this check.`);
+}
 async function formatPreference(tx: any, client: Client) {
   const submissions = await tx.select({ responses: formSubmissions.responses, formFields: formTemplates.fields })
     .from(formSubmissions).innerJoin(formTemplates, eq(formTemplates.id, formSubmissions.formTemplateId))
@@ -80,13 +84,15 @@ function slotEligible(slot: TimeSlot, clinician: Clinician, tenant: Tenant, pref
     && (slot.type !== "SpecificDate" || tenant.oneOffSlotsEnabled === true)
     && (!tenant.zoomLinkEmailEnabled || slot.locationType !== "online" || isValidZoomLink(clinician.zoomLink));
 }
-async function liveClinicians(tx: any, client: Client, tenant: Tenant, ids: string[]) {
+async function liveClinicians(tx: any, client: Client, tenant: Tenant, ids: string[], explainStaffMismatch = false) {
   const preference = await formatPreference(tx, client);
   const results = [];
   for (const id of ids) {
     const [clinician] = await tx.select().from(clinicians).where(and(eq(clinicians.id, id), eq(clinicians.tenantId, tenant.id)));
-    if (!clinician || !clinicianEligible(clinician, client)) continue;
+    if (!clinician) continue;
     const [user] = clinician.userId ? await tx.select({ name: users.name }).from(users).where(eq(users.id, clinician.userId)) : [];
+    if (explainStaffMismatch) assertStaffInsurerMatch(clinician, client, user?.name || "The selected clinician");
+    if (!clinicianEligible(clinician, client)) continue;
     const slots: TimeSlot[] = await tx.select().from(timeSlots).where(and(eq(timeSlots.clinicianId, id), eq(timeSlots.tenantId, tenant.id), isNull(timeSlots.retiredAt)));
     const timeOffBlocks = await tx.select().from(availabilityTimeOffBlocks).where(and(
       eq(availabilityTimeOffBlocks.tenantId, tenant.id),
@@ -143,6 +149,10 @@ export async function reserveFlexibleSlot(input: { clientId: string; tenantId: s
     const [clinician] = await tx.select().from(clinicians).where(and(
       eq(clinicians.id, input.clinicianId), eq(clinicians.tenantId, tenant.id),
     )).for("update");
+    if (clinician && input.route === "phone") {
+      const [user] = clinician.userId ? await tx.select({ name: users.name }).from(users).where(eq(users.id, clinician.userId)) : [];
+      assertStaffInsurerMatch(clinician, client, user?.name || "The selected clinician");
+    }
     if (!clinician || !clinicianEligible(clinician, client)) fail(409, "This clinician no longer has eligible availability for this client.");
     const [slot] = await tx.select().from(timeSlots).where(and(eq(timeSlots.id, input.slotId), eq(timeSlots.tenantId, tenant.id))).for("update");
     const preference = await formatPreference(tx, client);
@@ -316,7 +326,7 @@ export function registerFlexibleBookingRoutes(app: Express) {
         }
         await tx.update(clinicianInvitations).set({ status: "closed" }).where(eq(clinicianInvitations.id, existing.id));
       }
-      const eligible = await liveClinicians(tx, client, tenant, clinicianIds);
+      const eligible = await liveClinicians(tx, client, tenant, clinicianIds, true);
       if (eligible.length !== clinicianIds.length || eligible.some(item => !item.slots.length)) fail(409, "Each approved clinician needs eligible available slots for this client.");
       const [invitation] = await tx.insert(clinicianInvitations).values({
         tenantId: tenant.id, clientId: client.id, clinicianIds, token: crypto.randomBytes(32).toString("hex"), status: "prepared",

@@ -6,6 +6,8 @@ import { flexibleBookingAvailable } from "@shared/reservationPolicy";
 import { HistoricReconciliation, useHistoricReconciliation } from "@/components/HistoricReconciliation";
 import { CompactClientCard, ClientDetailPanel, hasRecordedAppointmentSelection } from "@/components/CompactClientCard";
 import { InsurancePaymentDetails } from "@/components/InsurancePaymentDetails";
+import { AdminBookingCompletion } from "@/components/AdminBookingCompletion";
+import { isAdminCompletionRecord } from "@shared/adminBookingCompletion";
 import { slotScheduleFingerprint } from "@shared/availabilityEdit";
 import { WriteUppAdminQueue } from "@/components/WriteUppAdminQueue";
 import { needsWriteUppAdminWork } from "@shared/writeUppAdminWork";
@@ -163,6 +165,7 @@ type BoardClient = ClientType & {
   allocationOfferDeliveryAcceptedAt?: string | null;
   bookingSnapshot?: BookingSnapshot | null;
   writeuppArranged?: boolean;
+  adminCompletion?: { reason: string; actorName: string; completedAt: string } | null;
 };
 
 function getAllocationOfferState(client: BoardClient): AllocationOfferState {
@@ -318,6 +321,8 @@ export default function Clients() {
   const [showConfirmedState, setShowConfirmedState] = useState(false);
   const [showArchivedState, setShowArchivedState] = useState(false);
   const [showCompletedState, setShowCompletedState] = useState(false);
+  const unifiedBookedView = isCyaPsychologyTenant(tenant?.id);
+  const [bookedAdminFilter, setBookedAdminFilter] = useState<"all" | "outstanding" | "complete">("all");
   const [clientForPaymentReview, setClientForPaymentReview] = useState<BoardClient | null>(null);
   const [reviewedPaymentType, setReviewedPaymentType] = useState<"self_pay" | "insurer" | "">("");
   const [showPendingZoomLinksOnly, setShowPendingZoomLinksOnly] = useState(false);
@@ -843,11 +848,23 @@ export default function Clients() {
     },
     onSuccess: () => {
       invalidateOperationalData(queryClient);
-      toast({ title: "Booking Completed", description: "The booking is now in Completed, not Archive/Didn't Engage." });
+      toast({ title: "Booking administration complete", description: "The completion is saved. The booking and its existing evidence are unchanged." });
     },
     onError: (error: Error) => {
       toast({ title: "Cannot complete booking", description: mutationErrorMessage(error, "Check the booking, checklist and payment evidence."), variant: "destructive" });
     },
+  });
+
+  const adminCompleteBookingMutation = useMutation({
+    mutationFn: async ({ clientId, reason }: { clientId: string; reason: string }) => {
+      const response = await apiRequest("POST", `/api/clients/${clientId}/admin-complete`, { reviewed: true, reason });
+      return response.json();
+    },
+    onSuccess: () => {
+      invalidateOperationalData(queryClient);
+      toast({ title: "Booking administration complete", description: "Your review is saved. Existing payment, registration and confirmation evidence has not changed." });
+    },
+    onError: (error: Error) => toast({ title: "Review not saved", description: mutationErrorMessage(error, "Check both WriteUpp items and try again."), variant: "destructive" }),
   });
 
   const reviewPaymentTypeMutation = useMutation({
@@ -871,7 +888,7 @@ export default function Clients() {
     },
     onSuccess: () => {
       invalidateOperationalData(queryClient);
-      toast({ title: "Booking Reopened", description: "The client is back in the awaiting-confirmation queue." });
+      toast({ title: "Booking administration reopened", description: "The existing booking confirmation, payment and registration records are unchanged." });
     },
     onError: (error: Error) => toast({ title: "Cannot reopen booking", description: error.message, variant: "destructive" }),
   });
@@ -1493,7 +1510,7 @@ export default function Clients() {
       );
     }
     const ps = client.paymentStatus;
-    if (ps === "active") return (
+    if (ps === "active" && client.paymentType !== "insurer") return (
       <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-green-100 text-green-700 px-1.5 py-0.5 rounded">
         <CreditCard className="h-2.5 w-2.5" /> Card saved
       </span>
@@ -1628,7 +1645,7 @@ export default function Clients() {
 
   // Unified filtering based on toggle states and search term
   const pendingZoomLinkClients = zoomLinkEmailEnabled
-    ? clients.filter(client => !client.isArchived && !client.completedAt && isPendingZoomDelivery(client as any))
+    ? clients.filter(client => !client.isArchived && (!client.completedAt || unifiedBookedView) && isPendingZoomDelivery(client as any))
     : [];
 
   const arrangedHistoricIds = getWriteUppArrangedIds(
@@ -1658,9 +1675,12 @@ export default function Clients() {
     }
     if (showCompletedState) return matchesSearch && !client.isArchived && !!client.completedAt;
     if (showConfirmedState) {
-      const isConfirmed = staffConfirmed(client);
+      const isConfirmed = staffConfirmed(client) || (unifiedBookedView && !!client.completedAt);
       const matchesPendingZoomFilter = !showPendingZoomLinksOnly || isPendingZoomDelivery(client as any);
-      return matchesSearch && isConfirmed && !client.isArchived && !client.completedAt && matchesPendingZoomFilter;
+      const matchesAdminFilter = unifiedBookedView
+        ? bookedAdminFilter === "all" || (bookedAdminFilter === "complete" ? !!client.completedAt : !client.completedAt)
+        : !client.completedAt;
+      return matchesSearch && isConfirmed && !client.isArchived && matchesAdminFilter && matchesPendingZoomFilter;
     }
     // The Kanban is the active booking queue. Confirmed records remain in their own view.
     return matchesSearch && !client.isArchived && !client.completedAt && !staffConfirmed(client);
@@ -2539,8 +2559,17 @@ export default function Clients() {
                 if (!checked) setShowPendingZoomLinksOnly(false);
               }}
             />
-            <Label htmlFor="show-confirmed" className="text-sm cursor-pointer">Show Confirmed</Label>
+            <Label htmlFor="show-confirmed" className="text-sm cursor-pointer">{unifiedBookedView ? "Show Booked" : "Show Confirmed"}</Label>
           </div>
+          {unifiedBookedView && showConfirmedState && <div className="flex items-center gap-2">
+            <Label htmlFor="booked-admin-filter" className="text-sm">Booking admin</Label>
+            <select id="booked-admin-filter" className="rounded-md border bg-background p-2 text-sm"
+              value={bookedAdminFilter} onChange={event => setBookedAdminFilter(event.target.value as typeof bookedAdminFilter)}>
+              <option value="all">All booked clients</option>
+              <option value="outstanding">Admin outstanding</option>
+              <option value="complete">Admin complete</option>
+            </select>
+          </div>}
           {showConfirmedState && zoomLinkEmailEnabled && (
             <div className="flex items-center gap-2">
               <Switch
@@ -2554,7 +2583,7 @@ export default function Clients() {
               </Label>
             </div>
           )}
-          {completedBookingsEnabled && (
+          {completedBookingsEnabled && !unifiedBookedView && (
             <div className="flex items-center gap-2">
               <Switch id="show-completed" checked={showCompletedState}
                 onCheckedChange={(checked) => {
@@ -3399,9 +3428,12 @@ export default function Clients() {
         <div className="space-y-3">
           <h3 className="font-semibold text-lg">
             {showConfirmedState
-              ? (showPendingZoomLinksOnly ? "Confirmed Clients Waiting for Zoom Links" : "Confirmed Clients")
+              ? (unifiedBookedView ? "Booked Clients" : showPendingZoomLinksOnly ? "Confirmed Clients Waiting for Zoom Links" : "Confirmed Clients")
               : showCompletedState ? "Completed Bookings" : "Archived/Didn't Engage"}
           </h3>
+          {showConfirmedState && unifiedBookedView && <p className="text-sm text-muted-foreground">
+            Confirmed appointments and completed booking administration in one place. Admin complete does not mean therapy has ended.
+          </p>}
           {filteredClients.map(client => (
             <Card key={client.id} id={`client-${client.id}`} data-testid={`client-record-${client.id}`} className="shadow-sm">
               <CardContent className="p-4">
@@ -3409,9 +3441,12 @@ export default function Clients() {
                   <div className="flex items-center gap-3">
                     <span className="font-mono font-semibold">{client.displayId}</span>
                     <Badge variant="secondary" className={getStatusColor(client.status)}>
-                      {showCompletedState ? "Completed" : showConfirmedState && arrangedHistoricIds.has(client.id)
+                      {showConfirmedState && unifiedBookedView ? "Booked" : showCompletedState ? "Completed" : showConfirmedState && arrangedHistoricIds.has(client.id)
                         && client.status !== "BookingConfirmed" ? "Confirmed · WriteUpp" : getStatusDisplayLabel(client.status)}
                     </Badge>
+                    {unifiedBookedView && showConfirmedState && <Badge variant="outline" className={client.completedAt ? "border-emerald-200 text-emerald-800" : "border-amber-200 text-amber-900"}>
+                      {client.completedAt ? "Admin complete" : "Admin outstanding"}
+                    </Badge>}
                     {client.insurer && client.insurer !== "Private" && (
                       <Badge variant="outline">{client.insurer}</Badge>
                     )}
@@ -3467,7 +3502,7 @@ export default function Clients() {
                         <DropdownMenuItem onClick={() => handleViewEnquiry(client)}>
                           <Mail className="h-4 w-4 mr-2" /> View Original Enquiry
                         </DropdownMenuItem>
-                        {!showCompletedState && (
+                        {!showCompletedState && !client.completedAt && (
                           <DropdownMenuItem onClick={() => handleOpenEditStatus(client)}>
                             <CalendarCheck className="h-4 w-4 mr-2" /> Edit Status
                           </DropdownMenuItem>
@@ -3513,7 +3548,7 @@ export default function Clients() {
                           </>
                         )}
                         <DropdownMenuSeparator />
-                        {showCompletedState && (
+                        {(showCompletedState || (unifiedBookedView && !!client.completedAt)) && (
                           <DropdownMenuItem disabled={reopenBookingMutation.isPending}
                             onClick={() => reopenBookingMutation.mutate(client.id)}>
                             <RotateCcw className="h-4 w-4 mr-2" /> Reopen Booking
@@ -3528,7 +3563,7 @@ export default function Clients() {
                               <Trash2 className="h-4 w-4 mr-2" /> Permanently Delete
                             </DropdownMenuItem>
                           </>
-                        ) : !showCompletedState && (
+                        ) : !showCompletedState && !client.completedAt && (
                           <DropdownMenuItem className="text-destructive" onClick={() => handleOpenArchiveDialog(client)}>
                             Archive/Didn't Engage
                           </DropdownMenuItem>
@@ -3547,12 +3582,26 @@ export default function Clients() {
                 {!client.managerConfirmedAt && !arrangedHistoricIds.has(client.id) && workflowProgress(client)}
                 {showConfirmedState && arrangedHistoricIds.has(client.id) && client.status !== "BookingConfirmed" && (
                   <p className="mt-2 text-xs text-muted-foreground">
-                    Appointment arranged in WriteUpp. No further booking action needed.
+                    Appointment arranged in WriteUpp. {unifiedBookedView ? "Review the booking administration below." : "No further booking action needed."}
                     Payment and registration evidence have not been changed.
                   </p>
                 )}
                 <ManagerConfirmedBadge at={client.managerConfirmedAt} reason={client.managerConfirmationReason} />
-                {showConfirmedState && client.status === "BookingConfirmed" && (() => {
+                {unifiedBookedView && showConfirmedState && <p className="mt-2 text-xs text-muted-foreground">
+                  Funding: {client.paymentType === "insurer" ? "Insurer" : client.paymentType === "self_pay" ? "Self-pay" : "Not recorded — check existing practice records"}
+                </p>}
+                {unifiedBookedView && showConfirmedState && (client.adminCompletion || isAdminCompletionRecord(client, arrangedHistoricIds.has(client.id))) && (
+                  <AdminBookingCompletion client={client}
+                    enabled={completedBookingsEnabled}
+                    busy={adminCompleteBookingMutation.isPending || updateClientMutation.isPending}
+                    onChecklistChange={(field, checked) => updateClientMutation.mutate({ id: client.id, updates: { [field]: checked } })}
+                    onComplete={reason => adminCompleteBookingMutation.mutateAsync({ clientId: client.id, reason })} />
+                )}
+                {unifiedBookedView && client.completedAt && client.adminCompletion && <p className="mt-2 text-xs text-muted-foreground">
+                  Admin review by {client.adminCompletion.actorName} · {formatDateUK(client.adminCompletion.completedAt)}: {client.adminCompletion.reason}
+                </p>}
+                {showConfirmedState && !client.completedAt && client.status === "BookingConfirmed"
+                  && !(unifiedBookedView && isAdminCompletionRecord(client, arrangedHistoricIds.has(client.id))) && (() => {
                   const code = completedBookingsEnabled ? bookingCompletionBlockerCode(client, {
                     hasSnapshot: !!client.bookingSnapshot, checklistEnabled: writeuppChecklistEnabled,
                   }) : null;
@@ -3577,7 +3626,7 @@ export default function Clients() {
                       disabled={completeBookingMutation.isPending || (completedBookingsEnabled ? !!code : checklistIncomplete)}
                       onClick={() => completedBookingsEnabled
                         ? completeBookingMutation.mutate(client.id) : handleOpenArchiveDialog(client)}>
-                      {code ? "Completion blocked" : checklistIncomplete ? "Complete WriteUpp first" : "Move to Completed"}
+                      {code ? "Completion blocked" : checklistIncomplete ? "Complete WriteUpp first" : unifiedBookedView ? "Mark booking admin complete" : "Move to Completed"}
                     </Button>
                     {code && <p className="text-xs text-amber-800" role="status">{bookingCompletionBlockerCopy[code]}</p>}
                     {code === "payment_setup_unverified" && <>
@@ -3599,7 +3648,7 @@ export default function Clients() {
                       onClick={() => { setClientForPaymentReview(client); setReviewedPaymentType(""); }}>Review payment type</Button>}
                   </div>;
                 })()}
-                {showCompletedState && (
+                {(showCompletedState || (unifiedBookedView && !!client.completedAt)) && (
                   <div className="mt-2 text-xs text-muted-foreground space-y-1">
                     <p>Completed: {client.completedAt ? formatDateUK(client.completedAt) : "—"}</p>
                     <p>Payment: {client.paymentType === "self_pay" ? `Self-pay (${client.paymentStatus || "unknown"})` : client.paymentType === "insurer" ? "Insurer" : "Needs review"}</p>
@@ -3626,7 +3675,7 @@ export default function Clients() {
             <p className="text-center py-8 text-muted-foreground">
               {showConfirmedState && showPendingZoomLinksOnly
                 ? "No confirmed clients are waiting for a Zoom link."
-                : `No ${showConfirmedState ? "confirmed" : showCompletedState ? "completed" : "archived/didn't engage"} clients found.`}
+                : `No ${showConfirmedState ? unifiedBookedView ? "booked" : "confirmed" : showCompletedState ? "completed" : "archived/didn't engage"} clients found.`}
             </p>
           )}
         </div>

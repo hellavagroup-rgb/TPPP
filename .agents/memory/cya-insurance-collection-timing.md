@@ -14,3 +14,9 @@ Admins must retain access to saved insurance details for Confirmed and Completed
 **Why:** The user explicitly needs to retrieve policy and authorisation details after booking administration is complete.
 
 **How to apply:** Preserve insurance visibility when changing staff views or client lifecycle stages. Keep insurer funding distinct from recorded card setup; neither an insurer name nor a saved card is proof that a session has been paid.
+
+Missing registration policy details do not establish that the client never mentioned insurance. Historical intake forms can contain insurer selections as multi-select answers, separately from the client's insurer field and their recorded payment type.
+
+**Why:** A production review found historical insurance selections that had not populated the client's insurer field, including records subsequently marked self-pay. An intake insurance option is not proof of current insurer funding.
+
+**How to apply:** When answering whether clients entered insurance information, distinguish intake selections and comments from full policy/authorisation details and the actual recorded payment choice. Inspect original submissions before declaring there is no insurance information; do not automatically change funding based on intake answers.

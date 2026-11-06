@@ -704,11 +704,11 @@ describe("Clients page compact board integration", () => {
     expect(apiFixtures.clients[0]).toEqual({
       ...before, writeuppAppointmentConfirmed: true, writeuppDataTransferred: true,
     });
-    await user.click(screen.getByRole("switch", { name: "Show Confirmed" }));
+    await user.click(screen.getByRole("switch", { name: "Show Booked" }));
     const confirmedCard = await screen.findByTestId("client-record-cya-confirmed");
     await user.click(within(confirmedCard).getByRole("checkbox", { name: "Data transferred to WriteUpp" }));
     await waitFor(() => expect(apiFixtures.clients[0].writeuppDataTransferred).toBe(false));
-    await user.click(screen.getByRole("switch", { name: "Show Confirmed" }));
+    await user.click(screen.getByRole("switch", { name: "Show Booked" }));
     await screen.findByTestId("writeupp-admin-card-cya-confirmed");
     expect(apiFixtures.clients[0]).toEqual({
       ...before, writeuppAppointmentConfirmed: true, writeuppDataTransferred: false,
@@ -1231,6 +1231,66 @@ describe("Clients page compact board integration", () => {
     expect(within(record).getByRole("region", { name: "Insurance details" })).toBeTruthy();
     expect(within(record).getByText("POLICY-EXAMPLE")).toBeTruthy();
     expect(within(record).getByText("AUTH-EXAMPLE")).toBeTruthy();
+  });
+
+  it("unifies CY&A booked records and records reviewed historic admin completion without changing evidence", async () => {
+    apiFixtures.tenant = makeTenant({ id: CYA_PSYCHOLOGY_TENANT_ID, completedBookingsEnabled: true });
+    const old = { ...makeClient("old", "OLD-101", "Scheduled"), tenantId: CYA_PSYCHOLOGY_TENANT_ID,
+      writeuppAppointmentConfirmed: true, writeuppDataTransferred: true, paymentType: null, paymentStatus: "none",
+      managerConfirmedAt: "2026-01-10T12:00:00Z" };
+    const done = { ...makeClient("done", "DONE-101", "BookingConfirmed"), tenantId: CYA_PSYCHOLOGY_TENANT_ID,
+      completedAt: "2026-01-13T10:00:00Z", paymentType: "insurer",
+      insurerDetails: "Insurer name: Test Insurer\nInsurance policy number: POLICY-EXAMPLE\nPreauthorisation code: AUTH-EXAMPLE" };
+    apiFixtures.clients = [old, done];
+    const ordinaryFetch = fetch;
+    const writes: any[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input, init) => {
+      const path = new URL(String(input), window.location.origin).pathname;
+      if (path === "/api/clients/old/admin-complete" && init?.method === "POST") {
+        const body = JSON.parse(String(init.body));
+        writes.push(body);
+        apiFixtures.clients[0] = { ...old, completedAt: "2026-01-14T10:00:00Z",
+          adminCompletion: { actorName: "Board Admin", reason: body.reason, completedAt: "2026-01-14T10:00:00Z" } };
+        return json(apiFixtures.clients[0]);
+      }
+      if (path === "/api/clients/old/reopen-completion" && init?.method === "POST") {
+        apiFixtures.clients[0] = { ...old, completedAt: null };
+        return json(apiFixtures.clients[0]);
+      }
+      return ordinaryFetch(input, init);
+    }));
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const user = userEvent.setup();
+    await user.click(await screen.findByLabelText("Show Booked"));
+    expect(screen.queryByLabelText("Show Completed")).toBeNull();
+    const card = await screen.findByTestId("client-record-old");
+    expect(await screen.findByTestId("client-record-done")).toBeTruthy();
+    expect(within(card).getByText("Admin outstanding")).toBeTruthy();
+    expect(screen.getByText("POLICY-EXAMPLE")).toBeTruthy();
+    await user.selectOptions(screen.getByLabelText("Booking admin"), "outstanding");
+    expect(screen.queryByTestId("client-record-done")).toBeNull();
+    await user.click(within(card).getByRole("button", { name: "Mark booking admin complete" }));
+    const dialog = await screen.findByRole("dialog", { name: /Complete booking administration/ });
+    const confirm = within(dialog).getByRole("button", { name: "Confirm admin completion" });
+    expect(confirm).toHaveProperty("disabled", true);
+    await user.type(within(dialog).getByLabelText("Review note"), "Reviewed the existing WriteUpp and payment records.");
+    await user.click(within(dialog).getByRole("checkbox"));
+    await user.click(confirm);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("client-record-old")).toBeNull());
+    expect(writes).toEqual([{ reviewed: true, reason: "Reviewed the existing WriteUpp and payment records." }]);
+    expect(apiFixtures.clients[0]).toMatchObject({ status: "Scheduled", paymentType: null, paymentStatus: "none" });
+    await user.selectOptions(screen.getByLabelText("Booking admin"), "complete");
+    const completeCard = await screen.findByTestId("client-record-old");
+    expect(within(completeCard).getByText("Admin complete")).toBeTruthy();
+    expect(within(completeCard).getByText("Payment type not recorded in this portal")).toBeTruthy();
+    expect(within(completeCard).getByText(/Admin review by Board Admin/)).toBeTruthy();
+    await user.click(within(completeCard).getAllByRole("button")[0]);
+    await user.click(await screen.findByRole("menuitem", { name: "Reopen Booking" }));
+    await waitFor(() => expect(screen.queryByTestId("client-record-old")).toBeNull());
+    await user.selectOptions(screen.getByLabelText("Booking admin"), "outstanding");
+    expect(await screen.findByTestId("client-record-old")).toBeTruthy();
   });
 
   it("does not claim the family is choosing when current offer delivery is unrecorded", async () => {

@@ -1317,6 +1317,78 @@ describe("registration journey HTTP routes", () => {
     expect((await request("/api/clients/client-a/reopen-completion", { method: "POST" })).status).toBe(409);
   });
 
+  it("completes historic admin review once without creating financial or booking evidence", async () => {
+    resetState({
+      tenant: { id: CYA, completedBookingsEnabled: true },
+      client: { tenantId: CYA, status: "Scheduled", managerConfirmedAt: new Date(),
+        writeuppAppointmentConfirmed: true, writeuppDataTransferred: true, isArchived: false,
+        completedAt: null, paymentType: null, paymentStatus: "none", insurerDetails: null },
+    });
+    const before = structuredClone(h.state.client);
+    const path = "/api/clients/client-a/admin-complete";
+    const body = JSON.stringify({ reviewed: true, reason: "Reviewed existing WriteUpp and payment administration." });
+    expect((await request(path, { method: "POST", body, headers: { "x-role": "clinician" } })).status).toBe(403);
+    expect((await request(path, { method: "POST", body: JSON.stringify({ reason: "No acknowledgment" }) })).status).toBe(400);
+    const [first, retry] = await Promise.all([request(path, { method: "POST", body }), request(path, { method: "POST", body })]);
+    expect(first.status).toBe(200);
+    expect(retry.status).toBe(200);
+    expect(retry.body.completedAt).toBe(first.body.completedAt);
+    const { completedAt: _completedAt, updatedAt: _updatedAt, ...preserved } = before;
+    expect(h.state.client).toMatchObject(preserved);
+    expect(h.state.client.completedAt).toBeTruthy();
+    expect(h.state.client.status).toBe("Scheduled");
+    expect(h.state.activities.filter(a => a.action === "activity_booking_admin_completed")).toHaveLength(1);
+    expect(h.state.activities[0].details).toMatchObject({ reviewed: true, portalEvidenceUnchanged: true, paymentType: null });
+    expect(h.state.bookingSnapshots).toHaveLength(0);
+    expect(h.state.submissions).toHaveLength(0);
+    expect(h.state.emails).toHaveLength(0);
+    expect(h.state.paymentLinks).toHaveLength(0);
+    const listed = await request("/api/clients");
+    expect(listed.status).toBe(200);
+    expect(listed.body[0].adminCompletion).toMatchObject({
+      actorName: "Admin", reason: "Reviewed existing WriteUpp and payment administration.",
+      completedAt: first.body.completedAt,
+    });
+    await request("/api/clients/client-a/reopen-completion", { method: "POST" });
+    expect((await request("/api/clients")).body[0].adminCompletion).toBeNull();
+    expect(h.state.activities.filter(a => a.action === "activity_booking_admin_completed")).toHaveLength(1);
+  });
+
+  it("requires owned arrangement evidence and both WriteUpp checks for administrative completion", async () => {
+    resetState({
+      tenant: { id: CYA, completedBookingsEnabled: true },
+      client: { tenantId: CYA, status: "RegistrationPending", isArchived: false, completedAt: null,
+        writeuppAppointmentConfirmed: true, writeuppDataTransferred: true },
+    });
+    const path = "/api/clients/client-a/admin-complete";
+    const body = JSON.stringify({ reviewed: true, reason: "Reviewed the existing practice booking." });
+    h.state.activities = [{ tenantId: "foreign", resourceId: "client-a", action: "activity_writeupp_appointment_arranged" }];
+    expect((await request(path, { method: "POST", body })).status).toBe(409);
+    h.state.activities = [{ tenantId: CYA, resourceId: "client-a", action: "activity_writeupp_appointment_arranged" }];
+    h.state.client.writeuppDataTransferred = false;
+    expect((await request(path, { method: "POST", body })).status).toBe(409);
+    h.state.client.writeuppDataTransferred = true;
+    expect((await request(path, { method: "POST", body })).status).toBe(200);
+    expect(h.state.client.status).toBe("RegistrationPending");
+  });
+
+  it("does not allow admin completion to bypass newer portal checks or practice isolation", async () => {
+    const body = JSON.stringify({ reviewed: true, reason: "Reviewed the existing practice booking." });
+    const path = "/api/clients/client-a/admin-complete";
+    resetState({ tenant: { id: CYA, completedBookingsEnabled: true },
+      client: { tenantId: CYA, status: "BookingConfirmed", completedAt: null,
+        writeuppAppointmentConfirmed: true, writeuppDataTransferred: true } });
+    expect((await request(path, { method: "POST", body })).status).toBe(409);
+    h.state.client.status = "Scheduled";
+    h.state.client.tenantId = "foreign";
+    expect((await request(path, { method: "POST", body })).status).toBe(404);
+    h.state.client.tenantId = CYA;
+    h.state.tenant.completedBookingsEnabled = false;
+    expect((await request(path, { method: "POST", body })).status).toBe(403);
+    resetState({ tenant: { completedBookingsEnabled: true }, client: { status: "Scheduled" } });
+    expect((await request(path, { method: "POST", body })).status).toBe(403);
+  });
+
   it("denies completion for a foreign client and for an opted-out practice", async () => {
     resetState({
       tenant: { completedBookingsEnabled: true },

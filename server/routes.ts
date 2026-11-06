@@ -23,6 +23,7 @@ import {
 import { canInspectRegistrationPayment } from "@shared/paymentReconciliationEligibility";
 import { classifyPaymentReturn, type PaymentReturnResult } from "./paymentReturn";
 import { bookingCompletionDecision } from "@shared/bookingCompletion";
+import { adminCompletionBlocker } from "@shared/adminBookingCompletion";
 import { slotUnavailableReason } from "@shared/slotEligibility";
 import { isValidDate, slotOccursOnDate } from "@shared/timeOffBlocks";
 import { findTimeOffBlockForSlot } from "./availabilityTimeOff";
@@ -1377,12 +1378,30 @@ export async function registerRoutes(
         ? await getAllocationVisibility(clientList, req.tenant.id) : null;
       const offerStates = req.tenant?.multiClinicianAllocationEnabled && req.tenant.id
         ? await getAllocationOfferStates(clientList, req.tenant.id) : null;
+      const completionReviews = new Map<string, { reason: string; actorName: string; completedAt: string }>();
+      const completedClients = clientList.filter(c => c.tenantId === req.tenant?.id && c.completedAt);
+      if (isCyaPsychologyTenant(req.tenant?.id) && completedClients.length && req.tenant?.id) {
+        const reviews = await db.select().from(auditLogs).where(and(
+          eq(auditLogs.tenantId, req.tenant.id), eq(auditLogs.action, "activity_booking_admin_completed"),
+          inArray(auditLogs.resourceId, completedClients.map(c => c.id)),
+        )).orderBy(desc(auditLogs.timestamp));
+        for (const client of completedClients) {
+          const review = reviews.find(row => row.tenantId === req.tenant!.id && row.resourceId === client.id
+            && row.action === "activity_booking_admin_completed"
+            && row.details?.completedAt === client.completedAt!.toISOString());
+          if (review) completionReviews.set(client.id, {
+            reason: String(review.details?.reason || ""), actorName: String(review.details?.actorName || "Practice user"),
+            completedAt: client.completedAt!.toISOString(),
+          });
+        }
+      }
       const clients = clientList.map(c => ({
         ...withTenantAllocationVisibility(c, req.tenant?.id ?? "", !!visibility, visibility),
         allocationOfferState: offerStates?.get(c.id)?.state ?? null,
         allocationOfferEligibility: offerStates?.get(c.id)?.eligibility ?? null,
         allocationOfferKind: offerStates?.get(c.id)?.kind ?? null,
         allocationOfferDeliveryAcceptedAt: offerStates?.get(c.id)?.deliveryAcceptedAt ?? null,
+        adminCompletion: completionReviews.get(c.id) ?? null,
         hasFailedPayment: failedMap.has(c.id),
         latestFailureReason: failedMap.get(c.id) ?? null,
         paymentSetupRecoveryHref: c.registrationPaymentFailedAt
@@ -3030,6 +3049,57 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Booking completion failed", error);
       res.status(500).json({ error: "Failed to complete booking" });
+    }
+  });
+
+  app.post("/api/clients/:id/admin-complete", requireAdmin, async (req, res) => {
+    const tenantId = req.tenant?.id;
+    if (!tenantId || !isCyaPsychologyTenant(tenantId) || req.tenant?.completedBookingsEnabled !== true) {
+      return res.status(403).json({ error: "Administrative completion is not enabled for this practice." });
+    }
+    const review = z.object({
+      reviewed: z.literal(true),
+      reason: z.string().trim().min(10).max(2000),
+    }).strict().safeParse(req.body);
+    if (!review.success) return res.status(400).json({ error: "Confirm your review and provide a review note of at least 10 characters." });
+    try {
+      const outcome = await db.transaction(async tx => {
+        const [client] = await tx.select().from(clients).where(and(
+          eq(clients.id, req.params.id), eq(clients.tenantId, tenantId),
+        )).for("update");
+        if (!client) return { code: 404, error: "Client not found" };
+        if (client.isArchived) return { code: 409, error: "Restore this client before completing booking administration." };
+        if (client.completedAt) return { code: 200, client };
+        const arrangements = await tx.select().from(auditLogs).where(and(
+          eq(auditLogs.tenantId, tenantId), eq(auditLogs.resourceId, client.id),
+          eq(auditLogs.action, "activity_writeupp_appointment_arranged"),
+        ));
+        const writeuppArranged = arrangements.some(row => row.tenantId === tenantId
+          && row.resourceId === client.id && row.action === "activity_writeupp_appointment_arranged");
+        const blocker = adminCompletionBlocker(client, { tenantId, enabled: true, writeuppArranged });
+        if (blocker) return { code: 409, error: blocker };
+        const [updated] = await tx.update(clients).set({ completedAt: new Date(), updatedAt: new Date() })
+          .where(and(eq(clients.id, client.id), eq(clients.tenantId, tenantId))).returning();
+        await tx.insert(auditLogs).values({
+          tenantId, userId: req.user?.id ?? null, ipAddress: req.ip || null,
+          action: "activity_booking_admin_completed", resourceType: "client", resourceId: client.id,
+          details: {
+            actorName: req.user?.name || "Practice user", clientDisplayId: client.displayId,
+            reviewed: true, reason: review.data.reason, completionKind: "administrative",
+            managerOverride: !!client.managerConfirmedAt, writeuppArranged,
+            paymentType: client.paymentType, paymentStatus: client.paymentStatus,
+            registrationRecorded: !!client.registrationFormSubmissionId,
+            completedAt: updated.completedAt!.toISOString(),
+            portalEvidenceUnchanged: true,
+          },
+        });
+        return { code: 200, client: updated };
+      });
+      if ("error" in outcome) return res.status(outcome.code).json({ error: outcome.error });
+      res.json(outcome.client);
+    } catch (error) {
+      console.error("Administrative booking completion failed", error);
+      res.status(500).json({ error: "Failed to complete booking administration" });
     }
   });
 

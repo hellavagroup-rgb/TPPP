@@ -1204,6 +1204,31 @@ describe("Clients page compact board integration", () => {
     expect(screen.getByRole("button", { name: "Move to Completed" })).toBeTruthy();
   });
 
+  it("shows saved insurer details on confirmed client records", async () => {
+    const insured = makeClient("insurance-confirmed", "INS-101", "BookingConfirmed");
+    Object.assign(insured, {
+      insurer: "BUPA international",
+      paymentType: "insurer",
+      paymentStatus: "none",
+      insurerDetails: "Insurer name: BUPA international\nInsurance policy number: POLICY-EXAMPLE\nPreauthorisation code: AUTH-EXAMPLE",
+      registrationFormSubmissionId: "registration-ins-101",
+      bookingSnapshot: { id: "booking-ins-101", clinicianName: "Fixture clinician" },
+      confirmedAt: "2026-01-12T10:00:00.000Z",
+    });
+    apiFixtures.tenant = makeTenant({ registrationFormEnabled: true });
+    apiFixtures.clients = [insured];
+
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText("Show Confirmed"));
+
+    const record = await screen.findByTestId("client-record-insurance-confirmed");
+    expect(within(record).getByRole("region", { name: "Insurance details" })).toBeTruthy();
+    expect(within(record).getByText("POLICY-EXAMPLE")).toBeTruthy();
+    expect(within(record).getByText("AUTH-EXAMPLE")).toBeTruthy();
+  });
+
   it("does not claim the family is choosing when current offer delivery is unrecorded", async () => {
     const client = makeClient("unsent-offer", "MAT-UNSENT", "OptionsSent");
     client.notes = "Assessment enquiry; appointment options prepared.";

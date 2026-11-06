@@ -3543,6 +3543,7 @@ export default function Clients() {
                 {contactPreferenceBadge(client) && (
                   <div className="mt-2">{contactPreferenceBadge(client)}</div>
                 )}
+                <InsurancePaymentDetails client={client} />
                 {!client.managerConfirmedAt && !arrangedHistoricIds.has(client.id) && workflowProgress(client)}
                 {showConfirmedState && arrangedHistoricIds.has(client.id) && client.status !== "BookingConfirmed" && (
                   <p className="mt-2 text-xs text-muted-foreground">

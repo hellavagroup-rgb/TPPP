@@ -1204,7 +1204,10 @@ describe("Clients page compact board integration", () => {
     expect(screen.getByRole("button", { name: "Move to Completed" })).toBeTruthy();
   });
 
-  it("shows saved insurer details on confirmed client records", async () => {
+  it.each([
+    { viewLabel: "Show Confirmed", completedAt: null },
+    { viewLabel: "Show Completed", completedAt: "2026-01-13T10:00:00.000Z" },
+  ])("shows saved insurer details in $viewLabel", async ({ viewLabel, completedAt }) => {
     const insured = makeClient("insurance-confirmed", "INS-101", "BookingConfirmed");
     Object.assign(insured, {
       insurer: "BUPA international",
@@ -1214,14 +1217,15 @@ describe("Clients page compact board integration", () => {
       registrationFormSubmissionId: "registration-ins-101",
       bookingSnapshot: { id: "booking-ins-101", clinicianName: "Fixture clinician" },
       confirmedAt: "2026-01-12T10:00:00.000Z",
+      completedAt,
     });
-    apiFixtures.tenant = makeTenant({ registrationFormEnabled: true });
+    apiFixtures.tenant = makeTenant({ registrationFormEnabled: true, completedBookingsEnabled: true });
     apiFixtures.clients = [insured];
 
     const view = renderBoard();
     queryClients.push(view.queryClient);
     const user = userEvent.setup();
-    await user.click(screen.getByLabelText("Show Confirmed"));
+    await user.click(await screen.findByLabelText(viewLabel));
 
     const record = await screen.findByTestId("client-record-insurance-confirmed");
     expect(within(record).getByRole("region", { name: "Insurance details" })).toBeTruthy();

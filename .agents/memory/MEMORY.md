@@ -50,3 +50,4 @@
 - [Reservation payment identity](reservation-payment-identity.md) — missing or changed payment identity must retain the hold; feature flags never disable existing financial safeguards.
 - [Allocation transaction verification](allocation-transaction-verification.md) — use isolated PostgreSQL tests as the authority when allocation queries or locking change.
 - [Availability edit promises](availability-edit-promises.md) — preserve fixed offers, reject stale live-slot choices, and make whole-series versus one-date edits explicit.
+- [CY&A insurance collection timing](cya-insurance-collection-timing.md) — collect policy and authorisation details during registration, not intake.

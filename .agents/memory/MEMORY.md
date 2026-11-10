@@ -52,3 +52,4 @@
 - [Availability edit promises](availability-edit-promises.md) — preserve fixed offers, reject stale live-slot choices, and make whole-series versus one-date edits explicit.
 - [CY&A insurance collection timing](cya-insurance-collection-timing.md) — collect policy and authorisation details during registration, not intake.
 - [CY&A booking administration](booking-admin-completion.md) — one Booked view; reviewed historic admin completion must preserve missing portal evidence.
+- [CY&A appointment delivery](cya-appointment-delivery.md) — at-practice availability supports either mode; online-only stays online; preserve actual offer and booking promises.

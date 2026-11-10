@@ -30,6 +30,7 @@ async function finishRecoveredReservation(hold: BookingReservation, tenant: Tena
     const email = await generateBookingConfirmedEmail({
       clinicianName: snapshot.clinicianName, type: snapshot.slotType, date: snapshot.date,
       day: snapshot.day, startTime: snapshot.startTime, endTime: snapshot.endTime,
+      locationType: snapshot.locationType,
     }, tenant);
     const delivery = await sendEmail({ ...email, to: client.email,
       idempotencyKey: charge?.stripePaymentIntentId
@@ -445,7 +446,7 @@ export async function resolveReservationPaymentConflict(input: {
     await tx.update(clinicians).set({ currentLoad: sql`greatest(0, ${clinicians.currentLoad} - 1)` }).where(eq(clinicians.id, hold.clinicianId));
     await tx.update(clients).set({
       status: isClientStatus(hold.previousStatus) ? hold.previousStatus : "Forms Completed",
-      assignedSlotId: null, assignedClinicianId: null, assignedSlot: null,
+      assignedSlotId: null, assignedClinicianId: null, assignedSlot: null, assignedLocationType: null,
       registrationTokenRevokedAt: endedAt, stripeCheckoutUrl: null, paymentStatus: "none", updatedAt: endedAt,
     }).where(and(eq(clients.id, client.id), eq(clients.tenantId, input.tenantId)));
     if (hold.invitationId) await tx.update(clinicianInvitations).set({ status: "closed" }).where(eq(clinicianInvitations.id, hold.invitationId));
@@ -583,7 +584,7 @@ export async function settleReservation(reservationId: string, tenantId: string,
     await tx.update(clinicians).set({ currentLoad: sql`greatest(0, ${clinicians.currentLoad} - 1)` }).where(eq(clinicians.id, hold.clinicianId));
     await tx.update(clients).set({
       status: isClientStatus(hold.previousStatus) ? hold.previousStatus : "Forms Completed",
-      assignedSlotId: null, assignedClinicianId: null, assignedSlot: null,
+      assignedSlotId: null, assignedClinicianId: null, assignedSlot: null, assignedLocationType: null,
       registrationTokenRevokedAt: endedAt, stripeCheckoutUrl: null, paymentStatus: "none", updatedAt: endedAt,
       // Preserve all submitted forms, consent, attempt and financial history.
     }).where(eq(clients.id, client.id));

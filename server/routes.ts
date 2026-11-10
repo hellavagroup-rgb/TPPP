@@ -24,6 +24,7 @@ import { canInspectRegistrationPayment } from "@shared/paymentReconciliationElig
 import { classifyPaymentReturn, type PaymentReturnResult } from "./paymentReturn";
 import { bookingCompletionDecision } from "@shared/bookingCompletion";
 import { adminCompletionBlocker } from "@shared/adminBookingCompletion";
+import { resolveDeliveryMode } from "@shared/sessionDelivery";
 import { slotUnavailableReason } from "@shared/slotEligibility";
 import { isValidDate, slotOccursOnDate } from "@shared/timeOffBlocks";
 import { findTimeOffBlockForSlot } from "./availabilityTimeOff";
@@ -480,10 +481,11 @@ export async function registerRoutes(
       const clinician = await storage.getClinicianByUserId(req.user!.id);
       if (!clinician) return res.status(404).json({ error: "Clinician profile not found" });
       const allClients = await storage.getAllClients(false, req.tenant?.id);
-      const map: Record<string, { displayId: string; status: string }> = {};
+      const map: Record<string, { displayId: string; status: string; slotLocationType: string | null }> = {};
       for (const client of allClients) {
         if (client.assignedClinicianId === clinician.id && client.assignedSlotId && client.displayId) {
-          map[client.assignedSlotId] = { displayId: client.displayId, status: client.status };
+          map[client.assignedSlotId] = { displayId: client.displayId, status: client.status,
+            slotLocationType: (client as typeof client & { slotLocationType?: string | null }).slotLocationType ?? client.assignedLocationType ?? null };
         }
       }
       res.json(map);
@@ -1661,6 +1663,7 @@ export async function registerRoutes(
       // Add workflow timestamps based on status change
       const updateData = { ...req.body };
       for (const protectedField of [
+        "assignedLocationType",
         "managerConfirmedAt", "managerConfirmedBy", "managerConfirmationReason",
         "completedAt", "isArchived", "archivedAt", "archiveReason", "archiveCategory",
         "registrationFormSubmissionId",
@@ -1909,6 +1912,7 @@ export async function registerRoutes(
             date: confirmation.snapshot.date,
             startTime: confirmation.snapshot.startTime,
             endTime: confirmation.snapshot.endTime,
+            locationType: confirmation.snapshot.locationType,
           }, tcBook);
           const bookingDelivery = await sendEmail({ ...bookEmail, to: updated.email });
           if (bookingDelivery.success && tcBook) {
@@ -1977,7 +1981,7 @@ export async function registerRoutes(
       }
       const {
         clinicianId, slotId, allocationMethod = "form", allocationReason,
-        formatOverride, occurrenceDate,
+        formatOverride, occurrenceDate, locationType,
       } = req.body;
       
       if (!clinicianId || !slotId) {
@@ -1994,6 +1998,10 @@ export async function registerRoutes(
         eq(clinicians.id, clinicianId),
         eq(clinicians.tenantId, req.tenant.id),
       )).limit(1);
+      const selectedLocationType = requestedSlot && resolveDeliveryMode(req.tenant.id, requestedSlot.locationType, locationType);
+      if (requestedSlot && !selectedLocationType) {
+        return res.status(400).json({ error: "This appointment format is not available for the selected slot." });
+      }
       if (occurrenceDate !== undefined && (typeof occurrenceDate !== "string" || !isValidDate(occurrenceDate))) {
         return res.status(400).json({ error: "Choose a valid calendar date for this appointment slot." });
       }
@@ -2011,7 +2019,7 @@ export async function registerRoutes(
         requestedSlot
         && requestedClinician
         && req.tenant.zoomLinkEmailEnabled === true
-        && onlineBookingNeedsZoomLink(requestedSlot.locationType)
+        && onlineBookingNeedsZoomLink(selectedLocationType)
         && !isValidZoomLink(requestedClinician.zoomLink)
       ) {
         return res.status(409).json({ error: "A valid Zoom link is required before this online slot can be assigned." });
@@ -2025,20 +2033,21 @@ export async function registerRoutes(
         allocationMethod,
         allocationReason,
         occurrenceDate,
+        selectedLocationType || undefined,
       );
       try {
         const slot = await storage.getTimeSlotById(slotId);
         await recordActivity(req, "activity_client_allocated", "client", req.params.clientId, {
           clientDisplayId: updated.displayId,
           clinicianName: await getClinicianActivityName(clinicianId),
-          slotDescription: slot ? formatActivitySlot(slot) : "",
+          slotDescription: slot ? formatActivitySlot({ ...slot, locationType: selectedLocationType }) : "",
         });
         if (
           formatOverride
           && (formatOverride.preference === "online" || formatOverride.preference === "in_person")
           && (formatOverride.slotFormat === "online" || formatOverride.slotFormat === "in_person")
           && formatOverride.preference !== formatOverride.slotFormat
-          && requestedSlot?.locationType === formatOverride.slotFormat
+          && selectedLocationType === formatOverride.slotFormat
         ) {
           await recordActivity(req, "activity_session_format_override", "client", req.params.clientId, {
             clientDisplayId: updated.displayId,
@@ -2104,6 +2113,7 @@ export async function registerRoutes(
         return res.status(409).json({ error: "Choose suitable clinicians and send a clinician invitation instead of matching three slots." });
       }
       const { selections, reoffer } = req.body;
+      const selectionModes = new Map<string, "online" | "in_person">();
 
       const client = await storage.getClientById(req.params.clientId);
       if (!client) return res.status(404).json({ error: "Client not found" });
@@ -2145,7 +2155,8 @@ export async function registerRoutes(
           const sameSelection = !Array.isArray(selections) || (
             selections.length === currentOptions.length
             && selections.every((selection: any) => currentOptions.some(option =>
-              option.clinicianId === selection.clinicianId && option.slotId === selection.slotId,
+              option.clinicianId === selection.clinicianId && option.slotId === selection.slotId
+                && (selection.locationType === undefined || selection.locationType === option.locationType),
             ))
           );
           if (sameSelection && currentOptions.length === finalized.optionTokens.length
@@ -2184,12 +2195,15 @@ export async function registerRoutes(
             if (slot.tenantId !== req.tenant?.id) {
               return res.status(403).json({ error: `Slot ${sel.slotId} does not belong to this tenant` });
             }
+            const selectedMode = resolveDeliveryMode(req.tenant.id, slot.locationType, sel.locationType);
+            if (!selectedMode) return res.status(400).json({ error: "This appointment format is not available for the selected slot." });
+            selectionModes.set(sel.slotId, selectedMode);
             const [clinician] = await db.select().from(clinicians).where(eq(clinicians.id, sel.clinicianId)).limit(1);
             if (!clinician) return res.status(400).json({ error: `Clinician ${sel.clinicianId} not found` });
             if (clinician.tenantId !== req.tenant?.id) {
               return res.status(403).json({ error: `Clinician ${sel.clinicianId} does not belong to this tenant` });
             }
-            if (req.tenant.zoomLinkEmailEnabled === true && onlineBookingNeedsZoomLink(slot.locationType) && !isValidZoomLink(clinician.zoomLink)) {
+            if (req.tenant.zoomLinkEmailEnabled === true && onlineBookingNeedsZoomLink(selectedMode) && !isValidZoomLink(clinician.zoomLink)) {
               const clinicianName = await getClinicianActivityName(clinician.id);
               return res.status(409).json({ error: `${clinicianName} needs a valid Zoom link before online appointment options can be sent. Add it in Clinicians and try again.` });
             }
@@ -2222,6 +2236,7 @@ export async function registerRoutes(
               const [clinician] = await tx.select().from(clinicians).where(eq(clinicians.id, sel.clinicianId)).limit(1);
               if (!slot || !clinician || slot.tenantId !== req.tenant!.id || clinician.tenantId !== req.tenant!.id
                 || slot.clinicianId !== sel.clinicianId || slotUnavailableReason(slot)
+                || !resolveDeliveryMode(req.tenant!.id, slot.locationType, selectionModes.get(sel.slotId))
                 || await findTimeOffBlockForSlot(tx, req.tenant!.id, slot)) {
                 throw new Error("OFFER_SLOT_UNAVAILABLE");
               }
@@ -2230,13 +2245,14 @@ export async function registerRoutes(
                 && (sel.formatOverride.preference === "online" || sel.formatOverride.preference === "in_person")
                 && (sel.formatOverride.slotFormat === "online" || sel.formatOverride.slotFormat === "in_person")
                 && sel.formatOverride.preference !== sel.formatOverride.slotFormat
-                && slot.locationType === sel.formatOverride.slotFormat
+                && selectionModes.get(sel.slotId) === sel.formatOverride.slotFormat
               ) confirmedFormatOverrides.push(sel.formatOverride);
             }
             const options = selections.map((sel: { clinicianId: string; slotId: string }) => ({
               clientId: client.id,
               clinicianId: sel.clinicianId,
               slotId: sel.slotId,
+              locationType: selectionModes.get(sel.slotId),
               status: "pending" as const,
               selectionToken: crypto.randomBytes(32).toString("hex"),
               tenantId: req.tenant!.id,
@@ -2300,12 +2316,15 @@ export async function registerRoutes(
           if (slot.tenantId !== req.tenant?.id) {
             return res.status(403).json({ error: `Slot ${sel.slotId} does not belong to this tenant` });
           }
+          const selectedMode = resolveDeliveryMode(req.tenant.id, slot.locationType, sel.locationType);
+          if (!selectedMode) return res.status(400).json({ error: "This appointment format is not available for the selected slot." });
+          selectionModes.set(sel.slotId, selectedMode);
           if (
             sel.formatOverride
             && (sel.formatOverride.preference === "online" || sel.formatOverride.preference === "in_person")
             && (sel.formatOverride.slotFormat === "online" || sel.formatOverride.slotFormat === "in_person")
             && sel.formatOverride.preference !== sel.formatOverride.slotFormat
-            && slot.locationType === sel.formatOverride.slotFormat
+            && selectedMode === sel.formatOverride.slotFormat
           ) {
             confirmedFormatOverrides.push(sel.formatOverride);
           }
@@ -2314,7 +2333,7 @@ export async function registerRoutes(
           if (clinician.tenantId !== req.tenant?.id) {
             return res.status(403).json({ error: `Clinician ${sel.clinicianId} does not belong to this tenant` });
           }
-          if (req.tenant.zoomLinkEmailEnabled === true && onlineBookingNeedsZoomLink(slot.locationType) && !isValidZoomLink(clinician.zoomLink)) {
+          if (req.tenant.zoomLinkEmailEnabled === true && onlineBookingNeedsZoomLink(selectedMode) && !isValidZoomLink(clinician.zoomLink)) {
             const clinicianName = await getClinicianActivityName(clinician.id);
             return res.status(409).json({ error: `${clinicianName} needs a valid Zoom link before online appointment options can be sent. Add it in Clinicians and try again.` });
           }
@@ -2348,7 +2367,8 @@ export async function registerRoutes(
               ));
               const sameSelection = finalizedOptions.length === selections.length
                 && selections.every((selection: any) => finalizedOptions.some(option =>
-                  option.clinicianId === selection.clinicianId && option.slotId === selection.slotId,
+                  option.clinicianId === selection.clinicianId && option.slotId === selection.slotId
+                    && (selection.locationType === undefined || selection.locationType === option.locationType),
                 ));
               if (sameSelection && finalizedOptions.length === finalized.optionTokens.length
                 && finalizedOptions.every(option => option.status === "pending")) {
@@ -2389,6 +2409,7 @@ export async function registerRoutes(
             const [slot] = await tx.select().from(timeSlots).where(eq(timeSlots.id, sel.slotId)).for("update");
             if (!slot || slot.clinicianId !== sel.clinicianId
               || slot.tenantId !== req.tenant!.id || slotUnavailableReason(slot)
+              || !resolveDeliveryMode(req.tenant!.id, slot.locationType, selectionModes.get(sel.slotId))
               || await findTimeOffBlockForSlot(tx, req.tenant!.id, slot)) {
               throw new Error("OFFER_SLOT_UNAVAILABLE");
             }
@@ -2398,6 +2419,7 @@ export async function registerRoutes(
             clientId: client.id,
             clinicianId: sel.clinicianId,
             slotId: sel.slotId,
+            locationType: selectionModes.get(sel.slotId),
             status: "pending" as const,
             selectionToken: crypto.randomBytes(32).toString("hex"),
             tenantId: req.tenant!.id,
@@ -2419,7 +2441,7 @@ export async function registerRoutes(
               startTime: slotRow?.startTime || "",
               endTime: slotRow?.endTime || "",
               selectionToken: opt.selectionToken,
-              locationType: slotRow?.locationType || null,
+              locationType: opt.locationType ?? slotRow?.locationType ?? null,
             };
           }));
           const firstToken = options[0]?.selectionToken;
@@ -2674,7 +2696,10 @@ export async function registerRoutes(
           || await findTimeOffBlockForSlot(tx, tenant.id, slot)) {
           return res.status(409).json({ code: "OFFER_CLOSED", error: "An appointment option is no longer available. Please offer new choices instead." });
         }
-        if (tenant.zoomLinkEmailEnabled === true && onlineBookingNeedsZoomLink(slot?.locationType) && !isValidZoomLink(clinician?.zoomLink)) {
+        if (!resolveDeliveryMode(tenant.id, slot?.locationType, option.locationType ?? slot?.locationType)) {
+          return res.status(409).json({ error: "An offered appointment format is no longer available. Please offer new choices." });
+        }
+        if (tenant.zoomLinkEmailEnabled === true && onlineBookingNeedsZoomLink(option.locationType ?? slot?.locationType) && !isValidZoomLink(clinician?.zoomLink)) {
           const clinicianName = await getClinicianActivityName(clinician?.id);
           return res.status(409).json({ error: `${clinicianName} needs a valid Zoom link before these online options can be resent.` });
         }
@@ -2700,7 +2725,7 @@ export async function registerRoutes(
             startTime: slotRow?.startTime || "",
             endTime: slotRow?.endTime || "",
             selectionToken: opt.selectionToken,
-            locationType: slotRow?.locationType || null,
+            locationType: opt.locationType ?? slotRow?.locationType ?? null,
           };
         })
       );
@@ -2962,6 +2987,7 @@ export async function registerRoutes(
             date: reassignmentConfirmation.snapshot.date,
             startTime: reassignmentConfirmation.snapshot.startTime,
             endTime: reassignmentConfirmation.snapshot.endTime,
+            locationType: reassignmentConfirmation.snapshot.locationType,
           }, tenantContext);
           const delivery = await sendEmail({
             ...email,
@@ -3385,13 +3411,14 @@ export async function registerRoutes(
           return {
             id: opt.id,
             status: opt.status,
-            available: Boolean(slotRow && clinicianRow?.tenantId === optionRow.tenantId
+            available: Boolean(slotRow && resolveDeliveryMode(optionRow.tenantId, slotRow.locationType, opt.locationType ?? slotRow.locationType)
+              && clinicianRow?.tenantId === optionRow.tenantId
               && slotRow.clinicianId === opt.clinicianId
               && slotRow.tenantId === optionRow.tenantId && !slotUnavailableReason(slotRow)
               && !(await findTimeOffBlockForSlot(db, optionRow.tenantId, slotRow))),
             clinicianName: clinicianUser?.name || "Clinician",
             slot: slotRow
-              ? { type: slotRow.type, day: slotRow.day, date: slotRow.date, startDate: slotRow.startDate, endDate: slotRow.endDate, frequency: slotRow.frequency, startTime: slotRow.startTime, endTime: slotRow.endTime, locationType: slotRow.locationType }
+              ? { type: slotRow.type, day: slotRow.day, date: slotRow.date, startDate: slotRow.startDate, endDate: slotRow.endDate, frequency: slotRow.frequency, startTime: slotRow.startTime, endTime: slotRow.endTime, locationType: opt.locationType ?? slotRow.locationType }
               : null,
           };
         })
@@ -3561,6 +3588,8 @@ export async function registerRoutes(
             || await findTimeOffBlockForSlot(tx, optionRow.tenantId, currentSlot)) {
             throw new Error("SELECTED_SLOT_UNAVAILABLE");
           }
+          const selectedMode = resolveDeliveryMode(optionRow.tenantId, currentSlot.locationType, currentOption.locationType ?? currentSlot.locationType);
+          if (!selectedMode) throw new Error("SELECTED_SLOT_UNAVAILABLE");
           const claimed = await tx.update(timeSlots).set({ isBooked: true })
             .where(and(
               eq(timeSlots.id, selectedOption.slotId),
@@ -3576,6 +3605,7 @@ export async function registerRoutes(
             status: nextStatus,
             assignedClinicianId: selectedOption.clinicianId,
             assignedSlotId: selectedOption.slotId,
+            assignedLocationType: selectedMode,
             agreedRatePence: drizzleSql`CASE
               WHEN ${clients.agreedRatePence} > 0 THEN ${clients.agreedRatePence}
               ELSE ${clinicianRatePence}
@@ -3659,6 +3689,7 @@ export async function registerRoutes(
             clinicianName: clinicianUser?.name || "Your Clinician",
             type: slot?.type || null, day: slot?.day || null, date: slot?.date || null,
             startTime: slot?.startTime || "", endTime: slot?.endTime || "",
+            locationType: optionConfirmation.snapshot.locationType,
           }, context);
           const delivery = await sendEmail({ ...email, to: client.email });
           if (delivery.success) {
@@ -3670,7 +3701,7 @@ export async function registerRoutes(
               clientEmail: client.email,
               clinicianName: clinicianUser?.name || "Your Clinician",
               zoomLink: confirmedClinician?.zoomLink,
-              locationType: slot?.locationType,
+              locationType: optionConfirmation.snapshot.locationType,
               tenant: context,
               idempotencyKey: `zoom-follow-up-${client.id}-${selectedOption.slotId}`,
               notifyAdminsOnFailure: true,
@@ -4214,6 +4245,7 @@ export async function registerRoutes(
             date: registrationConfirmation.snapshot.date,
             startTime: registrationConfirmation.snapshot.startTime,
             endTime: registrationConfirmation.snapshot.endTime,
+            locationType: registrationConfirmation.snapshot.locationType,
           }, tcBook);
           const delivery = await sendEmail({
             ...bookEmail,
@@ -4231,7 +4263,7 @@ export async function registerRoutes(
               clientEmail: client.email,
               clinicianName: clinicianUser?.name || 'Your Clinician',
               zoomLink: confirmedClinician?.zoomLink,
-              locationType: slotRow?.locationType,
+              locationType: registrationConfirmation.snapshot.locationType,
               tenant: tcBook,
               idempotencyKey: `registration-zoom-follow-up-${client.id}-${paymentAttemptKey}`,
               notifyAdminsOnFailure: true,
@@ -7034,6 +7066,7 @@ export async function registerRoutes(
                   date: stripeConfirmation.snapshot.date,
                   startTime: stripeConfirmation.snapshot.startTime,
                   endTime: stripeConfirmation.snapshot.endTime,
+                  locationType: stripeConfirmation.snapshot.locationType,
                 }, tcBook);
               const delivery = await sendEmail({
                 ...bookEmail,
@@ -7051,7 +7084,7 @@ export async function registerRoutes(
                    clientEmail: client.email,
                    clinicianName: clinicianUser?.name || 'Your Clinician',
                    zoomLink: confirmedClinician?.zoomLink,
-                   locationType: slotRow?.locationType,
+                   locationType: stripeConfirmation.snapshot.locationType,
                    tenant: tcBook,
                    idempotencyKey: `stripe-zoom-follow-up-${client.id}-${paymentIntentId || session.id}`,
                     notifyAdminsOnFailure: true,

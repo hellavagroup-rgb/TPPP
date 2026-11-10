@@ -3372,6 +3372,50 @@ describe("registration journey HTTP routes", () => {
     expect(h.state.emails).toHaveLength(0);
   });
 
+  it("stores, emails, displays and selects a CY&A online option from an at-practice slot", async () => {
+    const cya = "92fbc179-2b4e-41e9-9326-4d8e008ca5be";
+    h.state.tenant.id = cya;
+    h.state.client.tenantId = cya;
+    h.state.clinician.tenantId = cya;
+    h.state.slot.tenantId = cya;
+    h.state.options = [];
+    h.state.client.status = "FormsCompleted";
+    h.state.slot.locationType = "in_person";
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    h.state.tenant.autoAllocationEmailEnabled = true;
+    const response = await request("/api/clients/client-a/allocate-options", {
+      method: "POST",
+      body: JSON.stringify({ selections: [{ clinicianId: "clinician-a", slotId: "slot-a", locationType: "online" }] }),
+    });
+    expect(response.status).toBe(200);
+    const option = h.state.options.find((item: any) => item.status === "pending");
+    expect(option.locationType).toBe("online");
+    expect(h.state.emails[0].text).toContain("(Online)");
+    const portal = await request(`/api/public/options/${option.selectionToken}`);
+    expect(portal.status).toBe(200);
+    expect(portal.body.options[0].slot.locationType).toBe("online");
+    const selection = await request(`/api/public/options/${option.selectionToken}/select`, {
+      method: "POST", body: JSON.stringify({ clinicianOptionId: option.id }),
+    });
+    expect(selection.status).toBe(200);
+    expect(h.state.client.assignedLocationType).toBe("online");
+    expect(h.state.slot.locationType).toBe("in_person");
+  });
+
+  it("rejects a forged in-person delivery mode for an online-only option", async () => {
+    h.state.options = [];
+    h.state.client.status = "FormsCompleted";
+    h.state.tenant.multiClinicianAllocationEnabled = true;
+    const response = await request("/api/clients/client-a/allocate-options", {
+      method: "POST", body: JSON.stringify({
+        selections: [{ clinicianId: "clinician-a", slotId: "slot-a", locationType: "in_person" }],
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect(h.state.options).toHaveLength(0);
+    expect(h.state.emails).toHaveLength(0);
+  });
+
   it("records a verified session-format override when allocation options are sent", async () => {
     h.state.options = [];
     h.state.client.status = "FormsCompleted";

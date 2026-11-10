@@ -212,6 +212,7 @@ export async function reconcileRegistrationPayment(
         clinicianName: confirmation.snapshot.clinicianName, type: confirmation.snapshot.slotType,
         day: confirmation.snapshot.day, date: confirmation.snapshot.date,
         startTime: confirmation.snapshot.startTime, endTime: confirmation.snapshot.endTime,
+        locationType: confirmation.snapshot.locationType,
       }, { id: tenant.id, name: tenant.name, fromEmail: tenant.fromEmail, primaryColor: tenant.primaryColor });
       const sent = await sendEmail({
         ...message, to: client.email,

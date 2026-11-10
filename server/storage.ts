@@ -18,6 +18,7 @@ import {
   type ClientClinicianOption, type InsertClientClinicianOption,
 } from "@shared/schema";
 import { db } from "./db";
+import { resolveDeliveryMode, type DeliveryMode } from "@shared/sessionDelivery";
 import { eq, and, or, desc, sql, isNull, inArray, lt } from "drizzle-orm";
 import { slotRetirementConflictCopy } from "@shared/slotRetirementCopy";
 import {
@@ -186,7 +187,7 @@ export interface IStorage {
   archiveClient(id: string, reason?: string, category?: string): Promise<Client | undefined>;
   restoreClient(id: string): Promise<Client | undefined>;
   deleteClientPermanently(id: string): Promise<boolean>;
-  assignClinicianToClient(clientId: string, clinicianId: string, slotId: string, tenantId: string, allocationMethod?: "form" | "manual", allocationReason?: string, occurrenceDate?: string): Promise<Client>;
+  assignClinicianToClient(clientId: string, clinicianId: string, slotId: string, tenantId: string, allocationMethod?: "form" | "manual", allocationReason?: string, occurrenceDate?: string, locationType?: DeliveryMode): Promise<Client>;
   reassignClient(
     clientId: string,
     newClinicianId: string | null,
@@ -734,7 +735,9 @@ export class DatabaseStorage implements IStorage {
     }
     return Array.from(latestRows.values()).map(r => ({
       ...r.client,
-      slotLocationType: r.slotLocationType ?? r.bookingSnapshot?.locationType ?? null,
+      slotLocationType: r.client.assignedSlotId
+        ? r.client.assignedLocationType ?? r.slotLocationType ?? null
+        : r.bookingSnapshot?.locationType ?? null,
       bookingSnapshot: r.bookingSnapshot ?? null,
     })) as any;
   }
@@ -849,6 +852,7 @@ export class DatabaseStorage implements IStorage {
       archiveReason: reason || null,
       archiveCategory: category || null,
       assignedSlotId: null,
+      assignedLocationType: null,
       assignedSlot: null,
       assignedClinicianId: null,
       updatedAt: new Date()
@@ -930,6 +934,7 @@ export class DatabaseStorage implements IStorage {
         const cleared = await tx.update(clients)
           .set({
             assignedSlotId: null,
+            assignedLocationType: null,
             assignedSlot: null,
             assignedClinicianId: null,
             updatedAt: new Date(),
@@ -1252,6 +1257,7 @@ export class DatabaseStorage implements IStorage {
     allocationMethod: "form" | "manual" = "form",
     allocationReason?: string,
     occurrenceDate?: string,
+    locationType?: DeliveryMode,
   ): Promise<Client> {
     try {
       return await db.transaction(async (tx) => {
@@ -1304,6 +1310,10 @@ export class DatabaseStorage implements IStorage {
             "slot_clinician_mismatch",
             "The selected appointment slot does not belong to this clinician",
           );
+        }
+        const selectedLocationType = resolveDeliveryMode(tenantId, slot.locationType, locationType);
+        if (!selectedLocationType) {
+          throw new ManualAssignmentError("slot_unavailable", "This appointment format is not available for the selected slot.");
         }
         if (slot.type === "Recurring" && occurrenceDate && !slotOccursOnDate(slot, occurrenceDate)) {
           throw new ManualAssignmentError("invalid_occurrence_date", "Choose a date that matches this recurring slot.");
@@ -1358,6 +1368,7 @@ export class DatabaseStorage implements IStorage {
           status: "Assigned",
           assignedClinicianId: clinicianId,
           assignedSlotId: slotId,
+          assignedLocationType: selectedLocationType,
           assignedSlot: slotString,
           zoomLinkSentAt: null,
           allocationMethod,
@@ -1512,6 +1523,7 @@ export class DatabaseStorage implements IStorage {
           const [updated] = await tx.update(clients).set({
             status: "Scheduled" as any,
             assignedSlotId: null,
+            assignedLocationType: null,
             assignedSlot: null,
             assignedClinicianId: null,
             zoomLinkSentAt: null,
@@ -1616,6 +1628,7 @@ export class DatabaseStorage implements IStorage {
           status: newStatus as any,
           assignedClinicianId: newClinicianId,
           assignedSlotId: newSlotId,
+          assignedLocationType: newSlot.locationType,
           assignedSlot: slotString,
           ...(zoomDeliveryIdentityChanged ? { zoomLinkSentAt: null } : {}),
           updatedAt: new Date()
@@ -1678,6 +1691,7 @@ export class DatabaseStorage implements IStorage {
           status: newStatus as any,
           assignedClinicianId: null,
           assignedSlotId: null,
+          assignedLocationType: null,
           assignedSlot: null,
           zoomLinkSentAt: null,
           updatedAt: new Date()

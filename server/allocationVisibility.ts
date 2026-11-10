@@ -18,6 +18,7 @@ export async function getAllocationVisibility(clientList: Client[], tenantId: st
       clientId: clientClinicianOptions.clientId,
       tenantId: clientClinicianOptions.tenantId,
       slotId: clientClinicianOptions.slotId,
+      locationType: clientClinicianOptions.locationType,
       clinicianId: clientClinicianOptions.clinicianId,
       clinicianTenantId: clinicians.tenantId,
       status: clientClinicianOptions.status,

@@ -223,6 +223,7 @@ export const clients = pgTable("clients", {
   // Assignment
   assignedClinicianId: varchar("assigned_clinician_id").references(() => clinicians.id),
   assignedSlotId: varchar("assigned_slot_id").references(() => timeSlots.id),
+  assignedLocationType: text("assigned_location_type", { enum: ["online", "in_person"] }),
   assignedSlot: text("assigned_slot"), // Display string for UI
   allocationMethod: text("allocation_method", { enum: ["form", "manual"] }), // How client was allocated
   allocationReason: text("allocation_reason"), // Admin's reason for this allocation
@@ -313,6 +314,7 @@ export const insertClientSchema = createInsertSchema(clients, {
   managerConfirmedAt: true,
   managerConfirmedBy: true,
   managerConfirmationReason: true,
+  assignedLocationType: true,
 });
 export const selectClientSchema = createSelectSchema(clients);
 
@@ -350,6 +352,7 @@ export const bookingReservations = pgTable("booking_reservations", {
   reason: text("reason"),
   clinicianName: text("clinician_name").notNull(),
   appointmentLabel: text("appointment_label").notNull(),
+  locationType: text("location_type", { enum: ["online", "in_person"] }),
   // Historic payment ownership survives the client's next reservation.
   paymentAttemptKey: text("payment_attempt_key"),
   paymentLinkId: text("payment_link_id"),
@@ -697,6 +700,7 @@ export const clientClinicianOptions = pgTable("client_clinician_options", {
   clientId: varchar("client_id").references(() => clients.id).notNull(),
   clinicianId: varchar("clinician_id").references(() => clinicians.id).notNull(),
   slotId: varchar("slot_id").references(() => timeSlots.id),
+  locationType: text("location_type", { enum: ["online", "in_person"] }),
   status: text("status", { enum: ["pending", "selected", "declined", "unavailable"] }).notNull().default("pending"),
   selectionToken: text("selection_token").notNull().unique(),
   createdAt: timestamp("created_at").defaultNow().notNull(),

@@ -1,5 +1,7 @@
 import { Resend } from 'resend';
 import { storage } from './storage';
+import { isCyaPsychologyTenant } from '../shared/practicePolicies';
+import { deliveryModeLabel } from '../shared/sessionDelivery';
 import { formatOfferDate, formatOfferFrequency, formatOfferTimeRange, formatOfferWindow } from '../shared/offerSchedule';
 import { usesRegularSessionCopy, regularSessionConstraints, FIRST_SESSION_TO_AGREE,
   REGULAR_SESSION_NEXT_STEPS, REGULAR_SESSION_CONFIRMED, FIRST_SESSION_CONTACT } from '../shared/regularSessionCopy';
@@ -612,6 +614,7 @@ export async function generateRegistrationInviteEmail(
 }
 
 export interface BookingConfirmedDetails {
+  locationType?: string | null;
   clinicianName: string;
   type?: string | null;
   day: string | null;
@@ -628,6 +631,8 @@ export async function generateBookingConfirmedEmail(
   const storedTemplate = await getStoredTemplate('booking_confirmed', tenant?.id);
   const regularSession = usesRegularSessionCopy(tenant?.id) && details.type !== 'SpecificDate';
   const header = regularSession ? 'Regular Session Slot Confirmed' : 'Booking Confirmed';
+  const formatLine = isCyaPsychologyTenant(tenant?.id) && details.locationType
+    ? `\nAppointment format: ${deliveryModeLabel(details.locationType)}` : '';
 
   let dayLabel: string;
   if (details.type === 'SpecificDate' && details.date) {
@@ -650,9 +655,9 @@ export async function generateBookingConfirmedEmail(
     });
     // Preserve practice-authored text and placeholders, but always clarify the
     // first-session distinction for this practice's recurring confirmations.
-    const bodyText = regularSession
+    const bodyText = (regularSession
       ? `${renderedBody}\n\n${REGULAR_SESSION_CONFIRMED}\n${FIRST_SESSION_TO_AGREE}\n${FIRST_SESSION_CONTACT}`
-      : renderedBody;
+      : renderedBody) + formatLine;
     const subject = replacePlaceholders(storedTemplate.subject, { practice_name: practiceName });
     return {
       to: '',
@@ -668,7 +673,7 @@ export async function generateBookingConfirmedEmail(
 
 Regular Session Slot:
 Clinician: ${details.clinicianName}
-Time: ${slotDisplay}
+Time: ${slotDisplay}${formatLine}
 
 ${FIRST_SESSION_TO_AGREE}
 ${FIRST_SESSION_CONTACT}
@@ -681,7 +686,7 @@ ${practiceName} Team`
 
 Appointment Details:
 Clinician: ${details.clinicianName}
-Time: ${slotDisplay}
+Time: ${slotDisplay}${formatLine}
 
 If you have any questions or need to make changes, please don't hesitate to contact us.
 

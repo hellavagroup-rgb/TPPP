@@ -274,6 +274,52 @@ describe("Clients page compact board integration", () => {
     vi.restoreAllMocks();
   });
 
+  it("sends a CY&A at-practice option online without changing the client's submitted preference", async () => {
+    apiFixtures.tenant = makeTenant({ id: CYA_PSYCHOLOGY_TENANT_ID });
+    apiFixtures.clients = [{ ...makeClient("online-family", "WU-ONLINE", "Forms Completed"), tenantId: CYA_PSYCHOLOGY_TENANT_ID }];
+    const writes: { path: string; body: any }[] = [];
+    const originalFetch = fetch;
+    vi.stubGlobal("fetch", vi.fn(async (input, init) => {
+      const path = new URL(String(input), window.location.origin).pathname;
+      if (path === "/api/clinicians") return json([{
+        id: "practice-clinician", name: "Dr Practice", specialties: [], insurers: [],
+        capacity: 10, currentLoad: 0, maxNewClients: 3, isActive: true,
+        availability: [{ id: "practice-slot", clinicianId: "practice-clinician", type: "Recurring",
+          day: "Monday", startTime: "10:00", endTime: "11:00", isBooked: false, locationType: "in_person" }],
+      }]);
+      if (path === "/api/clients/online-family/submissions") return json([{
+        responses: { format: "Online" },
+        formFields: [{ id: "format", options: ["Online", "In person", "Both"] }],
+      }]);
+      if (init?.method === "POST" || init?.method === "PATCH") {
+        writes.push({ path, body: JSON.parse(String(init.body)) });
+        return json({ success: true });
+      }
+      return originalFetch(input, init);
+    }));
+    const view = renderBoard();
+    queryClients.push(view.queryClient);
+    const user = userEvent.setup();
+    const card = await screen.findByTestId("kanban-card-online-family");
+    const menu = within(card).getAllByRole("button").find(button => button.getAttribute("aria-haspopup") === "menu");
+    await user.click(menu!);
+    await user.click(await screen.findByRole("menuitem", { name: "Allocate to Clinician" }));
+    const allocationDialog = await screen.findByRole("dialog");
+    const slot = await within(allocationDialog).findByRole("button", { name: /Monday/ });
+    await waitFor(() => expect(slot).toHaveProperty("disabled", false));
+    await user.click(slot);
+    const choice = await screen.findByRole("dialog", { name: "Choose appointment format" });
+    expect(within(choice).getByLabelText("Appointment format")).toHaveProperty("value", "online");
+    await user.click(within(choice).getByRole("button", { name: "Use this format" }));
+    expect(screen.queryByRole("alertdialog", { name: "Session format mismatch" })).toBeNull();
+    await user.click(within(allocationDialog).getByRole("button", { name: "Send Options (1)" }));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]).toEqual({
+      path: "/api/clients/online-family/allocate-options",
+      body: { selections: [{ clinicianId: "practice-clinician", slotId: "practice-slot", locationType: "online" }] },
+    });
+  });
+
   it("records Email Sent for an existing recurring allocation without asking for a date", async () => {
     apiFixtures.tenant = makeTenant({ multiClinicianAllocationEnabled: false, timeOffBlocksEnabled: true });
     apiFixtures.clients = [{

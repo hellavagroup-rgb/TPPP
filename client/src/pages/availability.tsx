@@ -34,6 +34,7 @@ import { addOneHour, splitIntoHourlySlots, TIME_OPTIONS } from "@/lib/availabili
 import { useOperationalRefresh, invalidateOperationalData } from "@/lib/operationalRefresh";
 import { canEditSlotLocation } from "@/lib/slotLocationPermissions";
 import { isSlotBlockedForBooking, isSlotCoveredByTimeOffBlocks, isValidTimeOffBlockWindow } from "@shared/timeOffBlocks";
+import { isCyaPsychologyTenant } from "@shared/practicePolicies";
 
 type SlotType = "Recurring" | "Vacation" | "SpecificDate";
 
@@ -90,6 +91,11 @@ export default function Availability() {
     queryKey: ["/api/tenant/features"],
     enabled: user?.role === "admin" || user?.role === "clinician",
   });
+  const { data: tenantIdentity } = useQuery<{ id?: string }>({
+    queryKey: ["/api/tenant"],
+    enabled: user?.role === "admin" || user?.role === "clinician",
+  });
+  const cyaAvailabilityLabels = isCyaPsychologyTenant(tenantIdentity?.id);
 
   const [newLocationType, setNewLocationType] = useState<"online" | "in_person">("online");
   const [editingSlot, setEditingSlot] = useState<TimeSlot | null>(null);
@@ -116,27 +122,28 @@ export default function Availability() {
   const [allocatingClientId, setAllocatingClientId] = useState<string | null>(null);
   const [allocatingClient, setAllocatingClient] = useState<Client | null>(null);
   const [inPersonWarning, setInPersonWarning] = useState<{ slot: TimeSlot; clinicianId: string; occurrenceDate: string } | null>(null);
+  const [pendingFormatChoice, setPendingFormatChoice] = useState<{ slot: TimeSlot; clinicianId: string; occurrenceDate: string } | null>(null);
 
   const { data: clinicians = [] } = useQuery<(Clinician & { name: string; availability?: TimeSlot[]; availabilityTimeOffBlocks?: AvailabilityTimeOffBlock[] })[]>({
     queryKey: ["/api/clinicians"],
   });
 
-  const { data: clients = [] } = useQuery<Client[]>({
+  const { data: clients = [] } = useQuery<(Client & { slotLocationType?: "online" | "in_person" | null })[]>({
     queryKey: ["/api/clients"],
     enabled: user?.role === "admin",
   });
 
-  const { data: clinicianSlotClients = {} } = useQuery<Record<string, { displayId: string; status: string }>>({
+  const { data: clinicianSlotClients = {} } = useQuery<Record<string, { displayId: string; status: string; slotLocationType?: "online" | "in_person" | null }>>({
     queryKey: ["/api/clinicians/me/slot-clients"],
     enabled: user?.role === "clinician",
   });
 
   const slotToClientMap = useMemo(() => {
     if (user?.role === "clinician") return clinicianSlotClients;
-    const map: Record<string, { displayId: string; status: string }> = {};
+    const map: Record<string, { displayId: string; status: string; slotLocationType?: "online" | "in_person" | null }> = {};
     for (const client of clients) {
       if (client.assignedSlotId && client.displayId) {
-        map[client.assignedSlotId] = { displayId: client.displayId, status: client.status };
+        map[client.assignedSlotId] = { displayId: client.displayId, status: client.status, slotLocationType: client.slotLocationType };
       }
     }
     return map;
@@ -230,14 +237,15 @@ export default function Availability() {
   });
 
   const assignClientMutation = useMutation({
-    mutationFn: async ({ clientId, clinicianId, slotId, occurrenceDate }: {
-      clientId: string; clinicianId: string; slotId: string; occurrenceDate: string;
+    mutationFn: async ({ clientId, clinicianId, slotId, occurrenceDate, locationType }: {
+      clientId: string; clinicianId: string; slotId: string; occurrenceDate: string; locationType?: "online" | "in_person";
     }) => {
       const response = await apiRequest("POST", `/api/clients/${clientId}/assign`, {
         clinicianId,
         slotId,
         allocationMethod: "manual",
         occurrenceDate,
+        ...(locationType ? { locationType } : {}),
       });
       return response.json();
     },
@@ -638,32 +646,44 @@ export default function Availability() {
     );
   };
 
+  const confirmAssignment = (slot: TimeSlot, clinicianId: string, occurrenceDate: string, locationType?: "online" | "in_person") => {
+    if (!allocatingClientId) return;
+    assignClientMutation.mutate({
+      clientId: allocatingClientId,
+      clinicianId,
+      slotId: slot.id,
+      occurrenceDate,
+      locationType,
+    });
+  };
+
   const handleSlotClick = (slot: TimeSlot, clinicianId: string, occurrenceDate: string) => {
     if (!isAllocating || !allocatingClientId) return;
     if (slot.isBooked || slot.type === "Vacation") return;
+
+    if (cyaAvailabilityLabels && slot.locationType === "in_person") {
+      setPendingFormatChoice({ slot, clinicianId, occurrenceDate });
+      return;
+    }
 
     if ((slot as any).locationType === "in_person") {
       setInPersonWarning({ slot, clinicianId, occurrenceDate });
       return;
     }
 
-    assignClientMutation.mutate({
-      clientId: allocatingClientId,
-      clinicianId,
-      slotId: slot.id,
-      occurrenceDate,
-    });
+    confirmAssignment(slot, clinicianId, occurrenceDate, cyaAvailabilityLabels ? "online" : undefined);
   };
 
   const handleConfirmInPerson = () => {
     if (!inPersonWarning || !allocatingClientId) return;
-    assignClientMutation.mutate({
-      clientId: allocatingClientId,
-      clinicianId: inPersonWarning.clinicianId,
-      slotId: inPersonWarning.slot.id,
-      occurrenceDate: inPersonWarning.occurrenceDate,
-    });
+    confirmAssignment(inPersonWarning.slot, inPersonWarning.clinicianId, inPersonWarning.occurrenceDate);
     setInPersonWarning(null);
+  };
+
+  const handleChooseAppointmentMode = (locationType: "online" | "in_person") => {
+    if (!pendingFormatChoice) return;
+    confirmAssignment(pendingFormatChoice.slot, pendingFormatChoice.clinicianId, pendingFormatChoice.occurrenceDate, locationType);
+    setPendingFormatChoice(null);
   };
 
   const cancelAllocation = () => {
@@ -692,6 +712,7 @@ export default function Availability() {
   return (
     <div className="space-y-4 h-[calc(100vh-8rem)] flex flex-col animate-in fade-in slide-in-from-bottom-4 duration-500">
       {editingSlot && <EditAvailabilityDialog key={editingSlot.id} slot={editingSlot}
+        cyaAvailabilityLabels={cyaAvailabilityLabels}
         onClose={() => setEditingSlot(null)}
         onSaved={() => { setEditingSlot(null); invalidateOperationalData(queryClient); toast({ title: "Availability updated" }); }} />}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 flex-shrink-0">
@@ -808,7 +829,7 @@ export default function Availability() {
                           data-testid="radio-location-online"
                           className="h-4 w-4 accent-primary"
                         />
-                        <span className="text-sm">Online</span>
+                        <span className="text-sm">{cyaAvailabilityLabels ? "Online only" : "Online"}</span>
                       </label>
                       <label className="flex items-center gap-2 cursor-pointer">
                         <input
@@ -820,7 +841,7 @@ export default function Availability() {
                           data-testid="radio-location-in-person"
                           className="h-4 w-4 accent-primary"
                         />
-                        <span className="text-sm">In-Person</span>
+                        <span className="text-sm">{cyaAvailabilityLabels ? "At the practice — in person or online" : "In-Person"}</span>
                       </label>
                     </div>
                   </div>
@@ -1113,9 +1134,17 @@ export default function Availability() {
                                           : "bg-blue-100 text-blue-700 border-blue-300"
                                       }`}
                                       data-testid={`button-toggle-location-${slot.id}`}
-                                      title={canEditSlotLocation(user, clinician, slot) ? "Click to toggle Online / In-Person" : "Only your own unbooked slots can change format (administrators can edit any unbooked slot)."}
+                                      title={canEditSlotLocation(user, clinician, slot)
+                                        ? cyaAvailabilityLabels && !slot.isBooked
+                                          ? "Click to toggle Online only / At the practice — in person or online"
+                                          : "Click to toggle Online / In-Person"
+                                        : "Only your own unbooked slots can change format (administrators can edit any unbooked slot)."}
                                     >
-                                      {(slot as any).locationType === "in_person" ? "In-Person" : "Online"}
+                                      {cyaAvailabilityLabels && !slot.isBooked
+                                        ? (slot.locationType === "in_person" ? "At the practice — in person or online" : "Online only")
+                                        : ((slot.isBooked
+                                          ? slotToClientMap[slot.id]?.slotLocationType ?? slot.locationType
+                                          : slot.locationType) === "in_person" ? "In-Person" : "Online")}
                                     </button>
                                   ) : (
                                     <span className={`inline-block text-[8px] px-1 py-0 rounded-full border mt-0.5 leading-tight ${
@@ -1123,7 +1152,11 @@ export default function Availability() {
                                         ? "bg-amber-100 text-amber-700 border-amber-300"
                                         : "bg-blue-100 text-blue-700 border-blue-300"
                                     }`}>
-                                      {(slot as any).locationType === "in_person" ? "In-Person" : "Online"}
+                                      {cyaAvailabilityLabels && !slot.isBooked
+                                        ? (slot.locationType === "in_person" ? "At the practice — in person or online" : "Online only")
+                                        : ((slot.isBooked
+                                          ? slotToClientMap[slot.id]?.slotLocationType ?? slot.locationType
+                                          : slot.locationType) === "in_person" ? "In-Person" : "Online")}
                                     </span>
                                   )}
                                   {slot.isBooked && (
@@ -1239,6 +1272,35 @@ export default function Availability() {
               data-testid="button-inperson-confirm"
             >
               Confirm
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!pendingFormatChoice} onOpenChange={(open) => { if (!open) setPendingFormatChoice(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Choose appointment format</AlertDialogTitle>
+            <AlertDialogDescription>
+              This at-the-practice slot can be delivered in person or online. Choose the format for this appointment.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={assignClientMutation.isPending}>Cancel</AlertDialogCancel>
+            <Button
+              variant="outline"
+              onClick={() => handleChooseAppointmentMode("online")}
+              disabled={assignClientMutation.isPending}
+              data-testid="button-choose-appointment-online"
+            >
+              Online
+            </Button>
+            <AlertDialogAction
+              onClick={() => handleChooseAppointmentMode("in_person")}
+              disabled={assignClientMutation.isPending}
+              data-testid="button-choose-appointment-in-person"
+            >
+              In person
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -216,7 +216,7 @@ export async function confirmBookingInTransaction(tx: any, input: BookingConfirm
       day: slot.day,
       startTime: slot.startTime,
       endTime: slot.endTime,
-      locationType: slot.locationType,
+      locationType: client.assignedLocationType ?? slot.locationType,
       confirmedAt,
       idempotencyKey,
     }).returning();
@@ -263,6 +263,7 @@ export async function confirmBookingInTransaction(tx: any, input: BookingConfirm
       status,
       assignedClinicianId: null,
       assignedSlotId: null,
+      assignedLocationType: null,
       assignedSlot: null,
       confirmedAt,
       // These markers describe the newly confirmed appointment, not an earlier

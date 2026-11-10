@@ -13,6 +13,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { CYA_PSYCHOLOGY_TENANT_ID } from '@shared/practicePolicies';
 
 // Mock the storage module before importing email.ts so that getStoredTemplate
 // always returns null, exercising the hardcoded default template paths.
@@ -224,6 +225,13 @@ describe('Email Outlook rendering — no <style> blocks or class= attributes', (
   });
 
   describe('generateBookingConfirmedEmail', () => {
+    it.each(["online", "in_person"])("shows the actual CY&A appointment mode %s", async locationType => {
+      const email = await generateBookingConfirmedEmail(
+        { clinicianName: "Dr Grace", day: "Monday", startTime: "10:00", endTime: "11:00", locationType },
+        { ...tenant, id: CYA_PSYCHOLOGY_TENANT_ID },
+      );
+      expect(email.text).toContain(`Appointment format: ${locationType === "online" ? "Online" : "In person"}`);
+    });
     it('is Outlook-safe and contains no Zoom link', async () => {
       const email = await generateBookingConfirmedEmail(
         { clinicianName: 'Dr. Grace', day: 'Tuesday', startTime: '11:00', endTime: '12:00' },

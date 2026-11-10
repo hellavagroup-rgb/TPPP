@@ -24,6 +24,7 @@ vi.mock("./db", async () => {
   await isolated.pool.query(await readFile("migrations/0020_flexible_booking.sql", "utf8"));
   await isolated.pool.query(await readFile("migrations/0021_availability_time_off_blocks.sql", "utf8"));
   await isolated.pool.query(await readFile("migrations/0023_allow_repeat_booking_snapshots.sql", "utf8"));
+  await isolated.pool.query(await readFile("migrations/0024_appointment_delivery_mode.sql", "utf8"));
   // LIKE INCLUDING ALL renames the copied unique client index in this schema.
   await isolated.pool.query("DROP INDEX IF EXISTS booking_snapshots_client_id_idx");
   return { db: drizzle(isolated.pool, { schema: tables }), pool: isolated.pool };
@@ -84,7 +85,7 @@ async function fixture() {
   ]);
 }
 async function reserve(clientId = "client", slotId = "slot") {
-  return reserveFlexibleSlot({ clientId, slotId, clinicianId: "clinician", tenantId: CYA, route: "phone" });
+  return reserveFlexibleSlot({ clientId, slotId, clinicianId: "clinician", tenantId: CYA, route: "phone", locationType: "online" });
 }
 async function overdue(id: string) {
   await db.update(schema.bookingReservations).set({ deadline: new Date(Date.now() - 1000) }).where(eq(schema.bookingReservations.id, id));
@@ -120,6 +121,84 @@ afterAll(async () => {
   if (isolated.schema) await isolated.admin.query(`DROP SCHEMA "${isolated.schema}" CASCADE`);
   await isolated.admin?.end();
   vi.unstubAllEnvs();
+});
+
+describe("CY&A appointment delivery modes", () => {
+  async function onlinePreference() {
+    await db.insert(schema.formTemplates).values({ id: "intake", title: "Intake", description: "Test intake", fields: [
+      { id: "format", type: "select", label: "Session format", options: ["Online", "In person", "Both"] },
+    ], tenantId: CYA });
+    await db.insert(schema.formSubmissions).values({
+      id: "intake-answer", formTemplateId: "intake", clientId: "client", tenantId: CYA,
+      responses: { format: "Online" }, isDraft: false,
+    });
+  }
+  it("offers an at-practice slot online for an online-preferring client and preserves the intake answer", async () => {
+    await onlinePreference();
+    await db.update(schema.timeSlots).set({ locationType: "in_person" }).where(eq(schema.timeSlots.id, "slot"));
+    expect((await request("/api/clients/client/clinician-invitation", { clinicianIds: ["clinician"] })).status).toBe(200);
+    const [invitation] = await db.select().from(schema.clinicianInvitations);
+    const response = await request(`/api/public/booking/${invitation.token}`);
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.clinicians[0].slots.find((slot: any) => slot.id === "slot")).toMatchObject({
+      locationType: "in_person", deliveryModes: ["online"],
+    });
+    const selected = await request(`/api/public/booking/${invitation.token}`, {
+      clinicianId: "clinician", slotId: "slot", locationType: "online",
+    });
+    expect(selected.status).toBe(200);
+    expect((await client()).assignedLocationType).toBe("online");
+    expect((await latestReservation("client"))?.locationType).toBe("online");
+    expect((await latestReservation("client"))?.appointmentLabel).toContain(", online");
+    const [slot] = await db.select().from(schema.timeSlots).where(eq(schema.timeSlots.id, "slot"));
+    expect(slot.locationType).toBe("in_person");
+    const [answer] = await db.select().from(schema.formSubmissions).where(eq(schema.formSubmissions.id, "intake-answer"));
+    expect(answer.responses).toEqual({ format: "Online" });
+    const visibility = (await getAllocationVisibility([await client()], CYA)).get("client");
+    expect(visibility?.appointment?.locationType).toBe("online");
+  });
+  it("requires an explicit format when both modes are available and fences retry changes", async () => {
+    await db.update(schema.timeSlots).set({ locationType: "in_person" }).where(eq(schema.timeSlots.id, "slot"));
+    await expect(reserveFlexibleSlot({ clientId: "client", slotId: "slot", clinicianId: "clinician", tenantId: CYA, route: "phone" }))
+      .rejects.toMatchObject({ status: 409, message: expect.stringContaining("format") });
+    const input = { clientId: "client", slotId: "slot", clinicianId: "clinician", tenantId: CYA, route: "phone" as const, locationType: "online" as const };
+    const result = await reserveFlexibleSlot(input);
+    expect((await reserveFlexibleSlot(input)).reservation.id).toBe(result.reservation.id);
+    await expect(reserveFlexibleSlot({ ...input, locationType: "in_person" })).rejects.toMatchObject({ status: 409 });
+    expect(await db.select().from(schema.bookingReservations)).toHaveLength(1);
+  });
+  it("rejects in-person selection of an online-only slot without claiming it", async () => {
+    const response = await request("/api/clients/client/reserve-slot", {
+      clinicianId: "clinician", slotId: "slot", locationType: "in_person",
+    });
+    expect(response.status).toBe(409);
+    expect((await client()).assignedSlotId).toBeNull();
+    expect(await db.select().from(schema.bookingReservations)).toHaveLength(0);
+  });
+  it("requires a valid Zoom link for an online appointment even when the clinician is at the practice", async () => {
+    await onlinePreference();
+    await db.update(schema.timeSlots).set({ locationType: "in_person" }).where(eq(schema.timeSlots.id, "slot"));
+    await db.update(schema.tenants).set({ zoomLinkEmailEnabled: true }).where(eq(schema.tenants.id, CYA));
+    await expect(reserveFlexibleSlot({
+      clientId: "client", slotId: "slot", clinicianId: "clinician", tenantId: CYA, route: "phone", locationType: "online",
+    })).rejects.toMatchObject({ status: 409 });
+    expect(await db.select().from(schema.bookingReservations)).toHaveLength(0);
+    await db.update(schema.clinicians).set({ zoomLink: "https://zoom.us/j/123456789" }).where(eq(schema.clinicians.id, "clinician"));
+    expect((await reserveFlexibleSlot({
+      clientId: "client", slotId: "slot", clinicianId: "clinician", tenantId: CYA, route: "phone", locationType: "online",
+    })).reservation.locationType).toBe("online");
+  });
+  it("keeps the selected online mode in the immutable confirmation snapshot", async () => {
+    await db.update(schema.timeSlots).set({ locationType: "in_person" }).where(eq(schema.timeSlots.id, "slot"));
+    const held = await reserveFlexibleSlot({ clientId: "client", slotId: "slot", clinicianId: "clinician", tenantId: CYA, route: "phone", locationType: "online" });
+    await db.update(schema.bookingReservations).set({ paymentAttemptKey: "insurer-registration" }).where(eq(schema.bookingReservations.id, held.reservation.id));
+    await db.insert(schema.formSubmissions).values({ id: "submitted", clientId: "client", tenantId: CYA, responses: {}, isDraft: false });
+    await db.update(schema.clients).set({ registrationPaymentAttemptKey: "insurer-registration", paymentType: "insurer", registrationFormSubmissionId: "submitted", termsAcceptedAt: new Date(), status: "RegistrationPending" }).where(eq(schema.clients.id, "client"));
+    const confirmed = await confirmBooking({ clientId: "client", tenantId: CYA, source: "registration" });
+    expect(confirmed.snapshot.locationType).toBe("online");
+    expect((await latestReservation("client"))?.locationType).toBe("online");
+  });
 });
 
 describe("live invitation staff summaries", () => {
@@ -342,7 +421,12 @@ describe("slot format editing with real database ownership and booking guards", 
     expect(held.status).toBe("fulfilled");
     const reservation = (await latestReservation("client"))!;
     const [slot] = await db.select().from(schema.timeSlots).where(eq(schema.timeSlots.id, "slot"));
-    expect(reservation.appointmentLabel).toContain(slot.locationType === "in_person" ? "in person" : "online");
+    // At-practice availability can be booked online: the reservation carries
+    // the actual appointment mode independently of the clinician's location.
+    expect(slot.isBooked).toBe(true);
+    expect(reservation.locationType).toBe("online");
+    expect(reservation.appointmentLabel).toContain("online");
+    expect((await client()).assignedLocationType).toBe("online");
     await expect(storage.updateTimeSlotLocationType("slot", CYA, "online", actor)).rejects.toMatchObject({ status: 409 });
   });
   it("rejects invalid format values without changing the slot", async () => {

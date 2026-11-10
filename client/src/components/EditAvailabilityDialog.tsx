@@ -7,8 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 
-export function EditAvailabilityDialog({ slot, onClose, onSaved }: {
-  slot: TimeSlot; onClose: () => void; onSaved: () => void;
+export function EditAvailabilityDialog({ slot, onClose, onSaved, cyaAvailabilityLabels = false }: {
+  slot: TimeSlot; onClose: () => void; onSaved: () => void; cyaAvailabilityLabels?: boolean;
 }) {
   const recurring = slot.type === "Recurring";
   const [day, setDay] = useState(slot.day || "Monday");
@@ -67,8 +67,11 @@ export function EditAvailabilityDialog({ slot, onClose, onSaved }: {
               <div><Label htmlFor="edit-slot-end-time">End time</Label><Input id="edit-slot-end-time" type="time" required value={endTime} onChange={e => setEndTime(e.target.value)} /></div>
             </div>
             <div><Label htmlFor="edit-slot-location">Session format</Label><select id="edit-slot-location" className={selectClass} value={locationType} onChange={e => setLocationType(e.target.value as TimeSlot["locationType"])}>
-              <option value="online">Online</option><option value="in_person">In person</option>
-            </select></div>
+              <option value="online">{cyaAvailabilityLabels ? "Online only" : "Online"}</option>
+              <option value="in_person">{cyaAvailabilityLabels ? "At the practice — in person or online" : "In person"}</option>
+            </select>
+              {cyaAvailabilityLabels && <p className="text-xs text-muted-foreground mt-1">At the practice availability can be delivered in person or online; online-only availability is remote.</p>}
+            </div>
           </fieldset>
           {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
           <DialogFooter><Button type="button" variant="outline" disabled={saving} onClick={onClose}>Cancel</Button>

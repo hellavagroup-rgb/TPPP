@@ -17,11 +17,13 @@ const caches: QueryClient[] = [];
 beforeEach(() => { h.role = "clinician"; h.toast.mockClear(); window.history.replaceState({}, "", "/availability"); });
 afterEach(() => { cleanup(); caches.splice(0).forEach(cache => cache.clear()); vi.unstubAllGlobals(); });
 
-function setup({ role = "clinician", failed = false, deleteFailed = false, booked = false, retired = false, future = false } = {}) {
+function setup({ role = "clinician", failed = false, deleteFailed = false, booked = false, retired = false, future = false, tenantId = "other-practice", initialLocationType = "online", allocate = false, appointmentLocationType = "online" } = {}) {
   h.role = role;
-  let locationType = "online";
+  let locationType = initialLocationType;
   const writes: any[] = [];
+  const assignments: any[] = [];
   const deletions: string[] = [];
+  if (allocate) window.history.replaceState({}, "", "/availability?allocate=client");
   const fetchMock = vi.fn(async (input: string, init?: RequestInit) => {
     const path = new URL(String(input), window.location.origin).pathname;
     if (init?.method === "DELETE") {
@@ -29,6 +31,10 @@ function setup({ role = "clinician", failed = false, deleteFailed = false, booke
       return new Response(JSON.stringify(deleteFailed ? { error: "The slot is now booked. Refresh availability." } : { retired: true }), { status: deleteFailed ? 409 : 200 });
     }
     if (path.endsWith("/writeupp-retirement")) return new Response(JSON.stringify({ eligible: false }));
+    if (init?.method === "POST" && path.endsWith("/assign")) {
+      assignments.push({ path, body: JSON.parse(String(init.body)) });
+      return new Response(JSON.stringify({ success: true }), { status: 200 });
+    }
     if (init?.method === "PATCH") {
       const body = JSON.parse(String(init.body));
       writes.push({ path, body });
@@ -43,9 +49,10 @@ function setup({ role = "clinician", failed = false, deleteFailed = false, booke
         { id: "other-slot", type: "Recurring", day: "Monday", startTime: "11:00", endTime: "12:00", isBooked: false, retiredAt: null, locationType: "online" },
       ] },
     ] : path === "/api/tenant/features" ? {} :
-      path === "/api/clinicians/me/slot-clients" ? (booked ? { "own-slot": { displayId: "TEST-1", status: "Assigned" } } : {}) :
-      booked && path === "/api/clients"
-        ? [{ id: "client", displayId: "TEST-1", status: "Assigned", assignedSlotId: "own-slot", assignedClinicianId: "own" }] : [];
+      path === "/api/tenant" ? { id: tenantId } :
+      path === "/api/clinicians/me/slot-clients" ? (booked ? { "own-slot": { displayId: "TEST-1", status: "Assigned", slotLocationType: appointmentLocationType } } : {}) :
+      path === "/api/clients" && (booked || allocate)
+        ? [{ id: "client", displayId: "TEST-1", status: booked ? "Assigned" : "Waiting", assignedSlotId: booked ? "own-slot" : null, assignedClinicianId: booked ? "own" : null, slotLocationType: appointmentLocationType }] : [];
     return new Response(JSON.stringify(data), { status: 200 });
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -54,7 +61,7 @@ function setup({ role = "clinician", failed = false, deleteFailed = false, booke
   }, mutations: { retry: false } } });
   caches.push(cache);
   render(<QueryClientProvider client={cache}><Availability /></QueryClientProvider>);
-  return { writes, deletions, fetchMock };
+  return { writes, deletions, assignments, fetchMock };
 }
 
 it("shows a clinician's own retire icon without hovering and completes deletion through the real dialog", async () => {
@@ -66,7 +73,7 @@ it("shows a clinician's own retire icon without hovering and completes deletion 
   expect(button.parentElement?.className).not.toContain("group-hover");
   expect(screen.queryByTestId("button-delete-slot-other-slot")).toBeNull();
   fireEvent.click(button);
-  fireEvent.click(await screen.findByRole("button", { name: "Retire slot", exact: true }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Retire slot$/ }));
   await waitFor(() => expect(deletions).toEqual(["/api/timeslots/own/own-slot"]));
   await waitFor(() => expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Slot retired" })));
   expect(fetchMock.mock.calls.some(([path]) => String(path).endsWith("/writeupp-retirement"))).toBe(false);
@@ -83,7 +90,7 @@ it("opens editing only for the clinician's own free series", async () => {
 it("shows a stale-booking rejection after clicking the visible clinician retire icon", async () => {
   const { deletions } = setup({ deleteFailed: true });
   fireEvent.click(await screen.findByTestId("button-delete-slot-own-slot"));
-  fireEvent.click(await screen.findByRole("button", { name: "Retire slot", exact: true }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Retire slot$/ }));
   await screen.findByRole("alert");
   expect(screen.getByText("The slot is now booked. Refresh availability.")).toBeTruthy();
   expect(deletions).toHaveLength(1);
@@ -150,6 +157,68 @@ it("shows the server's stale-booking rejection without presenting a successful f
     title: "Format not changed", description: expect.stringContaining("linked to a booking"), variant: "destructive",
   })));
   expect(screen.getByTestId("button-toggle-location-own-slot").textContent).toBe("Online");
+});
+
+it("uses CY&A availability wording for free-slot badges and toggles without changing stored values", async () => {
+  const { writes } = setup({ tenantId: "92fbc179-2b4e-41e9-9326-4d8e008ca5be" });
+  const own = await screen.findByTestId("button-toggle-location-own-slot");
+  expect(own.textContent).toBe("Online only");
+  fireEvent.click(own);
+  await waitFor(() => expect(own.textContent).toBe("At the practice — in person or online"));
+  expect(writes).toEqual([{ path: "/api/timeslots/own-slot/location-type", body: { locationType: "in_person" } }]);
+});
+
+it("keeps actual booking mode wording for CY&A booked slots", async () => {
+  setup({ booked: true, tenantId: "92fbc179-2b4e-41e9-9326-4d8e008ca5be", initialLocationType: "in_person" });
+  expect(await screen.findByText("Online")).toBeTruthy();
+  expect(screen.queryByText("At the practice — in person or online")).toBeNull();
+});
+
+it("lets a CY&A at-the-practice slot be allocated in the selected appointment mode", async () => {
+  const { assignments } = setup({
+    role: "admin", allocate: true, tenantId: "92fbc179-2b4e-41e9-9326-4d8e008ca5be", initialLocationType: "in_person",
+  });
+  const slotCard = (await screen.findByText(/09:00 - 10:00/)).closest(".group");
+  expect(slotCard).toBeTruthy();
+  fireEvent.click(slotCard!);
+  expect(await screen.findByRole("heading", { name: "Choose appointment format" })).toBeTruthy();
+  fireEvent.click(screen.getByTestId("button-choose-appointment-online"));
+  await waitFor(() => expect(assignments).toHaveLength(1));
+  expect(assignments[0].body).toMatchObject({
+    slotId: "own-slot", allocationMethod: "manual", locationType: "online",
+  });
+});
+
+it("allocates CY&A online-only availability online without offering an in-person choice", async () => {
+  const { assignments } = setup({
+    role: "admin", allocate: true, tenantId: "92fbc179-2b4e-41e9-9326-4d8e008ca5be", initialLocationType: "online",
+  });
+  fireEvent.click((await screen.findByText(/09:00 - 10:00/)).closest(".group")!);
+  expect(screen.queryByRole("heading", { name: "Choose appointment format" })).toBeNull();
+  await waitFor(() => expect(assignments).toHaveLength(1));
+  expect(assignments[0].body.locationType).toBe("online");
+});
+
+it("keeps the existing in-person confirmation flow for other practices", async () => {
+  const { assignments } = setup({ role: "admin", allocate: true, initialLocationType: "in_person" });
+  fireEvent.click((await screen.findByText(/09:00 - 10:00/)).closest(".group")!);
+  expect(await screen.findByRole("heading", { name: "In-Person Slot" })).toBeTruthy();
+  fireEvent.click(screen.getByTestId("button-inperson-confirm"));
+  await waitFor(() => expect(assignments).toHaveLength(1));
+  expect(assignments[0].body).not.toHaveProperty("locationType");
+});
+
+it("uses CY&A wording in add controls and preserves other-practice wording", async () => {
+  setup({ role: "admin", tenantId: "92fbc179-2b4e-41e9-9326-4d8e008ca5be" });
+  fireEvent.click(await screen.findByTestId("button-add-availability"));
+  await waitFor(() => expect(screen.getAllByText("Online only").length).toBeGreaterThan(0));
+  expect(screen.getAllByText("At the practice — in person or online").length).toBeGreaterThan(0);
+  cleanup();
+  caches.splice(0).forEach(cache => cache.clear());
+  setup({ role: "admin", tenantId: "other-practice" });
+  fireEvent.click(await screen.findByTestId("button-add-availability"));
+  expect(screen.getAllByText("Online", { selector: "span" }).length).toBeGreaterThan(0);
+  expect(screen.getAllByText("In-Person").length).toBeGreaterThan(0);
 });
 
 it.each(["admin", "clinician"])("disables booked and retired slots for %s and requires authentication", role => {

@@ -40,3 +40,20 @@ it("distinguishes a single date and validates times before sending", async () =>
   expect(await screen.findByRole("alert")).toHaveProperty("textContent", "End time must be after start time.");
   expect(fetchMock).not.toHaveBeenCalled();
 });
+
+it("shows CY&A-specific availability labels and explanatory help while retaining stored values", () => {
+  render(<EditAvailabilityDialog slot={slot} cyaAvailabilityLabels onClose={vi.fn()} onSaved={vi.fn()} />);
+  const formatSelect = screen.getByLabelText("Session format") as HTMLSelectElement;
+  expect(Array.from(formatSelect.options).map(option => [option.value, option.textContent])).toEqual([
+    ["online", "Online only"],
+    ["in_person", "At the practice — in person or online"],
+  ]);
+  expect(screen.getByText(/At the practice availability can be delivered in person or online/)).toBeTruthy();
+});
+
+it("keeps the standard format labels for other practices", () => {
+  render(<EditAvailabilityDialog slot={slot} onClose={vi.fn()} onSaved={vi.fn()} />);
+  const formatSelect = screen.getByLabelText("Session format") as HTMLSelectElement;
+  expect(Array.from(formatSelect.options).map(option => option.textContent)).toEqual(["Online", "In person"]);
+  expect(screen.queryByText(/At the practice availability/)).toBeNull();
+});

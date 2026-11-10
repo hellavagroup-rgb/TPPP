@@ -33,6 +33,25 @@ function mount() {
 }
 
 describe("public flexible booking", () => {
+  it("offers both actual modes for the same at-practice time and submits the selected mode", async () => {
+    const data = structuredClone(booking);
+    Object.assign(data.clinicians[0].slots[0], { locationType: "in_person", deliveryModes: ["in_person", "online"] });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(data), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    mount();
+    const online = await screen.findByRole("button", { name: /Online.*Choose this slot/ });
+    expect(screen.getByRole("button", { name: /In person.*Choose this slot/ })).toBeTruthy();
+    fireEvent.click(online);
+    fireEvent.click(screen.getByRole("button", { name: "Continue with this clinician and slot" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toMatchObject({
+      clinicianId: "clinician-1", slotId: "slot-1", locationType: "online",
+      expectedSchedule: slotScheduleFingerprint(data.clinicians[0].slots[0]),
+    });
+  });
+
   it("explains clinician and slot selection and submits both identifiers through the public endpoint", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(booking), { status: 200 }))
@@ -53,7 +72,7 @@ describe("public flexible booking", () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(fetchMock.mock.calls[1][0]).toBe("/api/public/booking/invite-123");
-    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ clinicianId: "clinician-1", slotId: "slot-1", expectedSchedule: slotScheduleFingerprint(booking.clinicians[0].slots[0]) });
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ clinicianId: "clinician-1", slotId: "slot-1", locationType: "online", expectedSchedule: slotScheduleFingerprint(booking.clinicians[0].slots[0]) });
     expect(await screen.findByText("Your clinician and slot selection has been recorded")).toBeTruthy();
   });
 

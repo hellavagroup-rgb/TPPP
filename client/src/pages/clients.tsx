@@ -9,6 +9,7 @@ import { InsurancePaymentDetails } from "@/components/InsurancePaymentDetails";
 import { AdminBookingCompletion } from "@/components/AdminBookingCompletion";
 import { isAdminCompletionRecord } from "@shared/adminBookingCompletion";
 import { slotScheduleFingerprint } from "@shared/availabilityEdit";
+import { availableDeliveryModes, deliveryModeLabel, type DeliveryMode } from "@shared/sessionDelivery";
 import { WriteUppAdminQueue } from "@/components/WriteUppAdminQueue";
 import { needsWriteUppAdminWork } from "@shared/writeUppAdminWork";
 import { BookingPaymentReview } from "@/components/BookingPaymentReview";
@@ -140,6 +141,10 @@ import {
   type SessionFormat,
   type SessionFormatPreference,
 } from "@/lib/availability-utils";
+
+type SlotAllocationAction =
+  | { type: "assign"; clinicianId: string; slotId: string; allocationMethod: "form" | "manual" }
+  | { type: "select-option"; clinicianId: string; slotId: string };
 
 function mutationErrorMessage(error: Error, fallback: string): string {
   const jsonStart = error.message.indexOf("{");
@@ -473,8 +478,8 @@ export default function Clients() {
   });
 
   const assignClientMutation = useMutation({
-    mutationFn: async ({ clientId, clinicianId, slotId, allocationMethod = "form", allocationReason, formatOverride, occurrenceDate }: { clientId: string; clinicianId: string; slotId: string; allocationMethod?: "form" | "manual"; allocationReason?: string; formatOverride?: { preference: SessionFormat; slotFormat: SessionFormat }; occurrenceDate?: string }) => {
-      const response = await apiRequest("POST", `/api/clients/${clientId}/assign`, { clinicianId, slotId, allocationMethod, allocationReason, formatOverride, occurrenceDate });
+    mutationFn: async ({ clientId, clinicianId, slotId, allocationMethod = "form", allocationReason, formatOverride, occurrenceDate, locationType }: { clientId: string; clinicianId: string; slotId: string; allocationMethod?: "form" | "manual"; allocationReason?: string; formatOverride?: { preference: SessionFormat; slotFormat: SessionFormat }; occurrenceDate?: string; locationType?: DeliveryMode }) => {
+      const response = await apiRequest("POST", `/api/clients/${clientId}/assign`, { clinicianId, slotId, allocationMethod, allocationReason, formatOverride, occurrenceDate, locationType });
       return response.json();
     },
     onSuccess: () => {
@@ -495,10 +500,10 @@ export default function Clients() {
   });
 
   const reserveSlotMutation = useMutation({
-    mutationFn: async ({ clientId, clinicianId, slotId, allocationReason }: { clientId: string; clinicianId: string; slotId: string; allocationReason?: string }) => {
+    mutationFn: async ({ clientId, clinicianId, slotId, allocationReason, locationType }: { clientId: string; clinicianId: string; slotId: string; allocationReason?: string; locationType?: DeliveryMode }) => {
       const slot = clinicians.find(item => item.id === clinicianId)?.availability?.find(item => item.id === slotId);
       if (!slot) throw new Error("This slot is no longer available. Refresh availability and select again.");
-      const response = await apiRequest("POST", `/api/clients/${clientId}/reserve-slot`, { clinicianId, slotId, allocationReason, expectedSchedule: slotScheduleFingerprint(slot) });
+      const response = await apiRequest("POST", `/api/clients/${clientId}/reserve-slot`, { clinicianId, slotId, allocationReason, locationType, expectedSchedule: slotScheduleFingerprint(slot) });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || "Reservation could not be created.");
       return body;
@@ -515,10 +520,10 @@ export default function Clients() {
   });
 
   // CY&A: multi-clinician option selection state
-  const [selectedOptions, setSelectedOptions] = useState<{clinicianId: string; slotId: string; formatOverride?: { preference: SessionFormat; slotFormat: SessionFormat }}[]>([]);
+  const [selectedOptions, setSelectedOptions] = useState<{clinicianId: string; slotId: string; locationType?: DeliveryMode; formatOverride?: { preference: SessionFormat; slotFormat: SessionFormat }}[]>([]);
 
   const allocateOptionsMutation = useMutation({
-    mutationFn: async ({ clientId, selections, reoffer }: { clientId: string; selections: {clinicianId: string; slotId: string; formatOverride?: { preference: SessionFormat; slotFormat: SessionFormat }}[]; reoffer?: boolean }) => {
+    mutationFn: async ({ clientId, selections, reoffer }: { clientId: string; selections: {clinicianId: string; slotId: string; locationType?: DeliveryMode; formatOverride?: { preference: SessionFormat; slotFormat: SessionFormat }}[]; reoffer?: boolean }) => {
       const response = await apiRequest("POST", `/api/clients/${clientId}/allocate-options`, {
         selections,
         ...(reoffer ? { reoffer: true } : {}),
@@ -787,14 +792,14 @@ export default function Clients() {
   const [allocationReason, setAllocationReason] = useState(""); // Reason for allocation decision
   const [allocationOccurrenceDate, setAllocationOccurrenceDate] = useState("");
   const [sessionFormatPreference, setSessionFormatPreference] = useState<SessionFormatPreference>(null);
+  const [deliveryChoice, setDeliveryChoice] = useState<{ slotFormat: unknown; action: SlotAllocationAction; mode: DeliveryMode } | null>(null);
   const [allocationPreferenceLoading, setAllocationPreferenceLoading] = useState(false);
   const allocationPreferenceRequestGuard = useRef(createLatestRequestGuard());
   const [formatMismatchWarning, setFormatMismatchWarning] = useState<{
     preference: SessionFormat;
     slotFormat: SessionFormat;
-    action:
-      | { type: "assign"; clinicianId: string; slotId: string; allocationMethod: "form" | "manual" }
-      | { type: "select-option"; clinicianId: string; slotId: string };
+    action: SlotAllocationAction;
+    locationType?: DeliveryMode;
   } | null>(null);
 
   const [archiveReason, setArchiveReason] = useState("");
@@ -1706,7 +1711,7 @@ export default function Clients() {
     }
   };
 
-  const handleAssign = (clinicianId: string, slotId: string, allocationMethod: "form" | "manual" = "form", formatOverride?: { preference: SessionFormat; slotFormat: SessionFormat }) => {
+  const handleAssign = (clinicianId: string, slotId: string, allocationMethod: "form" | "manual" = "form", formatOverride?: { preference: SessionFormat; slotFormat: SessionFormat }, locationType?: DeliveryMode) => {
     // For unified dialog, always use selectedClient
     // For legacy manual dialog (isManualAllocateOpen), use manualAllocateClient
     const clientToAssign = isManualAllocateOpen ? manualAllocateClient : selectedClient;
@@ -1717,6 +1722,7 @@ export default function Clients() {
           clinicianId,
           slotId,
           allocationReason: allocationReason.trim() || undefined,
+          locationType,
         });
         return;
       }
@@ -1741,6 +1747,7 @@ export default function Clients() {
         allocationReason: allocationReason.trim() || undefined,
         formatOverride,
         occurrenceDate,
+        locationType,
       });
     }
   };
@@ -2149,20 +2156,29 @@ export default function Clients() {
 
   const requestSlotAction = (
     slotFormat: unknown,
-    action:
-      | { type: "assign"; clinicianId: string; slotId: string; allocationMethod: "form" | "manual" }
-      | { type: "select-option"; clinicianId: string; slotId: string },
+    action: SlotAllocationAction,
+    locationType?: DeliveryMode,
   ) => {
     if (!canCommitSlotSelection(allocationPreferenceLoading)) return;
-    const mismatch = getSessionFormatMismatch(sessionFormatPreference, slotFormat);
+    if (!locationType && availableDeliveryModes(tenant?.id, slotFormat).length > 1) {
+      setDeliveryChoice({ slotFormat, action, mode: sessionFormatPreference === "online" ? "online" : "in_person" });
+      return;
+    }
+    const actualMode = locationType ?? (slotFormat === "in_person" ? "in_person" : "online");
+    const clinician = clinicians.find(item => item.id === action.clinicianId);
+    if (zoomLinkEmailEnabled && actualMode === "online" && !isValidZoomLink(clinician?.zoomLink)) {
+      toast({ title: "Zoom link required", description: "Add a valid Zoom link for this clinician before offering an online appointment.", variant: "destructive" });
+      return;
+    }
+    const mismatch = getSessionFormatMismatch(sessionFormatPreference, actualMode);
     if (mismatch) {
-      setFormatMismatchWarning({ ...mismatch, action });
+      setFormatMismatchWarning({ ...mismatch, action, locationType });
       return;
     }
     if (action.type === "select-option") {
-      setSelectedOptions(prev => [...prev, { clinicianId: action.clinicianId, slotId: action.slotId }]);
+      setSelectedOptions(prev => [...prev, { clinicianId: action.clinicianId, slotId: action.slotId, locationType }]);
     } else {
-      handleAssign(action.clinicianId, action.slotId, action.allocationMethod);
+      handleAssign(action.clinicianId, action.slotId, action.allocationMethod, undefined, locationType);
       setIsAllocateDialogOpen(false);
       setIsManualAllocateOpen(false);
       setIsManualAllocation(false);
@@ -4117,7 +4133,9 @@ export default function Clients() {
                               </div>
                               <div className="mt-0.5">
                                 {(slot as any).locationType === "in_person" ? (
-                                  <span className="inline-block text-[8px] px-1 py-0 rounded-full bg-amber-100 text-amber-700 border border-amber-300 leading-tight">In-Person</span>
+                                  <span className="inline-block text-[8px] px-1 py-0 rounded-full bg-amber-100 text-amber-700 border border-amber-300 leading-tight">{isSelectedForOptions
+                                    ? deliveryModeLabel(selectedOptions.find(option => option.slotId === slot.id)?.locationType ?? slot.locationType)
+                                    : availableDeliveryModes(tenant?.id, slot.locationType).length > 1 ? "In person or online" : "In-Person"}</span>
                                 ) : (
                                   <span className="inline-block text-[8px] px-1 py-0 rounded-full bg-blue-100 text-blue-700 border border-blue-300 leading-tight">Online</span>
                                 )}
@@ -4793,7 +4811,7 @@ export default function Clients() {
                                 <div className="text-[10px] text-muted-foreground">{slot.startTime} - {slot.endTime}</div>
                                 <div className="mt-0.5">
                                   {(slot as any).locationType === "in_person" ? (
-                                    <span className="inline-block text-[8px] px-1 py-0 rounded-full bg-amber-100 text-amber-700 border border-amber-300 leading-tight">In-Person</span>
+                                    <span className="inline-block text-[8px] px-1 py-0 rounded-full bg-amber-100 text-amber-700 border border-amber-300 leading-tight">{availableDeliveryModes(tenant?.id, slot.locationType).length > 1 ? "In person or online" : "In-Person"}</span>
                                   ) : (
                                     <span className="inline-block text-[8px] px-1 py-0 rounded-full bg-blue-100 text-blue-700 border border-blue-300 leading-tight">Online</span>
                                   )}
@@ -5509,6 +5527,27 @@ export default function Clients() {
         </Dialog>
       )}
 
+      <Dialog open={!!deliveryChoice} onOpenChange={open => { if (!open) setDeliveryChoice(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Choose appointment format</DialogTitle>
+            <DialogDescription>This clinician is at the practice and can offer this time in person or online. Choose the format for this appointment; the client's preference will not be changed.</DialogDescription>
+          </DialogHeader>
+          <Label htmlFor="appointment-delivery-mode">Appointment format</Label>
+          <select id="appointment-delivery-mode" className="h-10 rounded-md border bg-background px-3 text-sm"
+            value={deliveryChoice?.mode ?? "in_person"}
+            onChange={event => setDeliveryChoice(previous => previous ? { ...previous, mode: event.target.value as DeliveryMode } : null)}>
+            <option value="in_person">In person</option>
+            <option value="online">Online</option>
+          </select>
+          {formatSessionFormatPreference(sessionFormatPreference) && <p className="text-sm text-muted-foreground">Client's saved preference: {formatSessionFormatPreference(sessionFormatPreference)}</p>}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeliveryChoice(null)}>Cancel</Button>
+            <Button onClick={() => { if (!deliveryChoice) return; const choice = deliveryChoice; setDeliveryChoice(null); requestSlotAction(choice.slotFormat, choice.action, choice.mode); }}>Use this format</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Session-format mismatch warning (allocation dialogs) */}
       <AlertDialog open={!!formatMismatchWarning} onOpenChange={(open) => { if (!open) setFormatMismatchWarning(null); }}>
         <AlertDialogContent>
@@ -5531,6 +5570,7 @@ export default function Clients() {
                     setSelectedOptions(prev => [...prev, {
                       clinicianId: action.clinicianId,
                       slotId: action.slotId,
+                      locationType: formatMismatchWarning.locationType,
                       formatOverride: {
                         preference: formatMismatchWarning.preference,
                         slotFormat: formatMismatchWarning.slotFormat,
@@ -5540,7 +5580,7 @@ export default function Clients() {
                     handleAssign(action.clinicianId, action.slotId, action.allocationMethod, {
                       preference: formatMismatchWarning.preference,
                       slotFormat: formatMismatchWarning.slotFormat,
-                    });
+                    }, formatMismatchWarning.locationType);
                     setIsAllocateDialogOpen(false);
                     setIsManualAllocateOpen(false);
                     setIsManualAllocation(false);

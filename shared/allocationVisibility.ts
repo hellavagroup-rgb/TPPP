@@ -1,6 +1,7 @@
 import type { BookingSnapshot, Client, TimeSlot } from "./schema";
 
 export type OfferRow = {
+  locationType?: string | null;
   clientId: string;
   tenantId: string;
   slotId: string | null;
@@ -77,12 +78,12 @@ export function projectAllocationVisibility(client: Client, row: AssignmentRow, 
     : assignmentSlot
       ? { clinicianName: row.clinicianName, type: assignmentSlot.type, day: assignmentSlot.day,
           date: assignmentSlot.date, startTime: assignmentSlot.startTime, endTime: assignmentSlot.endTime,
-          locationType: assignmentSlot.locationType, retired: !!assignmentSlot.retiredAt }
+          locationType: client.assignedLocationType ?? assignmentSlot.locationType, retired: !!assignmentSlot.retiredAt }
       : selected
         ? { clinicianName: selected.clinicianName, type: selectedSlot?.type ?? null,
             day: selectedSlot?.day ?? null, date: selectedSlot?.date ?? null,
             startTime: selectedSlot?.startTime ?? null, endTime: selectedSlot?.endTime ?? null,
-            locationType: selectedSlot?.locationType ?? null, retired: !!selectedSlot?.retiredAt }
+            locationType: selected.option.locationType ?? selectedSlot?.locationType ?? null, retired: !!selectedSlot?.retiredAt }
         : assignmentClinicianName
           ? { clinicianName: assignmentClinicianName, type: null, day: null, date: null,
               startTime: null, endTime: null, locationType: null, retired: false }
@@ -95,7 +96,7 @@ export function projectAllocationVisibility(client: Client, row: AssignmentRow, 
       clinicianName,
       slot: slot ? { type: slot.type, day: slot.day, date: slot.date,
         startTime: slot.startTime, endTime: slot.endTime,
-        locationType: slot.locationType, retired: !!slot.retiredAt } : null,
+        locationType: o.locationType ?? slot.locationType, retired: !!slot.retiredAt } : null,
     })),
   };
 }
